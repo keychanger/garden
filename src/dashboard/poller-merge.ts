@@ -917,9 +917,10 @@ export function handleMerged(
 
 // After a clean merge, send the worker a "please proceed" prompt so multi-phase
 // work continues without manual intervention. The worker opts out by writing
-// the .garden-done sentinel (see continue.ts donePath); pause/resume commands toggle
-// the same file. Skips when the worker is already mid-turn or when the same
-// merge event would re-fire within the trigger's idempotency window.
+// the .garden-done sentinel (see continue.ts donePath); pause writes that gate
+// and resume clears it or the human-input gate. Skips when the worker is already
+// mid-turn or when the same merge event would re-fire within the trigger's
+// idempotency window.
 //
 // trigger "merge" is the one-shot call from finalizeMerge; trigger "sweep"
 // is handleMerged replaying the decision on every poke for a worker still
@@ -1022,8 +1023,8 @@ function autoContinueSkipReason(
   trigger: "merge" | "sweep",
 ): string | null {
   if (isDoneSet(entry.worktreePath)) return "done-sentinel";
-  // Mid-task worker paused at a human gate (designer/plan): resume is the
-  // operator's next prompt, not an auto-continue paste.
+  // Mid-task worker paused at a human gate (designer / garden blocked): resume
+  // is the operator's next prompt, not an auto-continue paste.
   if (isAwaitingInput(entry.worktreePath)) return "awaiting-input";
   if (entry.agentStatus === "working" || entry.agentStatus === "asking") {
     return `claude-${entry.agentStatus}`;

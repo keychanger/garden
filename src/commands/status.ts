@@ -11,7 +11,9 @@ import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, isDelegating, type ReviewBlockedReason, type WorkerRegistry } from "../dashboard/registry.js";
-import { listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle } from "../dashboard/tmux.js";
+import {
+  listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle, stripControlSequences,
+} from "../dashboard/tmux.js";
 import { resolveWorkerActivity } from "../dashboard/harness/core.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
 import { currentBranchFast, branchExistsOnOrigin } from "../dashboard/git.js";
@@ -52,14 +54,14 @@ interface WorkerInfo {
   // designer (or future plan worker) paused at the human gate, waiting on the
   // operator. Distinct from the mid-turn `asking` state (a first-class status):
   // the worker is still in poller state `working`, it just wrote the sentinel
-  // and ended its turn. Renders a `?` in the row flags.
+  // and ended its turn. Renders a `?` only when no question was recorded.
   awaitingInput: boolean;
   // The question a worker stopped to ask, from entry.blockedQuestion (written
   // by `garden blocked`). Takes the elastic detail column ahead of activity —
   // for a row waiting on the operator, what it needs decided IS the row's
   // description, and the detail column is the one that truncates gracefully.
-  // The `?` glyph above carries the same fact into the never-truncating flags,
-  // so a narrow pane still says "blocked" even when the text is gone.
+  // The asking-style icon carries the same fact into the never-truncating row
+  // core, so a narrow pane still says "blocked" when the text is gone.
   blockedQuestion?: string;
   // True when the row's state comes from prState `failing` but the agent is
   // mid-turn (agentStatus `working`) — the operator prompted the failed worker
@@ -1188,7 +1190,9 @@ function collectWorkers(
       lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
-      blockedQuestion: entry?.blockedQuestion,
+      blockedQuestion: entry?.blockedQuestion === undefined
+        ? undefined
+        : stripControlSequences(entry.blockedQuestion).replace(/\s+/g, " ").trim(),
       failingBusy: isFailingBusy(entry),
       delegating: isDelegating(entry),
       failCount: entry?.failCount ?? 0,
@@ -1220,7 +1224,9 @@ function collectWorkers(
       lastStateChangeAt: entry?.lastStateChangeAt,
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
-      blockedQuestion: entry?.blockedQuestion,
+      blockedQuestion: entry?.blockedQuestion === undefined
+        ? undefined
+        : stripControlSequences(entry.blockedQuestion).replace(/\s+/g, " ").trim(),
       failingBusy: isFailingBusy(entry),
       delegating: isDelegating(entry),
       failCount: entry?.failCount ?? 0,

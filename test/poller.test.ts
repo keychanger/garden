@@ -3124,7 +3124,7 @@ describe("poll — merge-pending state", () => {
   });
 
   it("merges to `merged` (not done) but skips auto-continue when .garden-awaiting-input is set (human gate)", () => {
-    // A mid-task worker paused at a human gate (designer/plan) wrote
+    // A mid-task worker paused at a human gate (designer / garden blocked) wrote
     // .garden-awaiting-input, not .garden-done: the merge still finalizes to the
     // transient `merged` beat, but the post-merge auto-continue is suppressed —
     // the operator's next prompt is the resume, not a garden paste.

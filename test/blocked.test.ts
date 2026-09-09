@@ -121,6 +121,40 @@ describe("blockWorker", () => {
     expect((await readEntry())?.blockedQuestion).toBeUndefined();
   });
 
+  it("refuses a vanished worktree instead of reporting a block without the gate", async () => {
+    const { worktree } = seedWorker();
+    fs.rmSync(worktree, { recursive: true });
+    const { blockWorker } = await import("../src/dashboard/workers.js");
+
+    const result = blockWorker("proj", "alpha", "Ship it?");
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("Could not write the human-gate sentinel");
+    expect((await readEntry())?.blockedQuestion).toBeUndefined();
+  });
+
+  it("rolls back the human gate when the done sentinel cannot be removed", async () => {
+    const { worktree } = seedWorker();
+    fs.mkdirSync(path.join(worktree, ".garden-done"));
+    const { blockWorker } = await import("../src/dashboard/workers.js");
+
+    const result = blockWorker("proj", "alpha", "Which product shape?");
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("Could not remove the done sentinel");
+    expect(fs.existsSync(path.join(worktree, ".garden-awaiting-input"))).toBe(false);
+    expect((await readEntry())?.blockedQuestion).toBeUndefined();
+  });
+
+  it("normalizes multiline and terminal-control text before storing it", async () => {
+    seedWorker();
+    const { blockWorker } = await import("../src/dashboard/workers.js");
+
+    blockWorker("proj", "alpha", "Which\nshape?\x1b[2J  Decide now.");
+
+    expect((await readEntry())?.blockedQuestion).toBe("Which shape? Decide now.");
+  });
+
   it("truncates an over-long question so it cannot push the row and alert off-screen", async () => {
     seedWorker();
     const { blockWorker, MAX_BLOCKED_QUESTION_LEN } = await import("../src/dashboard/workers.js");
@@ -140,6 +174,24 @@ describe("blockWorker", () => {
     blockWorker("proj", "alpha", "Which shape, restated a little differently?");
 
     expect(await readAlertMessages()).toHaveLength(1);
+  });
+
+  it("raises a fresh alert after the operator clears one block and the worker blocks again", async () => {
+    seedWorker();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const { blockWorker } = await import("../src/dashboard/workers.js");
+    const { resume } = await import("../src/commands/resume.js");
+
+    try {
+      blockWorker("proj", "alpha", "Which shape?");
+      await captureConsoleLog(() => resume(["alpha"]));
+      clock.mockReturnValue(1_800_000_000_001);
+      blockWorker("proj", "alpha", "Which rollout?");
+
+      expect(await readAlertMessages()).toHaveLength(2);
+    } finally {
+      clock.mockRestore();
+    }
   });
 });
 
@@ -223,6 +275,7 @@ describe("garden resume", () => {
 
     expect(fs.existsSync(path.join(worktree, ".garden-awaiting-input"))).toBe(false);
     expect((await readEntry())?.blockedQuestion).toBeUndefined();
+    expect((await readEntry())?.blockedAt).toBeUndefined();
     expect(lines.join("\n")).toContain("auto-continue will fire");
   });
 
@@ -243,5 +296,14 @@ describe("garden resume", () => {
     const lines = await captureConsoleLog(() => resume(["alpha"]));
 
     expect(lines.join("\n")).toContain("was not paused or blocked");
+  });
+
+  it("does not clear the row flag or report success when a sentinel cannot be removed", async () => {
+    const { worktree } = seedWorker({ blockedQuestion: "Which shape?" });
+    fs.mkdirSync(path.join(worktree, ".garden-awaiting-input"));
+    const { resume } = await import("../src/commands/resume.js");
+
+    await expect(resume(["alpha"])).rejects.toThrow(/sentinel could not be cleared/);
+    expect((await readEntry())?.blockedQuestion).toBe("Which shape?");
   });
 });

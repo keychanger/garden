@@ -1099,7 +1099,7 @@ printf '%s' ${blockedSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${bloc
 # trellis-lessons.md) — none of these belong in version control. .garden-done
 # is the auto-continue suppression sentinel; the done skill description
 # advertises this exclusion as the reason workers should not \`git add\` it.
-# .garden-awaiting-input is the human-gate sentinel (designer/plan), excluded
+# .garden-awaiting-input is the human-gate sentinel (designer / garden blocked), excluded
 # for the same reason.
 EXCLUDE_FILE="$(git -C ${wtPathLit} rev-parse --git-common-dir)/info/exclude"
 for pattern in .claude/ .garden-hooks/ .garden/ .garden-done .garden-awaiting-input; do

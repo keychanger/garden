@@ -229,7 +229,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt" | "blockedQuestion">>;
+  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt" | "blockedQuestion" | "blockedAt">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -410,14 +410,19 @@ const onPromptSubmitted: HookMethod = (ctx) => {
     clearDoneSentinel(ctx.workerInfo.entry.worktreePath);
   }
   // Clear the human-gate sentinel unconditionally: a worker paused for operator
-  // input (designer/plan, or `garden blocked`) holds it while prState is still
+  // input (designer, or any worker using `garden blocked`) holds it while prState is still
   // `working`, so unlike the done-sentinel its clear is not gated on a terminal
   // prState. The operator's prompt is the resume signal.
-  clearAwaitingInput(ctx.workerInfo.entry.worktreePath);
+  const awaitingInputCleared = clearAwaitingInput(ctx.workerInfo.entry.worktreePath);
   // The prompt is the answer the worker was blocked on, so the question stops
-  // being true here — same signal, one field. Unconditional for the same reason:
-  // a blocked worker's prState is whatever it was when it stopped to ask.
-  if (ctx.workerInfo.entry.blockedQuestion !== undefined) fields.blockedQuestion = undefined;
+  // being true here — same signal, one field. Keep it visible if the sentinel
+  // could not be removed, or the row would claim the gate cleared while the
+  // next auto-continue still skips it.
+  if ((ctx.workerInfo.entry.blockedQuestion !== undefined
+      || ctx.workerInfo.entry.blockedAt !== undefined) && awaitingInputCleared) {
+    fields.blockedQuestion = undefined;
+    fields.blockedAt = undefined;
+  }
   applyAndLog(ctx, fields);
 };
 

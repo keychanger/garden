@@ -13,6 +13,11 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getPaneLabel: vi.fn(),
   getFirstPaneId: vi.fn(),
   listHiddenWorkerWindows: vi.fn(() => []),
+  stripControlSequences: (s: string) => s
+    .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\|$)/g, "")
+    .replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1b[@-_]/g, "")
+    .replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, ""),
 }));
 
 vi.mock("../src/dashboard/state.js", () => ({
@@ -1481,6 +1486,16 @@ describe("blocked-on-operator row", () => {
     }]);
     expect(stripAnsi(lineFor(renderQuickStatus(state), "bold-ash")))
       .toContain("Commit binary ledgers?");
+  });
+
+  it("strips terminal controls and folds line breaks from a forged registry value", async () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle",
+      blockedQuestion: "Which\nshape?\x1b[2J  Decide now.",
+    }]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).not.toContain("\x1b[2J");
+    expect(stripAnsi(line)).toContain("Which shape? Decide now.");
   });
 
   // The question outranks the activity summary because the activity describes

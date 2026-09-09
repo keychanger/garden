@@ -1170,7 +1170,7 @@ describe("human-gate sentinel helpers", () => {
   });
 
   it("setAwaitingInput writes an empty file — its presence is the whole signal", () => {
-    setAwaitingInput(wt);
+    expect(setAwaitingInput(wt)).toBe(true);
     expect(fs.writeFileSync).toHaveBeenCalledWith(`${wt}/.garden-awaiting-input`, "");
   });
 
@@ -1183,10 +1183,21 @@ describe("human-gate sentinel helpers", () => {
 
   it("tolerates a vanished worktree and a legacy entry with no path", () => {
     vi.mocked(fs.writeFileSync).mockImplementationOnce(() => { throw new Error("ENOENT"); });
-    expect(() => setAwaitingInput(wt)).not.toThrow();
-    setAwaitingInput(undefined);
-    clearAwaitingInput(undefined);
+    expect(setAwaitingInput(wt)).toBe(false);
+    expect(setAwaitingInput(undefined)).toBe(false);
+    expect(clearAwaitingInput(undefined)).toBe(false);
     expect(isAwaitingInput(undefined)).toBe(false);
+  });
+
+  it("reports a failed clear while treating an absent sentinel as cleared", () => {
+    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
+    });
+    expect(clearAwaitingInput(wt)).toBe(true);
+    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    });
+    expect(clearAwaitingInput(wt)).toBe(false);
   });
 });
 
@@ -1210,17 +1221,24 @@ describe("done-sentinel helpers", () => {
   });
 
   it("clearDoneSentinel unlinks the donePath and tolerates ENOENT", () => {
-    clearDoneSentinel(wt);
+    expect(clearDoneSentinel(wt)).toBe(true);
     expect(fs.unlinkSync).toHaveBeenCalledWith(`${wt}/.garden-done`);
 
     vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
-      throw new Error("ENOENT");
+      throw Object.assign(new Error("missing"), { code: "ENOENT" });
     });
-    expect(() => clearDoneSentinel(wt)).not.toThrow();
+    expect(clearDoneSentinel(wt)).toBe(true);
+  });
+
+  it("reports a done sentinel that could not be cleared", () => {
+    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    });
+    expect(clearDoneSentinel(wt)).toBe(false);
   });
 
   it("clearDoneSentinel is a no-op for legacy entries with no worktreePath", () => {
-    clearDoneSentinel(undefined);
+    expect(clearDoneSentinel(undefined)).toBe(false);
     expect(fs.unlinkSync).not.toHaveBeenCalled();
   });
 });

@@ -14,7 +14,7 @@ import {
   tmux, tmuxDisplay, newDashboardWindowPaned, setPaneLabel, setPaneVar, shellEscape,
   getFirstPaneId, paneExists, windowExists,
   listHiddenWorkerWindows, killWindowSafe,
-  getPaneSize, resizeWindow,
+  getPaneSize, resizeWindow, stripControlSequences,
 } from "./tmux.js";
 import { generateWorkerName } from "./names.js";
 import {
@@ -53,7 +53,8 @@ import { addAlert } from "./alerts.js";
 import { showBeads, reopenBead, unassignBead } from "./beads.js";
 import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
 import {
-  clearDoneSentinel, dispatchDelayedContinue, dispatchDelayedSeed, setAwaitingInput,
+  clearAwaitingInput, clearDoneSentinel, dispatchDelayedContinue, dispatchDelayedSeed,
+  setAwaitingInput,
 } from "./continue.js";
 import { swapVisibleToProject } from "./navigate.js";
 import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
@@ -1372,8 +1373,8 @@ export interface BlockedResult {
 // Plus the alert, which is the surface that actually reaches an absent operator.
 // The operator's next prompt clears all of it (hooks/default.ts).
 export function blockWorker(project: string, worker: string, question: string): BlockedResult {
-  const trimmed = question.trim();
-  if (!trimmed) {
+  const normalized = stripControlSequences(question).replace(/\s+/g, " ").trim();
+  if (!normalized) {
     return { ok: false, message: "A question is required: garden blocked \"<what you need decided>\"" };
   }
   const entry = findWorkerByName(project, worker);
@@ -1386,27 +1387,60 @@ export function blockWorker(project: string, worker: string, question: string): 
         + `human-gate sentinel, so auto-continue would override the block.`,
     };
   }
-  const text = trimmed.length > MAX_BLOCKED_QUESTION_LEN
-    ? `${trimmed.slice(0, MAX_BLOCKED_QUESTION_LEN - 1)}\u2026`
-    : trimmed;
+  const text = normalized.length > MAX_BLOCKED_QUESTION_LEN
+    ? `${normalized.slice(0, MAX_BLOCKED_QUESTION_LEN - 1)}\u2026`
+    : normalized;
 
-  setAwaitingInput(entry.worktreePath);
-  clearDoneSentinel(entry.worktreePath);
-  updateWorkerFields(project, worker, { blockedQuestion: text });
+  if (!setAwaitingInput(entry.worktreePath)) {
+    return {
+      ok: false,
+      message:
+        `Could not write the human-gate sentinel for ${project}/${worker}; `
+        + "the worker was not marked blocked because auto-continue could still fire.",
+    };
+  }
+  if (!clearDoneSentinel(entry.worktreePath)) {
+    clearAwaitingInput(entry.worktreePath);
+    return {
+      ok: false,
+      message:
+        `Could not remove the done sentinel for ${project}/${worker}; `
+        + "the worker was not marked blocked because the two exits would conflict.",
+    };
+  }
+  const blockedAt = entry.blockedAt ?? Date.now();
+  try {
+    updateWorkerFields(project, worker, { blockedQuestion: text, blockedAt });
+  } catch (err) {
+    clearAwaitingInput(entry.worktreePath);
+    return {
+      ok: false,
+      message:
+        `Could not record the blocked question for ${project}/${worker}: `
+        + `${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  if (findWorkerByName(project, worker)?.blockedQuestion !== text) {
+    clearAwaitingInput(entry.worktreePath);
+    return {
+      ok: false,
+      message: `Could not record the blocked question for ${project}/${worker}.`,
+    };
+  }
   log.info("workers", "worker blocked on operator", {
     worker,
     data: { project, question: text },
   });
-  // Stable dedup key on the worker, not the message: a worker re-asking a
-  // reworded version of the same blocker inside the hour is the same standing
-  // condition, and the row already shows the current text.
+  // Stable for one blocked episode, not the message: rewording a standing
+  // blocker updates the row without stacking an alert, while clearing and
+  // later re-entering the human gate gets a new blockedAt and a fresh alert.
   addAlert({
     level: "warn",
     source: "workers",
     project,
     worker,
     message: `${worker} is waiting on your decision: ${text}`,
-    dedupKey: `blocked:${project}:${worker}`,
+    dedupKey: `blocked:${project}:${worker}:${blockedAt}`,
   });
   // Last, and non-fatal. Ordering is load-bearing: the alert above is the whole
   // point of the command — the surface that reaches an operator who is not

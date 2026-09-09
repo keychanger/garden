@@ -75,6 +75,8 @@ describe("readRegistry", () => {
       { name: "w", ciNoRuns: { sha: "abc", since: "now" } },
       { name: "w", continueSentAt: "recent" },
       { name: "w", titleGeneratedAt: "recent" },
+      { name: "w", blockedQuestion: ["forged"] },
+      { name: "w", blockedAt: "recent" },
     ]) {
       fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [bad] } }));
       expect(readRegistry()).toEqual({ workers: {} });
@@ -91,6 +93,8 @@ describe("readRegistry", () => {
         ciNoRuns: { sha: "deadbeef", since: 123 },
         continueSentAt: 456,
         titleGeneratedAt: 789,
+        blockedQuestion: "Which shape?",
+        blockedAt: 999,
       }] },
     }));
     expect(readRegistry().workers.proj[0]).toMatchObject({
@@ -99,6 +103,8 @@ describe("readRegistry", () => {
       ciNoRuns: { sha: "deadbeef", since: 123 },
       continueSentAt: 456,
       titleGeneratedAt: 789,
+      blockedQuestion: "Which shape?",
+      blockedAt: 999,
     });
   });
 });

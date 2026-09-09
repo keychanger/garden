@@ -168,9 +168,14 @@ export function isDoneSet(worktreePath: string | undefined): boolean {
   return fs.existsSync(donePath(worktreePath));
 }
 
-export function clearDoneSentinel(worktreePath: string | undefined): void {
-  if (!worktreePath) return;
-  try { fs.unlinkSync(donePath(worktreePath)); } catch { /* not present */ }
+export function clearDoneSentinel(worktreePath: string | undefined): boolean {
+  if (!worktreePath) return false;
+  try {
+    fs.unlinkSync(donePath(worktreePath));
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT";
+  }
 }
 
 // Workflow handlers (trellis ALIGNED path) write the sentinel on the
@@ -183,7 +188,7 @@ export function setDoneSentinel(worktreePath: string | undefined): void {
 }
 
 // Sentinel suppressing auto-continue while a worker is mid-task but waiting on
-// operator input (the human gate shared with the designer/plan workflows). Like
+// operator input (the human gate shared by designer and `garden blocked`). Like
 // .garden-done it lives at the worktree root and its mere presence is the
 // signal, but the semantics differ: .garden-done means "finished, do not
 // continue me"; .garden-awaiting-input means "paused for the operator, resume
@@ -198,9 +203,14 @@ export function isAwaitingInput(worktreePath: string | undefined): boolean {
   return fs.existsSync(awaitingInputPath(worktreePath));
 }
 
-export function clearAwaitingInput(worktreePath: string | undefined): void {
-  if (!worktreePath) return;
-  try { fs.unlinkSync(awaitingInputPath(worktreePath)); } catch { /* not present */ }
+export function clearAwaitingInput(worktreePath: string | undefined): boolean {
+  if (!worktreePath) return false;
+  try {
+    fs.unlinkSync(awaitingInputPath(worktreePath));
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT";
+  }
 }
 
 // Written on the worker's behalf by `garden blocked` (workers.ts blockWorker)
@@ -208,9 +218,14 @@ export function clearAwaitingInput(worktreePath: string | undefined): void {
 // The file is empty — its presence is the signal; the question itself lives on
 // WorkerEntry.blockedQuestion, where the row renderer and the alert can read it
 // without a filesystem hop.
-export function setAwaitingInput(worktreePath: string | undefined): void {
-  if (!worktreePath) return;
-  try { fs.writeFileSync(awaitingInputPath(worktreePath), ""); } catch { /* worktree gone */ }
+export function setAwaitingInput(worktreePath: string | undefined): boolean {
+  if (!worktreePath) return false;
+  try {
+    fs.writeFileSync(awaitingInputPath(worktreePath), "");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function resolveWorkerPaneId(project: string, worker: string): string | null {

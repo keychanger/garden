@@ -215,6 +215,10 @@ export interface WorkerEntry {
   // by the operator's next prompt (hooks/default.ts onPromptSubmitted), which
   // is also what clears the sentinel that gates auto-continue.
   blockedQuestion?: string;
+  // Start of the current blocked episode. Keeps repeated wording changes for
+  // one standing block on one alert dedup key while allowing a later human
+  // gate on the same worker to raise a fresh alert.
+  blockedAt?: number;
   // Epoch ms when a mutating tool call (Edit/Write) completed on the worker
   // while its review was in flight (stamped by hooks/default.ts). The reviewer
   // shares the worker's worktree, so the tree under review is being rewritten;
@@ -768,10 +772,10 @@ function withRegistryLock<T>(fn: () => T): T {
 // valid old registries.
 const GUARDED_STRING_FIELDS = [
   "prState", "agentStatus", "baseBranch", "branchName", "worktreePath", "sessionId",
-  "handoffRequestId",
+  "handoffRequestId", "blockedQuestion",
 ] as const;
 
-const GUARDED_NUMBER_FIELDS = ["continueSentAt", "titleGeneratedAt"] as const;
+const GUARDED_NUMBER_FIELDS = ["continueSentAt", "titleGeneratedAt", "blockedAt"] as const;
 
 function isWorkerRegistry(x: unknown): x is WorkerRegistry {
   if (!x || typeof x !== "object") return false;

@@ -1,5 +1,7 @@
 import fs from "node:fs";
-import { awaitingInputPath, donePath } from "../dashboard/continue.js";
+import {
+  awaitingInputPath, clearAwaitingInput, clearDoneSentinel, donePath,
+} from "../dashboard/continue.js";
 import { updateWorkerFields } from "../dashboard/registry.js";
 import { refreshDashboard } from "../dashboard/header.js";
 import { resolveWorkerArg } from "./resolve-worker.js";
@@ -24,18 +26,24 @@ export async function resume(args: string[]): Promise<void> {
       + `support pause/resume; kill and recreate.)`,
     );
   }
-  const cleared: string[] = [];
-  for (const target of [donePath(worktreePath), awaitingInputPath(worktreePath)]) {
-    if (!fs.existsSync(target)) continue;
-    try { fs.unlinkSync(target); } catch { /* raced with the worker's own clear */ }
-    cleared.push(target);
+  const doneTarget = donePath(worktreePath);
+  const awaitingTarget = awaitingInputPath(worktreePath);
+  const cleared = [doneTarget, awaitingTarget].filter(target => fs.existsSync(target));
+  if (!clearDoneSentinel(worktreePath) || !clearAwaitingInput(worktreePath)) {
+    throw new Error(
+      `Could not resume ${project}/${workerName} because an auto-continue sentinel `
+      + "could not be cleared.",
+    );
   }
   // The registry half of a block. Dropped whenever the worker was blocked, even
   // if its sentinel had already gone: the field is what flags the row and lifts
   // it to the blocked-on-you tier, so leaving it would keep asking the operator
   // for an answer they just said they were done giving.
-  if (entry.blockedQuestion !== undefined) {
-    updateWorkerFields(project, workerName, { blockedQuestion: undefined });
+  if (entry.blockedQuestion !== undefined || entry.blockedAt !== undefined) {
+    updateWorkerFields(project, workerName, {
+      blockedQuestion: undefined,
+      blockedAt: undefined,
+    });
     // Non-fatal for the same reason as blockWorker's: the unblock has already
     // landed in the registry, so a repaint that cannot reach tmux must not turn
     // a successful resume into a reported failure.

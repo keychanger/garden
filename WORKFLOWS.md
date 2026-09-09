@@ -1954,15 +1954,15 @@ behavior.
 
 #### Pause and resume
 
-The existing `garden pause <worker>` / `garden resume <worker>` (which
-toggle `.garden-done`) work unchanged. Pausing a trellis vine
-suppresses auto-continue; resume re-arms it. This is a different
+The existing `garden pause <worker>` / `garden resume <worker>` work for a
+trellis vine too. Pause writes `.garden-done` to suppress auto-continue; resume
+clears every per-worker auto-continue gate and re-arms it. This is a different
 mechanism than `garden trellis resume`:
 
 | Command                               | Use                                                                                 |
 |---------------------------------------|-------------------------------------------------------------------------------------|
 | `garden pause <worker>`               | Stop the loop without escalating. Worker stays at last state. Operator sets aside. |
-| `garden resume <worker>`              | Inverse of pause. Clears `.garden-done`.                                            |
+| `garden resume <worker>`              | Clears `.garden-done`, `.garden-awaiting-input`, and any recorded blocked question. |
 | `garden trellis resume <worker>`      | Specifically resumes a flagged vine (clears the flagged state, dispatches a fresh review). |
 
 ### Storage and registry fields

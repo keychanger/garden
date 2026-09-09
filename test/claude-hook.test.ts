@@ -426,6 +426,7 @@ describe("handleClaudeHook — core events", () => {
       prState: "merged",
       worktreePath: "/tmp/wt/garden/bold-ash",
       blockedQuestion: "Commit binary ledgers?",
+      blockedAt: 123,
     });
     setCwd("garden", "bold-ash");
 
@@ -434,8 +435,31 @@ describe("handleClaudeHook — core events", () => {
 
     const entry = entries.garden.find(e => e.name === "bold-ash")!;
     expect(entry.blockedQuestion).toBeUndefined();
+    expect(entry.blockedAt).toBeUndefined();
     expect(entry.agentStatus).toBe("working");
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-awaiting-input");
+  });
+
+  it("keeps the question visible when the human-gate sentinel cannot be cleared", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      prState: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      blockedQuestion: "Commit binary ledgers?",
+      blockedAt: 123,
+    });
+    setCwd("garden", "bold-ash");
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    });
+
+    handleClaudeHook("prompt");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.blockedQuestion).toBe("Commit binary ledgers?");
+    expect(entry.blockedAt).toBe(123);
+    expect(entry.agentStatus).toBe("working");
   });
 
   it("stop sets idle from any prior state", () => {
