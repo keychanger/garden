@@ -2747,7 +2747,7 @@ uncommitted — working memory, not commits):
    constraints, out of scope). Flows into phase 2.
 2. **Options** — write `options.md` (2–3 approaches as narrative sketches, each
    naming its load-bearing tradeoff) and `questions.md` (numbered, specific).
-   Then `touch .garden-awaiting-input` and end the turn — the human gate.
+   Then `garden blocked "<the decision you need>"` and end the turn — the human gate.
 3. **Converge** (loops) — the operator answers in chat; the designer captures
    `answers.md`, drafts `artifact.md`, and re-enters the gate as many times as
    the operator wants more options. Ends when the operator approves.
@@ -2757,14 +2757,18 @@ uncommitted — working memory, not commits):
 
 ### The human gate
 
-`.garden-awaiting-input` is a general human-gate sentinel; designer is its one
-user today (the shipped planner workflow has no mid-run gate — its review
-gate is board-side promotion).
-Auto-continue skips a worker holding it (`autoContinueSkipReason`,
+`.garden-awaiting-input` is a general human-gate sentinel. Designer enters it
+through `garden blocked "<question>"`, the same command any worker uses to stop
+on an operator decision (DESIGN.md "Blocked on the operator") — so a designer
+parked mid-phase also gets the alert and the top-band row placement, which a bare
+`touch` did not raise. The shipped planner workflow has no mid-run gate; its
+review gate is board-side promotion.
+Auto-continue skips a worker holding the sentinel (`autoContinueSkipReason`,
 `poller-merge.ts`); `onPromptSubmitted` clears it unconditionally (unlike
-`.garden-done`, a gated worker holds it while `prState` is still `working`).
+`.garden-done`, a gated worker holds it while `prState` is still `working`),
+along with the recorded question.
 The status pane shows a yellow `?` on a worker holding it (`formatAwaitingInputGlyph`,
-`status.ts`). Note the gate is milder than it looks: because the phase-1–3
+`status.ts`), and the question in the row's detail column. Note the gate is milder than it looks: because the phase-1–3
 artifacts are git-excluded, a designer's design turns produce no tracked commit,
 so `routeStopHookEnd` sees zero commits ahead and the worker simply idles — the
 sentinel is the operator-visible signal + a robustness backstop, not the primary

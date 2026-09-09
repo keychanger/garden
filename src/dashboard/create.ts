@@ -33,6 +33,7 @@ import { resolveGardenRunner, resolveHookRunner } from "./runner.js";
 import { buildSandboxConfig } from "./sandbox.js";
 import {
   DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME,
+  BLOCKED_SKILL_CONTENT, BLOCKED_SKILL_DIRNAME, BLOCKED_SKILL_FILENAME,
   HANDOFF_SKILL_CONTENT, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME,
   TRELLIS_AUTHOR_SKILL_CONTENT, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME,
   GROW_SKILL_CONTENT, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME,
@@ -862,6 +863,9 @@ export function buildWorktreeBootstrapScript(
   const doneSkillLit = shellEscape(DONE_SKILL_CONTENT);
   const doneSkillDirnameLit = shellEscape(DONE_SKILL_DIRNAME);
   const doneSkillFilenameLit = shellEscape(DONE_SKILL_FILENAME);
+  const blockedSkillLit = shellEscape(BLOCKED_SKILL_CONTENT);
+  const blockedSkillDirnameLit = shellEscape(BLOCKED_SKILL_DIRNAME);
+  const blockedSkillFilenameLit = shellEscape(BLOCKED_SKILL_FILENAME);
   const handoffSkillLit = shellEscape(HANDOFF_SKILL_CONTENT);
   const handoffSkillDirnameLit = shellEscape(HANDOFF_SKILL_DIRNAME);
   const handoffSkillFilenameLit = shellEscape(HANDOFF_SKILL_FILENAME);
@@ -1086,6 +1090,8 @@ mkdir -p ${wtPathLit}/.claude/skills/${designerSkillDirnameLit}
 printf '%s' ${designerSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${designerSkillDirnameLit}/${designerSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${plannerSkillDirnameLit}
 printf '%s' ${plannerSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${plannerSkillDirnameLit}/${plannerSkillFilenameLit}
+mkdir -p ${wtPathLit}/.claude/skills/${blockedSkillDirnameLit}
+printf '%s' ${blockedSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${blockedSkillDirnameLit}/${blockedSkillFilenameLit}
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.

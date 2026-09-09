@@ -31,6 +31,8 @@ import {
   PLANNER_SKILL_DIRNAME,
   PLANNER_SKILL_FILENAME,
   PLANNER_SKILL_CONTENT,
+  BLOCKED_SKILL_DIRNAME,
+  BLOCKED_SKILL_CONTENT,
   installClaudeSkills,
 } from "../src/dashboard/skills.js";
 
@@ -165,6 +167,28 @@ describe("installClaudeSkills", () => {
     );
   });
 
+  it("writes the blocked skill alongside the others", () => {
+    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    expect(fs.mkdirSync).toHaveBeenCalledWith(
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/blocked",
+      { recursive: true },
+    );
+    expect(fs.writeFileSync).toHaveBeenCalledWith(
+      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/blocked/SKILL.md."),
+      BLOCKED_SKILL_CONTENT,
+    );
+  });
+
+  it("blocked skill names the CLI and distinguishes itself from the other two exits", () => {
+    expect(BLOCKED_SKILL_CONTENT).toMatch(/^---\nname: blocked\n/);
+    expect(BLOCKED_SKILL_DIRNAME).toBe("blocked");
+    expect(BLOCKED_SKILL_CONTENT).toContain("garden blocked");
+    // The whole point is that it is NOT `done`; a skill that failed to draw that
+    // line would leave the worker picking the exit that reads as finished.
+    expect(BLOCKED_SKILL_CONTENT).toMatch(/When NOT to use/);
+    expect(BLOCKED_SKILL_CONTENT).toMatch(/You are actually finished/);
+  });
+
   it("planner skill declares its name and carries the method checklist", () => {
     expect(PLANNER_SKILL_CONTENT).toMatch(/^---\nname: planner\n/);
     expect(PLANNER_SKILL_DIRNAME).toBe("planner");
@@ -236,6 +260,13 @@ describe("DONE_SKILL_CONTENT", () => {
   it("includes the touch command and the sentinel filename in the body", () => {
     expect(DONE_SKILL_CONTENT).toContain("touch .garden-done");
     expect(DONE_SKILL_CONTENT).toContain(".garden-done");
+  });
+
+  it("routes an operator-decision blocker to the blocked skill rather than done", () => {
+    // The case that most resembles being finished and is not: work remains, but
+    // only the operator can unblock it. Naming it in the pane is not enough.
+    expect(DONE_SKILL_CONTENT).toContain("blocked");
+    expect(DONE_SKILL_CONTENT).toMatch(/garden blocked/);
   });
 
   it("explicitly warns against committing the sentinel", () => {

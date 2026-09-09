@@ -235,6 +235,13 @@ describe("buildWorktreeRules — grow workflow", () => {
     expect(result).toContain(".garden-done");
   });
 
+  it("the worker preamble names the blocked exit beside continue and done", async () => {
+    const { buildWorktreeRules } = await importRules();
+    const result = buildWorktreeRules("tall-fern", "main");
+    expect(result).toContain("garden blocked");
+    expect(result).toContain("blocked` skill");
+  });
+
   it("grow paragraphs append AFTER the worktree workflow baseline", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("tall-fern", "main", {

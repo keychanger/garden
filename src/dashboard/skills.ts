@@ -39,6 +39,7 @@ Runs \`touch .garden-done\` at the root of your worktree (your CWD). On the next
 ## When NOT to use
 
 - Re-reading the request surfaces a deliverable the operator named that has not landed, or that you pushed but never verified works — do that next. Garden will auto-continue you, and that is the intended flow for known multi-phase work.
+- **A deliverable has not landed and you cannot land it without a decision only the operator can make** — a product-shape question, a spend or credentials approval, a choice the request gives you no basis to make. Use the \`blocked\` skill (\`garden blocked "<the decision you need>"\`) instead. This is the one case that most resembles being finished and is not: \`done\` would put a green check on your row and arm the whole-task holistic review over a task that is not whole, and the operator would learn nothing about what is waiting on them. Naming the remaining work in your pane message is not enough — nobody away from the dashboard reads panes.
 - You hit a problem you cannot solve. Tell the operator instead; silently declaring "done" hides incomplete work.
 - A review came back \`failing\` and you have not addressed the feedback yet.
 - The operator's request includes future-tense work ("once the previous phase merges, do X") — finish X first.
@@ -66,6 +67,121 @@ That is the entire invocation. Verify with \`ls -la .garden-done\`. Then end you
 ## Recovery
 
 If you wrote \`.garden-done\` and the operator gives you more work afterward, just keep working — their \`UserPromptSubmit\` automatically clears both the \`done\` state and the on-disk sentinel, so a no-commits Stop in the new turn will not re-trip \`done\`. If, after working through their new prompt, you decide you are *still* finished, re-run \`touch .garden-done\` and end your turn — the skill is cheap to re-invoke. \`garden resume <worker>\` is the manual escape hatch for clearing the sentinel without prompting the worker.
+`;
+
+export const BLOCKED_SKILL_DIRNAME = "blocked";
+export const BLOCKED_SKILL_FILENAME = "SKILL.md";
+
+// The third exit from a turn, and the one that did not exist. See
+// dashboard/workers.ts blockWorker for the failure that motivated it: a worker
+// with real work left but no way to proceed without an operator decision had
+// only `done` (which reads as finished) or a silent idle (which reads as
+// nothing), so it picked one and the operator learned nothing.
+export const BLOCKED_SKILL_CONTENT = `---
+name: blocked
+description: Use when you cannot make further progress on the operator's request without a decision only they can make — a product-shape question, a spend/credentials approval, a choice between paths you have no basis to pick between. Records the question on your dashboard row, alerts the operator, and suppresses post-merge auto-continue so garden does not prompt you to continue work you are not able to continue. Do NOT use for a problem you could solve yourself, for a review failure, or when you are simply finished (use \`done\`).
+---
+
+# Blocked
+
+Invoke this when the operator's request has work remaining that you genuinely
+cannot do without an answer from them.
+
+This is the **third** exit from a turn. The other two are:
+
+- **Keep going** — end your turn with your commits pushed, and garden's
+  post-merge auto-continue prompts you into the next phase. The default.
+- **\`done\`** — every deliverable the operator named has landed and is verified.
+- **\`blocked\`** — this one. Work remains, you have pushed what you can, and the
+  next step needs the operator's decision.
+
+## Why this exists
+
+Without it, a worker in your position had to pick one of the other two, and both
+lie. \`done\` puts a green check on your row and tells garden the task is
+complete — it also arms the whole-task holistic review over a task that is not
+whole. Ending your turn silently leaves an ordinary idle row. Neither says "the
+operator's answer is the blocker", so an operator away from their dashboard sees
+nothing at all, and the work sits until they happen to read your pane. That is
+exactly what happened to the worker this skill was built for: it stopped two
+phases short, named both remaining phases in its final message, and looked
+finished for hours.
+
+## How to invoke
+
+From your worktree, after committing and pushing whatever you *could* finish:
+
+\`\`\`bash
+garden blocked "Golden bookmarks need API credits and commit binary SQLite ledgers — earn and commit a set, or skip them?"
+\`\`\`
+
+Then **end your turn**, with your full accounting in the pane as usual: what
+landed, what is pushed and awaiting review, and what is waiting on them and why.
+The pane message is where you explain; the question is the one-line summary that
+travels to the places they will actually look.
+
+## Writing the question
+
+One sentence, phrased as the decision you need made. It appears on your dashboard
+row and in an operator alert, so it should be readable with no other context, and
+it is capped at 280 characters — put the reasoning in your pane message, not here.
+
+- Good: \`"Should evening calls advance the run, or sit outside it?"\`
+- Good: \`"Committing golden bookmarks means committing binary SQLite ledgers a schema change can break — do it anyway?"\`
+- Bad: \`"blocked"\` / \`"need input"\` — says nothing they can answer.
+- Bad: a paragraph — it will be truncated where it stops fitting.
+
+If several decisions are outstanding, name the one that unblocks the most work
+and list the rest in your pane message.
+
+## When to use
+
+- Remaining work needs a product or design decision that is the operator's to make.
+- Proceeding would spend real money, commit generated binary artifacts, or touch
+  credentials, and you have not been authorized for it.
+- Two or more paths are defensible and you have no basis in the request to choose.
+- The operator's request assumed something that turned out to be false, so what
+  they asked for cannot be built as described.
+
+## When NOT to use
+
+- **You could work it out yourself.** Read more code, run the thing, check the
+  git history. This is not the exit for "this is hard."
+- **You are actually finished** — every deliverable landed and verified. That is
+  \`done\`.
+- **A review came back \`failing\`.** Fix the feedback; that is your job, not the
+  operator's decision.
+- **You hit an error you cannot fix.** Say so in your pane and leave the worker in
+  a state that shows it. A blocked question means "answer this and I continue",
+  not "something broke".
+- **To avoid finishing work you were asked to do.** Manufacturing a question to
+  hand back a deliverable the operator already decided on is the same failure as
+  declaring \`done\` early, in the other direction.
+
+## What it does
+
+- Records the question on your registry entry, which lifts your row to the top
+  **blocked-on-you** band of the status pane with the question as its description
+  and a yellow \`?\`.
+- Raises a warn-level operator alert carrying the question — the surface that
+  reaches them when they are not looking at the dashboard.
+- Writes \`.garden-awaiting-input\`, which suppresses post-merge auto-continue, so
+  garden will not prompt you to continue work you cannot continue.
+- Removes \`.garden-done\` if it is there, so you can never be read as finished
+  and blocked at once.
+
+Your branch still gets reviewed and merged normally — being blocked is about what
+comes *next*, not about the commits you already pushed.
+
+## Recovery
+
+The operator's next prompt to your pane clears all of it automatically — the
+question, the sentinel, the row flag — because their prompt is the answer you
+were waiting for. Just keep working. If their answer opens a new question, invoke
+this again; it is cheap to re-invoke.
+
+\`garden resume <worker>\` is the operator's escape hatch for clearing a block
+without prompting you.
 `;
 
 export const TRELLIS_AUTHOR_SKILL_DIRNAME = "trellis-author";
@@ -440,12 +556,12 @@ Write \`.garden/designer/options.md\`: **2–3 distinct approaches**, each a sho
 
 Write \`.garden/designer/questions.md\`: a **numbered** list of specific clarifying questions, each naming the decision it affects (e.g. "3. Should X live in the poller or the hook? — decides whether Y is synchronous."). Ask only what genuinely changes the design; do not pad.
 
-Then present a brief summary of the options and questions in your pane, run \`touch .garden-awaiting-input\` at your worktree root (this shows a \`?\` on your dashboard row so the operator sees you are waiting on them), and **END YOUR TURN**. You are now at the human gate: the operator answers in chat. You are not stuck and not done — you are waiting. The sentinel clears automatically when the operator sends their next message.
+Then present a brief summary of the options and questions in your pane, run \`garden blocked "<the decision you need>"\` (one line, the choice you are asking them to make), and **END YOUR TURN**. You are now at the human gate: the operator answers in chat. You are not stuck and not done — you are waiting. That command lifts your row to the top blocked-on-you band with the question on it and alerts the operator, so a gate you enter while they are away is still visible; it all clears automatically when they send their next message.
 
 ### 3. Converge — loops
 When the operator responds, capture their answers to \`.garden/designer/answers.md\` (so later turns read them deterministically even if the conversation compacts). Incorporate the answers, pick an approach (or let the operator pick), and draft the artifact at \`.garden/designer/artifact.md\`.
 
-This phase **loops**: if the operator says "explore another option" or "try again," return to phase-2-style options, then re-converge. Re-enter the gate each time you need direction — \`touch .garden-awaiting-input\` and end your turn. Keep going until the operator approves.
+This phase **loops**: if the operator says "explore another option" or "try again," return to phase-2-style options, then re-converge. Re-enter the gate each time you need direction — \`garden blocked "<the decision you need>"\` and end your turn. Keep going until the operator approves.
 
 When the artifact looks final, ask for approval and state your handoff plan **in the same message**, so one "approve" carries both. The default plan: publish, then spawn a **default-workflow builder** yourself, seeded with the design. Name the alternatives so the operator can redirect in their approval: a **trellis builder** (which they spawn — see phase 4), **no builder**, or \`--ultracode\` for a full-strength builder. A bare "approve" means the stated plan runs as-is, handoff included.
 
@@ -561,6 +677,7 @@ export function installClaudeSkills(targetDir: string): void {
   fs.rmSync(path.join(skillsRoot, "done.md"), { force: true });
   fs.rmSync(path.join(skillsRoot, "botanist"), { recursive: true, force: true });
   writeSkill(skillsRoot, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME, DONE_SKILL_CONTENT);
+  writeSkill(skillsRoot, BLOCKED_SKILL_DIRNAME, BLOCKED_SKILL_FILENAME, BLOCKED_SKILL_CONTENT);
   writeSkill(skillsRoot, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME, HANDOFF_SKILL_CONTENT);
   writeSkill(skillsRoot, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME, TRELLIS_AUTHOR_SKILL_CONTENT);
   writeSkill(skillsRoot, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME, GROW_SKILL_CONTENT);

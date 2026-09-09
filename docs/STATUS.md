@@ -133,6 +133,30 @@ intent, even though both sit at the prompt awaiting input.
 dashboard `⌥e` hotkey also toggles: pressing it on an already-held worker
 releases it back to `idle` (the "never mind" path) without sending a prompt.
 
+### Blocked on the operator (a row flag, not a state)
+
+A worker that has pushed what it can and needs an operator decision before it
+can go further runs `garden blocked "<question>"`, which stamps
+`WorkerEntry.blockedQuestion` and writes the `.garden-awaiting-input` sentinel.
+The row rises to the top blocked-on-you band with the question as its
+description and a yellow `?`, and an alert carries the question to an operator
+who is not watching the dashboard.
+
+This is deliberately **not** a display state or a `prState`. Blocked-on-the-
+operator is orthogonal to the lifecycle: a worker can be blocked while its
+branch is `merged`, or with no `prState` at all, and its `agentStatus` is
+whatever it was when the turn ended (`idle`). Making it a state would mean edges
+from and to nearly every other one; making it a field means the row can report
+"waiting on you" over any state the worker is actually in. The mid-turn `asking`
+state remains distinct, and remains a real state: `asking` is Claude blocked
+*inside* a turn on a permission prompt or plan question, detected by a hook,
+where blocked-on-the-operator is a worker that finished its turn cleanly and
+recorded that it cannot start the next one.
+
+It clears where every other operator-input signal clears — `UserPromptSubmit`,
+which drops the question and the sentinel together, because the prompt is the
+answer. `garden resume <worker>` clears it without prompting.
+
 ## State transitions
 
 ```mermaid

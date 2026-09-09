@@ -953,6 +953,26 @@ describe("continueWorkerAfterMerge", () => {
     expect(message).toContain(".garden-done");
   });
 
+  // A worker whose next deliverable is blocked on an operator decision must be
+  // told the third exit exists here, in the prompt that asks it to continue —
+  // otherwise the only two options named are "continue" and "done", and it picks
+  // `done` because it cannot continue.
+  it("names the blocked exit so an unlandable deliverable does not route to done", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+
+    continueWorkerAfterMerge("myproject", "bold-ash");
+
+    const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
+    expect(message).toContain("garden blocked");
+    expect(message).toMatch(/only the operator can make/);
+  });
+
   it("skips when the worker is already working", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "bold-ash", sessionId: "s", task: "", agentStatus: "working",

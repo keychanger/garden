@@ -99,7 +99,16 @@ const MERGE_CONTINUE_BASE =
   + "\"while we're here\" improvements the operator did not explicitly ask "
   + "for: stopping early is strictly preferred over fabricating scope, and "
   + "the operator will redirect you if more is needed. This prompt is the "
-  + "merge notification, not an instruction to find more to do.";
+  + "merge notification, not an instruction to find more to do.\n\n"
+  + "If a deliverable HAS not landed but you cannot land it without a decision "
+  + "only the operator can make — a product-shape question, a spend or "
+  + "credentials approval, a choice between paths the request gives you no "
+  + "basis to pick between — that is neither `done` nor a reason to invent "
+  + "different work. Run `garden blocked \"<the decision you need>\"` (the "
+  + "`blocked` skill) and end your turn: it puts the question on your row and "
+  + "alerts the operator. Do NOT reach for `done` in that situation — it reads "
+  + "as \"the task is complete\" and the operator learns nothing about what is "
+  + "actually waiting on them.";
 
 const MAX_LISTED_FILES = 20;
 

@@ -788,6 +788,22 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toContain("name: done");
   });
 
+  it("inlines the bundled `blocked` skill so a worker's first turn can already reach the third exit", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    );
+    expect(call).toBeDefined();
+    const script = call![1] as string;
+    expect(script).toContain("mkdir -p /wt/myproject/bold-ash/.claude/skills/blocked");
+    expect(script).toContain("/.claude/skills/blocked/SKILL.md");
+    expect(script).toContain("name: blocked");
+  });
+
   it("also inlines the bundled `handoff` skill so new workers can invoke it without a refresh round-trip", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(
