@@ -1023,6 +1023,20 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain(GREY);
   });
 
+  it("drops the tag when the observed model returns to the project baseline", () => {
+    // The row is override-only even when the worker was pinned elsewhere:
+    // it names what is running, and the project header already names `opus`.
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { garden: { path: "/tmp/garden", model: "opus" } },
+    });
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", model: "sonnet", runningModel: "opus" },
+    ]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).not.toContain(GREY);
+    expect(line).not.toContain("sonnet");
+  });
+
   it("keeps the tag on a worker whose model overrides the project default", () => {
     vi.mocked(loadConfig).mockReturnValue({
       projects: { garden: { path: "/tmp/garden", model: "opus" } },
