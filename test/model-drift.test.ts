@@ -189,12 +189,12 @@ describe("sweepWorkerModels", () => {
     expect(addAlert).not.toHaveBeenCalled();
   });
 
-  it("reports an unpinned worker as undrifted — it has no intent to violate", () => {
+  it("compares an otherwise-unpinned Codex worker against Garden's launch default", () => {
     workers.wolf = [worker({ transcriptPath: rollout("unpinned", ["gpt-6-astra"]) })];
 
     expect(sweepWorkerModels({ workers } as never)).toBe(1);
     expect(workers.wolf[0].runningModel).toBe("gpt-6-astra");
-    expect(hasModelDrift(workers.wolf[0])).toBe(false);
+    expect(hasModelDrift(workers.wolf[0])).toBe(true);
   });
 
   it("compares a trellis vine against its own workerModel pin", () => {
@@ -290,6 +290,20 @@ describe("sweepWorkerModels", () => {
 
     expect(sweepWorkerModels({ workers } as never)).toBe(1);
     expect(workers.garden[0].runningModel).toBe("fable");
+    expect(hasModelDrift(workers.garden[0])).toBe(true);
+  });
+
+  it("catches a claude-code substitution within one family for a concrete pin", () => {
+    // Family normalization exists for aliases only. Concrete ids are valid
+    // pins too, and collapsing their versions would hide a real substitution.
+    workers.garden = [worker({
+      harness: "claude-code",
+      model: "claude-opus-4-6",
+      transcriptPath: transcript("concrete-drift", ["claude-opus-4-5"]),
+    })];
+
+    expect(sweepWorkerModels({ workers } as never)).toBe(1);
+    expect(workers.garden[0].runningModel).toBe("claude-opus-4-5");
     expect(hasModelDrift(workers.garden[0])).toBe(true);
   });
 

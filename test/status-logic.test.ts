@@ -1043,6 +1043,24 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}fable ≠ opus${RESET}`);
   });
 
+  it("uses Garden's Codex launch default as the project baseline", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { garden: { path: "/tmp/garden", harness: "codex" } },
+    });
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", harness: "codex",
+        runningModel: "gpt-5.6-sol" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain(GREY);
+
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", harness: "codex",
+        runningModel: "gpt-6-astra" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash"))
+      .toContain(`${GREY}gpt-6-astra ≠ gpt-5.6-sol${RESET}`);
+  });
+
   it("rides the model AFTER the detail and does not dead-space a model-less sibling", () => {
     // calm-bay renders alongside via a hidden window, so two workers share the
     // one project.

@@ -121,6 +121,10 @@ describe("worker member name (status-pane identity badge source)", () => {
     expect(projectWorkerModel({ path: "/p", crew: "all-claude" }, c)).toBe("opus");
     // The flat key is the override layer and still wins over the crew.
     expect(projectWorkerModel({ path: "/p", crew: "all-claude", model: "sonnet" }, c)).toBe("sonnet");
+    // Codex has a Garden-owned launch default, unlike claude-code's unknown
+    // account default, so it is a real baseline even without a model key.
+    expect(projectWorkerModel({ path: "/p", harness: "codex" }, c)).toBe("gpt-5.6-sol");
+    expect(projectWorkerModel({ path: "/p", crew: "all-codex" }, c)).toBe("gpt-5.6-sol");
     // A dangling binding leaves no baseline, rather than crashing.
     expect(projectWorkerModel({ path: "/p", crew: "gone" }, c)).toBeUndefined();
   });

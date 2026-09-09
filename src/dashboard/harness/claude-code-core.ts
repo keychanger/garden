@@ -170,13 +170,20 @@ export const claudeCodeCore: HarnessCore = {
     const transcript = resolveTranscriptPath(entry);
     if (!transcript) return null;
     const observed = readLatestTranscriptModel(transcript);
-    const family = observed ? modelFamily(observed) : null;
+    if (!observed) return null;
+    const family = modelFamily(observed);
     // An id with no family (`<synthetic>`, a provider's own model id) is not
     // evidence of anything. Null keeps the previous reading rather than
     // asserting a drift that cannot be substantiated.
     if (!family) return null;
     const pin = entry.model ?? entry.trellis?.workerModel;
-    return pin && modelFamily(pin) === family ? pin : family;
+    if (!pin) return family;
+    const alias = modelAlias(pin);
+    if (alias) return alias === family ? pin : family;
+    // Only aliases may compare at family granularity. A concrete pin must
+    // remain exact: treating `claude-opus-4-6` and `claude-opus-4-5` as the
+    // same model would hide a real substitution within the Opus family.
+    return observed === pin ? pin : observed;
   },
 };
 
@@ -189,4 +196,9 @@ const MODEL_FAMILIES = ["opus", "sonnet", "haiku", "fable"];
 function modelFamily(model: string): string | null {
   const tokens = model.toLowerCase().split(/[^a-z0-9]+/);
   return MODEL_FAMILIES.find(family => tokens.includes(family)) ?? null;
+}
+
+function modelAlias(model: string): string | null {
+  const normalized = model.toLowerCase();
+  return MODEL_FAMILIES.find(family => family === normalized) ?? null;
 }

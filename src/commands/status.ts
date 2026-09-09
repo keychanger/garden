@@ -20,6 +20,7 @@ import { isAwaitingInput } from "../dashboard/continue.js";
 import { deriveCrew, workerMemberName, projectWorkerMemberName, projectWorkerModel } from "../dashboard/crew.js";
 import { unreadAlertCountsByProject } from "../dashboard/alerts.js";
 import { readIntakeStatus } from "../dashboard/intake-paths.js";
+import { pinnedModel } from "../dashboard/model-drift.js";
 import type { GardenConfig, ProjectConfig } from "../config.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
@@ -213,8 +214,9 @@ interface RowRenderCtx {
   // unbound project's inferred harness pairing is not a crew: builtin crews
   // now carry model pins that do not apply implicitly.
   projectCrew: string;
-  // The model the project's own default worker resolves to (flat key, else the
-  // bound crew's builder seat). Undefined when it pins none — see formatModelTag.
+  // The model the project's own default worker resolves to (flat key, bound
+  // crew's builder seat, or a known harness tuning default). Undefined when
+  // Garden cannot name the account default — see formatModelTag.
   projectModel?: string;
 }
 
@@ -264,10 +266,11 @@ function greyBadge(text: string): string {
 // pin alone, and once crews began stamping their builder seat onto every
 // spawned worker (`claude-codex` pins `opus`), every row on a crew-bound
 // project carried a tag that said nothing the project header did not
-// (operator call, 2026-09-09). A project pinning no model has no baseline —
-// its workers run the account default, which garden cannot name — so there
-// only an explicit per-worker pin reads as an override. A divergence is never
-// suppressed: it is precisely what the row exists to say.
+// (operator call, 2026-09-09). A claude-code project pinning no model has no
+// baseline — its workers run the account default, which garden cannot name —
+// so there only an explicit per-worker pin reads as an override. Codex's
+// Garden-owned launch default is a baseline. A divergence is never suppressed:
+// it is precisely what the row exists to say.
 function formatModelTag(model?: string, runningModel?: string, projectModel?: string): string {
   if (model && runningModel && model !== runningModel) return greyBadge(`${runningModel} ≠ ${model}`);
   const shown = runningModel ?? model;
@@ -1164,7 +1167,7 @@ function collectWorkers(
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,
       provider: entry?.provider,
-      model: entry?.model ?? entry?.trellis?.workerModel,
+      model: entry ? pinnedModel(entry) : undefined,
       runningModel: entry?.runningModel,
       workflow: entry?.workflow,
       crew: entry?.crew,
@@ -1195,7 +1198,7 @@ function collectWorkers(
       baseBranch: entry?.baseBranch,
       harness: entry?.harness,
       provider: entry?.provider,
-      model: entry?.model ?? entry?.trellis?.workerModel,
+      model: entry ? pinnedModel(entry) : undefined,
       runningModel: entry?.runningModel,
       workflow: entry?.workflow,
       crew: entry?.crew,

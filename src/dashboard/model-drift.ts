@@ -2,8 +2,9 @@
 // actually running.
 //
 // Garden passes the pin on the launch command line and has always treated it as
-// settled fact — `entry.model` is what the status pane renders and what a bounce
-// relaunches with. A harness can overrule it after launch. On 2026-09-08 codex
+// settled fact. Usually it is `entry.model`; Codex also has a Garden-owned
+// fallback when that field is absent. A harness can overrule it after launch.
+// On 2026-09-08 codex
 // 0.153.4, on the first session after a Homebrew upgrade, showed its new-model
 // notice seven seconds into a worker's boot, moved that live session from the
 // pinned `gpt-5.6-sol` to `gpt-6-astra`, and wrote the new model into
@@ -11,21 +12,26 @@
 // status line for the next 13 minutes of work; garden's row said `gpt-5.6-sol`,
 // and nothing anywhere said they disagreed.
 //
-// The observation is stored beside the pin, never over it: overwriting
-// `entry.model` would silence the row by adopting the accident, and the next
-// bounce would then relaunch on the drifted model deliberately. So the row
+// The observation is stored beside the pin, never over it: replacing launch
+// intent would silence the row by adopting the accident, and the next bounce
+// would then relaunch on the drifted model deliberately. So the row
 // renders the observation in the pin's place, and names both as
 // `<running> ≠ <pinned>` when they disagree (status.ts) — while `⌥i` -> model
 // still restores the intent.
 import { resolveWorkerRunningModel } from "./harness/core.js";
+import { DEFAULT_CODEX_MODEL } from "./launch-plan.js";
 import { log } from "./log.js";
 import { updateWorkerFieldsIf, type WorkerEntry, type WorkerRegistry } from "./registry.js";
 
 // The pin this worker was launched with, in the same vocabulary readRunningModel
-// answers in. Trellis vines carry theirs under the workflow sub-object, matching
-// how the status pane resolves the model badge.
+// answers in. Trellis vines carry theirs under the workflow sub-object. An
+// otherwise-unpinned Codex worker still has Garden's explicit harness tuning
+// default on its command line, so that is intent too even though the optional
+// per-worker field is absent.
 export function pinnedModel(entry: WorkerEntry): string | undefined {
-  return entry.model ?? entry.trellis?.workerModel;
+  return entry.model
+    ?? entry.trellis?.workerModel
+    ?? (entry.harness === "codex" ? DEFAULT_CODEX_MODEL : undefined);
 }
 
 // True when the worker's most recent turn ran a model other than the one garden

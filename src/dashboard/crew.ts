@@ -36,6 +36,7 @@ import {
   type StoredCrew,
 } from "../config.js";
 import { harnessNames } from "./harness/core.js";
+import { DEFAULT_CODEX_MODEL } from "./launch-plan.js";
 
 const DEFAULT_HARNESS = "claude-code";
 
@@ -251,15 +252,20 @@ export function projectWorkerMemberName(
 
 // The model a project's default worker resolves to — the baseline the row's
 // model tag is compared against, read through the same chain newWorker uses:
-// the flat key, then the bound crew's worker seat. Undefined means the project
-// pins nothing and the worker runs the account/harness default, which garden
+// the flat key, then the bound crew's worker seat, then a Garden-owned harness
+// tuning default. Undefined means the project runs an account default Garden
 // cannot name: there is then no baseline to call an observation an override
-// against (see formatModelTag, status.ts).
+// against (see formatModelTag, status.ts). Codex is the exception because its
+// fallback is the explicit DEFAULT_CODEX_MODEL launch pin.
 export function projectWorkerModel(
-  project: Pick<ProjectConfig, "model" | "crew">,
+  project: Pick<ProjectConfig, "harness" | "model" | "crew">,
   config?: GardenConfig,
 ): string | undefined {
-  return project.model ?? (config ? resolveProjectCrew(project, config)?.worker.model : undefined);
+  const crew = config ? resolveProjectCrew(project, config) : null;
+  const model = project.model ?? crew?.worker.model;
+  if (model) return model;
+  const harness = project.harness ?? crew?.worker.harness ?? DEFAULT_HARNESS;
+  return harness === "codex" ? DEFAULT_CODEX_MODEL : undefined;
 }
 
 // The crew name pairing a worker's CURRENT build member (its fixed harness +
