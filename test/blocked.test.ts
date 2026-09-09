@@ -78,6 +78,27 @@ describe("blockWorker", () => {
     expect(fs.existsSync(path.join(worktree, ".garden-awaiting-input"))).toBe(true);
   });
 
+  // The primary caller runs inside a worker's OS sandbox, which blocks the tmux
+  // server socket — the same wall that makes `garden handoff` use request-file
+  // IPC. A repaint that throws there must not cost the alert, or a worker ends
+  // up holding a sentinel nobody was told about: silently stuck, which is the
+  // exact failure this command exists to remove.
+  it("still records and alerts when the dashboard repaint is unreachable", async () => {
+    const { worktree } = seedWorker();
+    const { refreshDashboard } = await import("../src/dashboard/header.js");
+    vi.mocked(refreshDashboard).mockImplementationOnce(() => {
+      throw new Error("tmux: Operation not permitted");
+    });
+    const { blockWorker } = await import("../src/dashboard/workers.js");
+
+    const result = blockWorker("proj", "alpha", "Which product shape?");
+
+    expect(result.ok).toBe(true);
+    expect((await readEntry())?.blockedQuestion).toBe("Which product shape?");
+    expect(await readAlertMessages()).toHaveLength(1);
+    expect(fs.existsSync(path.join(worktree, ".garden-awaiting-input"))).toBe(true);
+  });
+
   it("rejects an empty question rather than flagging a row with nothing to answer", async () => {
     seedWorker();
     const { blockWorker } = await import("../src/dashboard/workers.js");

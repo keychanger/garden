@@ -139,8 +139,11 @@ A worker that has pushed what it can and needs an operator decision before it
 can go further runs `garden blocked "<question>"`, which stamps
 `WorkerEntry.blockedQuestion` and writes the `.garden-awaiting-input` sentinel.
 The row rises to the top blocked-on-you band with the question as its
-description and a yellow `?`, and an alert carries the question to an operator
-who is not watching the dashboard.
+description and the `⚑` icon `asking` uses, and an alert carries the question to
+an operator who is not watching the dashboard. Borrowing the icon is deliberate:
+it means the same thing to the operator, and the glyph it replaces on a worker
+blocked after a merge is `✓`, which argues with the row. The state cell is
+untouched and keeps reporting the state the poller acts on.
 
 This is deliberately **not** a display state or a `prState`. Blocked-on-the-
 operator is orthogonal to the lifecycle: a worker can be blocked while its

@@ -1393,7 +1393,6 @@ export function blockWorker(project: string, worker: string, question: string): 
   setAwaitingInput(entry.worktreePath);
   clearDoneSentinel(entry.worktreePath);
   updateWorkerFields(project, worker, { blockedQuestion: text });
-  refreshDashboard();
   log.info("workers", "worker blocked on operator", {
     worker,
     data: { project, question: text },
@@ -1409,6 +1408,23 @@ export function blockWorker(project: string, worker: string, question: string): 
     message: `${worker} is waiting on your decision: ${text}`,
     dedupKey: `blocked:${project}:${worker}`,
   });
+  // Last, and non-fatal. Ordering is load-bearing: the alert above is the whole
+  // point of the command — the surface that reaches an operator who is not
+  // watching — while this is a repaint they will get anyway on the next hook.
+  // And it is the one step that can genuinely fail here: the primary caller is a
+  // worker running inside an OS sandbox that blocks the tmux server socket (the
+  // same wall that makes `garden handoff` go through request-file IPC), so a
+  // throw at this line would leave a worker holding a sentinel with no alert and
+  // no log — silently stuck, which is precisely the failure this command exists
+  // to eliminate. A repaint the operator does not get is not worth that.
+  try {
+    refreshDashboard();
+  } catch (err) {
+    log.debug("workers", "blocked: dashboard refresh unavailable", {
+      worker,
+      data: { project, error: err instanceof Error ? err.message : String(err) },
+    });
+  }
   return {
     ok: true,
     message:

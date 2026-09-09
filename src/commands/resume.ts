@@ -36,7 +36,10 @@ export async function resume(args: string[]): Promise<void> {
   // for an answer they just said they were done giving.
   if (entry.blockedQuestion !== undefined) {
     updateWorkerFields(project, workerName, { blockedQuestion: undefined });
-    refreshDashboard();
+    // Non-fatal for the same reason as blockWorker's: the unblock has already
+    // landed in the registry, so a repaint that cannot reach tmux must not turn
+    // a successful resume into a reported failure.
+    try { refreshDashboard(); } catch { /* dashboard not reachable from here */ }
     cleared.push("blocked question");
   }
   if (cleared.length > 0) {

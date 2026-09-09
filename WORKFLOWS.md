@@ -2767,8 +2767,10 @@ Auto-continue skips a worker holding the sentinel (`autoContinueSkipReason`,
 `poller-merge.ts`); `onPromptSubmitted` clears it unconditionally (unlike
 `.garden-done`, a gated worker holds it while `prState` is still `working`),
 along with the recorded question.
-The status pane shows a yellow `?` on a worker holding it (`formatAwaitingInputGlyph`,
-`status.ts`), and the question in the row's detail column. Note the gate is milder than it looks: because the phase-1–3
+The status pane marks a worker holding it with the `⚑` icon and shows its question
+in the detail column; the older yellow `?` (`formatAwaitingInputGlyph`, `status.ts`)
+remains as the fallback for a worktree that holds the sentinel with no recorded
+question — one written by the previous bare `touch` and not yet refreshed. Note the gate is milder than it looks: because the phase-1–3
 artifacts are git-excluded, a designer's design turns produce no tracked commit,
 so `routeStopHookEnd` sees zero commits ahead and the worker simply idles — the
 sentinel is the operator-visible signal + a robustness backstop, not the primary

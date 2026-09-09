@@ -1493,14 +1493,39 @@ describe("blocked-on-operator row", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain("reworking the evening");
   });
 
-  // The glyph lives in the never-truncating flags, so a narrow pane still says
-  // "blocked" once the question text has been squeezed away.
-  it("flags the row from the registry field alone, with no sentinel on disk", async () => {
+  // The icon lives in the row core, which never truncates, so a narrow pane still
+  // says "blocked" once the question text has been squeezed away. It comes off
+  // the registry field, so a worker whose worktree (and sentinel) has gone
+  // missing still reads as blocked.
+  it("marks the row from the registry field alone, with no sentinel on disk", async () => {
     vi.mocked(getWorkers).mockReturnValue([{
       name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle",
       blockedQuestion: "Which shape?",
     }]);
-    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${YELLOW}?`);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain("\u2691");
+  });
+
+  // The ⚑, the top-band placement and the question text already say it; a
+  // trailing `?` would spend a column restating it.
+  it("drops the redundant trailing ? once a question is recorded", async () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle",
+      blockedQuestion: "Which shape?",
+    }]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain(`${YELLOW}?`);
+  });
+
+  it("wears the asking flag rather than the merge check", async () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", prState: "merged",
+      blockedQuestion: "Which shape?",
+    }]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).toContain("\u2691");        // ⚑ — you are the blocker
+    expect(line).not.toContain("\u2713");    // ✓ — would argue with the question
+    // The state cell still tells the truth about the lifecycle: the poller acts
+    // on `merged`, and the icon is an operator-attention signal, not a state.
+    expect(stripAnsi(line)).toContain("merged");
   });
 
   it("leaves an unblocked row untouched", async () => {

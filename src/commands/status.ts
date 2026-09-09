@@ -180,6 +180,15 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
 };
 
 function iconFor(worker: WorkerInfo): string {
+  // A worker stopped on an operator decision wears the same flag as the mid-turn
+  // `asking` state, because it means the same thing to the operator: you are the
+  // blocker. Only the icon is borrowed — the state cell still reports the real
+  // lifecycle state (`merged`, `idle`), which is what the poller will act on.
+  // Worth overriding because the glyph it replaces argues with the row: a worker
+  // blocked after a merge otherwise carries `✓`, and a green check beside an
+  // unanswered question is the same "looks finished" reading this whole exit
+  // exists to remove.
+  if (worker.blockedQuestion !== undefined) return STATUS_ICONS.asking;
   // A failing worker the operator has put back to work keeps everything that
   // says "broken" — the red row, the `failing` state cell — and swaps only its
   // icon for the spinner, so a row being worked on is distinguishable from one
@@ -1015,13 +1024,15 @@ function definedBases(workers: WorkerInfo[]): string[] {
 // present). A status-class flag folded into seg.flags so it never truncates —
 // "waiting on you", read at the end of the row like the gate/CI markers.
 function formatAwaitingInputGlyph(worker: WorkerInfo): string {
-  // Either source counts. The sentinel is the designer/plan gate's bare `touch`;
-  // blockedQuestion is `garden blocked`, which writes both — but the sentinel
-  // lives in the worktree and the field in the registry, so a worktree that has
-  // gone missing must not silently drop the flag off a row the operator is still
-  // being asked to answer.
-  return (worker.awaitingInput || worker.blockedQuestion !== undefined)
-    ? " \x1b[33m?\x1b[0m" : "";
+  // Fallback only. A recorded question already states this three ways — the ⚑
+  // icon, the top-band placement, and the question itself in the detail column —
+  // so repeating it here would spend a column saying nothing new. What this still
+  // covers is a worker holding the sentinel with no question on its entry: a
+  // worktree written by a bare `touch` (a designer worktree from before the gate
+  // moved to `garden blocked`, not yet refreshed). Without it that row would say
+  // nothing at all.
+  if (worker.blockedQuestion !== undefined) return "";
+  return worker.awaitingInput ? " \x1b[33m?\x1b[0m" : "";
 }
 
 // Dimmed pencil appended to a project's header row when its diary holds

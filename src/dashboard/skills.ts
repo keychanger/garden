@@ -161,8 +161,9 @@ and list the rest in your pane message.
 ## What it does
 
 - Records the question on your registry entry, which lifts your row to the top
-  **blocked-on-you** band of the status pane with the question as its description
-  and a yellow \`?\`.
+  **blocked-on-you** band of the status pane, marks it with the \`⚑\` flag the
+  operator reads as "you are the blocker", and shows the question as the row's
+  description.
 - Raises a warn-level operator alert carrying the question — the surface that
   reaches them when they are not looking at the dashboard.
 - Writes \`.garden-awaiting-input\`, which suppresses post-merge auto-continue, so
