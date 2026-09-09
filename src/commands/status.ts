@@ -248,10 +248,12 @@ function greyBadge(text: string): string {
   return `\x1b[90m${text}\x1b[0m`;
 }
 
-// The model tag in the identity cluster: the model the harness reports running
-// when it reports one, else the pin. When the two disagree the tag names both,
-// `<running> ≠ <pinned>` — knowing only that the pin was overruled does not tell
-// the operator what to restore it to.
+// The model tag in the identity cluster: the model the harness reports RUNNING
+// when it reports one, else the pin. It names ONE model, never the pin beside
+// it — the tag appears only when the model is not the project's, so its mere
+// presence already says "not what this project runs", and spelling out what
+// was asked for adds a second model to read for no decision it changes
+// (operator call, 2026-09-09).
 //
 // Stays grey in every case. A divergence is routine, not a fault: the operator
 // changes a worker's model often enough (`⌥i` -> model, `/model` in the pane)
@@ -269,10 +271,8 @@ function greyBadge(text: string): string {
 // (operator call, 2026-09-09). A claude-code project pinning no model has no
 // baseline — its workers run the account default, which garden cannot name —
 // so there only an explicit per-worker pin reads as an override. Codex's
-// Garden-owned launch default is a baseline. A divergence is never suppressed:
-// it is precisely what the row exists to say.
+// Garden-owned launch default is a baseline.
 function formatModelTag(model?: string, runningModel?: string, projectModel?: string): string {
-  if (model && runningModel && model !== runningModel) return greyBadge(`${runningModel} ≠ ${model}`);
   const shown = runningModel ?? model;
   if (!shown) return "";
   if (projectModel === undefined) return model ? greyBadge(shown) : "";

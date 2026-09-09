@@ -14,10 +14,10 @@
 //
 // The observation is stored beside the pin, never over it: replacing launch
 // intent would silence the row by adopting the accident, and the next bounce
-// would then relaunch on the drifted model deliberately. So the row
-// renders the observation in the pin's place, and names both as
-// `<running> ≠ <pinned>` when they disagree (status.ts) — while `⌥i` -> model
-// still restores the intent.
+// would then relaunch on the drifted model deliberately. So the row renders the
+// observation in the pin's place — one model, shown only when it is not the
+// model the project runs (status.ts) — while `⌥i` -> model still restores the
+// intent.
 import { resolveWorkerRunningModel } from "./harness/core.js";
 import { DEFAULT_CODEX_MODEL } from "./launch-plan.js";
 import { log } from "./log.js";

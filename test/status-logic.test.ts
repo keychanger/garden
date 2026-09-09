@@ -971,10 +971,12 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}opus${RESET}`);
   });
 
-  it("renders the OBSERVED model beside the pin when the harness moved off it", () => {
+  it("renders the OBSERVED model, not the pin, when the harness moved off it", () => {
     // codex 0.153.4 switched a live worker off `gpt-5.6-sol` seven seconds into
     // its boot. The row named the pin for the rest of the worker's life while
     // the worker's own pane said astra — this is the row that stops lying.
+    // It names what is RUNNING and stops there: the tag only appears when the
+    // model is not the project's, so it already reads as a departure.
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle",
         model: "gpt-5.6-sol", runningModel: "gpt-6-astra" },
@@ -982,7 +984,8 @@ describe("identity badges + grammar (Phase 3)", () => {
     const line = lineFor(renderQuickStatus(state), "bold-ash");
     // Grey, not a status color: the operator changes models deliberately often
     // enough that colouring this would mark routine work as a fault.
-    expect(line).toContain(`${GREY}gpt-6-astra ≠ gpt-5.6-sol${RESET}`);
+    expect(line).toContain(`${GREY}gpt-6-astra${RESET}`);
+    expect(line).not.toContain("gpt-5.6-sol");
     expect(line).not.toContain(YELLOW);
   });
 
@@ -1030,17 +1033,19 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}sonnet${RESET}`);
   });
 
-  it("never suppresses a divergence, even when the pin IS the project default", () => {
+  it("names the running model when the pin IS the project default", () => {
     // The case the tag exists for: garden launched `--model opus` and the
-    // harness ran something else. Suppressing it as "matches the project"
-    // would hide exactly the row that is lying.
+    // harness ran something else — verified on 2026-09-09, when four live
+    // workers launched `--model opus` were running Fable.
     vi.mocked(loadConfig).mockReturnValue({
       projects: { garden: { path: "/tmp/garden", model: "opus" } },
     });
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", model: "opus", runningModel: "fable" },
     ]);
-    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}fable ≠ opus${RESET}`);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).toContain(`${GREY}fable${RESET}`);
+    expect(line).not.toContain("opus");
   });
 
   it("uses Garden's Codex launch default as the project baseline", () => {
@@ -1058,7 +1063,7 @@ describe("identity badges + grammar (Phase 3)", () => {
         runningModel: "gpt-6-astra" },
     ]);
     expect(lineFor(renderQuickStatus(state), "bold-ash"))
-      .toContain(`${GREY}gpt-6-astra ≠ gpt-5.6-sol${RESET}`);
+      .toContain(`${GREY}gpt-6-astra${RESET}`);
   });
 
   it("rides the model AFTER the detail and does not dead-space a model-less sibling", () => {
