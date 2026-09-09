@@ -17,7 +17,7 @@ import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/w
 import { currentBranchFast, branchExistsOnOrigin } from "../dashboard/git.js";
 import { diaryHasContent } from "../diary.js";
 import { isAwaitingInput } from "../dashboard/continue.js";
-import { deriveCrew, workerMemberName, projectWorkerMemberName } from "../dashboard/crew.js";
+import { deriveCrew, workerMemberName, projectWorkerMemberName, projectWorkerModel } from "../dashboard/crew.js";
 import { unreadAlertCountsByProject } from "../dashboard/alerts.js";
 import { readIntakeStatus } from "../dashboard/intake-paths.js";
 import type { GardenConfig, ProjectConfig } from "../config.js";
@@ -213,6 +213,9 @@ interface RowRenderCtx {
   // unbound project's inferred harness pairing is not a crew: builtin crews
   // now carry model pins that do not apply implicitly.
   projectCrew: string;
+  // The model the project's own default worker resolves to (flat key, else the
+  // bound crew's builder seat). Undefined when it pins none — see formatModelTag.
+  projectModel?: string;
 }
 
 // The pieces of a worker row, assembled by collectSegments and laid out by
@@ -254,10 +257,23 @@ function greyBadge(text: string): string {
 // identity — what the worker runs — and grey is what identity wears, the same
 // way the base badge renders `→ <base>` quietly. The row telling the truth is
 // the whole point; making it shout was not (operator call, 2026-09-08).
-function formatModelTag(model?: string, runningModel?: string): string {
-  if (!runningModel) return model ? greyBadge(model) : "";
-  if (!model || model === runningModel) return greyBadge(runningModel);
-  return greyBadge(`${runningModel} ≠ ${model}`);
+//
+// Like every other badge in the cluster it is override-only — default is
+// invisible, override is grey — so a model that is simply what the project
+// runs is not named at all. That comparison was missing while the tag was the
+// pin alone, and once crews began stamping their builder seat onto every
+// spawned worker (`claude-codex` pins `opus`), every row on a crew-bound
+// project carried a tag that said nothing the project header did not
+// (operator call, 2026-09-09). A project pinning no model has no baseline —
+// its workers run the account default, which garden cannot name — so there
+// only an explicit per-worker pin reads as an override. A divergence is never
+// suppressed: it is precisely what the row exists to say.
+function formatModelTag(model?: string, runningModel?: string, projectModel?: string): string {
+  if (model && runningModel && model !== runningModel) return greyBadge(`${runningModel} ≠ ${model}`);
+  const shown = runningModel ?? model;
+  if (!shown) return "";
+  if (projectModel === undefined) return model ? greyBadge(shown) : "";
+  return shown === projectModel ? "" : greyBadge(shown);
 }
 
 // Below this many columns of detail budget, drop the badge cluster as a unit so
@@ -300,7 +316,7 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
     detail: holisticDetail ?? decor.detail ?? (worker.activity ?? ""),
     // The model is grey identity like the badges above; renderWorkerRow trails
     // the whole cluster after the detail (see there for why).
-    model: formatModelTag(worker.model, worker.runningModel),
+    model: formatModelTag(worker.model, worker.runningModel, ctx.projectModel),
     flags: `${formatAwaitingInputGlyph(worker)}${formatGateSuffix(worker.status, ctx.gateClosed)}`
       + `${formatReviewBlockedFlag(worker.status, worker.reviewBlocked)}${formatCiBracket(worker.ci)}`,
     status: worker.status,
@@ -487,6 +503,7 @@ export async function status(args: string[]): Promise<void> {
         projectMember: projectConfig ? projectWorkerMemberName(projectConfig, config) : "claude",
         projectProvider: projectConfig?.provider,
         projectCrew: projectConfig?.crew ?? "",
+        projectModel: projectConfig ? projectWorkerModel(projectConfig, config) : undefined,
       };
       const segments = project.workers.map(w => collectSegments(w, ctx));
       for (const seg of segments) {
@@ -1285,6 +1302,7 @@ export function renderQuickStatus(
         projectMember: projectConfig ? projectWorkerMemberName(projectConfig, config) : "claude",
         projectProvider: projectConfig?.provider,
         projectCrew: projectConfig?.crew ?? "",
+        projectModel: projectConfig ? projectWorkerModel(projectConfig, config) : undefined,
       };
       const segments = workers.map(w => collectSegments(w, ctx));
       for (const seg of segments) {

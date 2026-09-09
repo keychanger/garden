@@ -9,7 +9,7 @@
 // (test/integration/hook-bundle.real.test.ts) pins it. See the
 // hook-firehose history in CLAUDE.md.
 import crypto from "node:crypto";
-import { readConversation, resolveTranscriptPath } from "../conversation.js";
+import { readConversation, readLatestTranscriptModel, resolveTranscriptPath } from "../conversation.js";
 import type { WorkerEntry } from "../registry.js";
 import { shellEscape, pasteAndSubmit } from "../tmux.js";
 import type { AgentCommandOptions, HarnessCore, HeadlessCommandOptions } from "./types.js";
@@ -159,4 +159,34 @@ export const claudeCodeCore: HarnessCore = {
       ? readConversation(transcriptPath)
       : readConversation(transcriptPath, maxTurns);
   },
+
+  // Claude Code can run a session on a model other than the one `--model`
+  // asked for: on 2026-09-09 four live workers whose bootstrap read
+  // `claude --rc --model opus …` reported `claude-fable-5-1` from their very
+  // first assistant message, and one moved between the two mid-session. The
+  // pin was as unverified here as it was on Codex — this is the reader that
+  // checks it.
+  readRunningModel(entry: WorkerEntry): string | null {
+    const transcript = resolveTranscriptPath(entry);
+    if (!transcript) return null;
+    const observed = readLatestTranscriptModel(transcript);
+    const family = observed ? modelFamily(observed) : null;
+    // An id with no family (`<synthetic>`, a provider's own model id) is not
+    // evidence of anything. Null keeps the previous reading rather than
+    // asserting a drift that cannot be substantiated.
+    if (!family) return null;
+    const pin = entry.model ?? entry.trellis?.workerModel;
+    return pin && modelFamily(pin) === family ? pin : family;
+  },
 };
+
+// The vocabulary problem that kept this harness unchecked: garden pins an alias
+// (`opus`) and the transcript records the concrete id the backend answered with
+// (`claude-opus-5`), so comparing the two verbatim would report drift on every
+// healthy worker. The family token both spellings carry is the comparable part.
+const MODEL_FAMILIES = ["opus", "sonnet", "haiku", "fable"];
+
+function modelFamily(model: string): string | null {
+  const tokens = model.toLowerCase().split(/[^a-z0-9]+/);
+  return MODEL_FAMILIES.find(family => tokens.includes(family)) ?? null;
+}

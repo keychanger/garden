@@ -249,6 +249,19 @@ export function projectWorkerMemberName(
   return workerMemberName(project.harness ?? crewHarness, project.provider);
 }
 
+// The model a project's default worker resolves to — the baseline the row's
+// model tag is compared against, read through the same chain newWorker uses:
+// the flat key, then the bound crew's worker seat. Undefined means the project
+// pins nothing and the worker runs the account/harness default, which garden
+// cannot name: there is then no baseline to call an observation an override
+// against (see formatModelTag, status.ts).
+export function projectWorkerModel(
+  project: Pick<ProjectConfig, "model" | "crew">,
+  config?: GardenConfig,
+): string | undefined {
+  return project.model ?? (config ? resolveProjectCrew(project, config)?.worker.model : undefined);
+}
+
 // The crew name pairing a worker's CURRENT build member (its fixed harness +
 // provider) with a chosen REVIEW harness. Used by the worker menu to set a live
 // worker's reviewer via entry.crew without disturbing its build half: the

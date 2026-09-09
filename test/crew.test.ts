@@ -22,7 +22,7 @@ vi.mock("../src/config.js", async (orig) => {
 vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 
 const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew,
-  workerMemberName, projectWorkerMemberName, builtinCrews, storedCrews,
+  workerMemberName, projectWorkerMemberName, projectWorkerModel, builtinCrews, storedCrews,
   resolveProjectCrew, crewOverridden, clearCrew, saveCrew, deleteCrew,
   isBuiltinCrew, validateCrewDef, formatRecipe, designerSeat } =
   await import("../src/dashboard/crew.js");
@@ -110,6 +110,19 @@ describe("worker member name (status-pane identity badge source)", () => {
     expect(projectWorkerMemberName({ path: "/p", crew: "codex-claude", harness: "claude-code" }, c)).toBe("claude");
     // A dangling binding is inert, not a crash.
     expect(projectWorkerMemberName({ path: "/p", crew: "gone" }, c)).toBe("claude");
+  });
+
+  it("reports the project's default worker MODEL through the same chain", () => {
+    // The baseline the row's model tag is compared against. A crew-bound
+    // project pins its builder seat on every worker it spawns, so without the
+    // crew layer here every one of those rows would badge its own default.
+    const c = cfg();
+    expect(projectWorkerModel({ path: "/p" }, c)).toBeUndefined();
+    expect(projectWorkerModel({ path: "/p", crew: "all-claude" }, c)).toBe("opus");
+    // The flat key is the override layer and still wins over the crew.
+    expect(projectWorkerModel({ path: "/p", crew: "all-claude", model: "sonnet" }, c)).toBe("sonnet");
+    // A dangling binding leaves no baseline, rather than crashing.
+    expect(projectWorkerModel({ path: "/p", crew: "gone" }, c)).toBeUndefined();
   });
 });
 

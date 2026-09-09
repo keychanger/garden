@@ -997,13 +997,50 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toBe(before);
   });
 
-  it("shows an unpinned worker's observed model as plain grey identity", () => {
-    // Nothing to diverge from: the worker was launched on the harness default,
-    // which is what it is running.
+  it("says nothing about an unpinned worker's model on a project that pins none", () => {
+    // No pin and no project default: the worker runs the account default,
+    // which garden cannot name, so there is no override to report.
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", runningModel: "gpt-6-astra" },
     ]);
-    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}gpt-6-astra${RESET}`);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain(GREY);
+  });
+
+  it("drops the model tag when the worker runs what the project runs", () => {
+    // Every crew stamps its builder seat onto every worker it spawns
+    // (claude-codex pins opus), so without this comparison every row on a
+    // crew-bound project carried a tag that repeated the project's own default
+    // (operator call, 2026-09-09).
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { garden: { path: "/tmp/garden", model: "opus" } },
+    });
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", model: "opus", runningModel: "opus" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain(GREY);
+  });
+
+  it("keeps the tag on a worker whose model overrides the project default", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { garden: { path: "/tmp/garden", model: "opus" } },
+    });
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", model: "sonnet" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}sonnet${RESET}`);
+  });
+
+  it("never suppresses a divergence, even when the pin IS the project default", () => {
+    // The case the tag exists for: garden launched `--model opus` and the
+    // harness ran something else. Suppressing it as "matches the project"
+    // would hide exactly the row that is lying.
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { garden: { path: "/tmp/garden", model: "opus" } },
+    });
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", model: "opus", runningModel: "fable" },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}fable ≠ opus${RESET}`);
   });
 
   it("rides the model AFTER the detail and does not dead-space a model-less sibling", () => {

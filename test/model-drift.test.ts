@@ -68,6 +68,18 @@ function rollout(name: string, models: string[], padBytes = 0): string {
   return file;
 }
 
+// A Claude Code transcript whose assistant messages ran `models` in order.
+function transcript(name: string, models: string[]): string {
+  const file = path.join(dir, `${name}-claude.jsonl`);
+  const lines = models.map(model => JSON.stringify({
+    type: "assistant",
+    timestamp: "2026-09-09T17:54:03.804Z",
+    message: { model, content: [] },
+  }));
+  fs.writeFileSync(file, lines.join("\n") + "\n");
+  return file;
+}
+
 function worker(fields: Partial<WorkerEntry>): WorkerEntry {
   return {
     name: "cool-swift-hill",
@@ -252,14 +264,56 @@ describe("sweepWorkerModels", () => {
     expect(workers.wolf[0].runningModel).toBeUndefined();
   });
 
-  it("leaves a claude-code worker alone — its pin is an alias its transcript never echoes", () => {
+  it("answers a claude-code pin in its own vocabulary when the transcript agrees", () => {
+    // The alias (`opus`) and the id the backend answers with (`claude-opus-5`)
+    // are the same model; a verbatim compare would call every healthy claude
+    // worker drifted, which is why this harness went unchecked.
     workers.garden = [worker({
       harness: "claude-code",
       model: "opus",
-      transcriptPath: rollout("claude", ["gpt-6-astra"]),
+      transcriptPath: transcript("agree", ["claude-opus-5"]),
+    })];
+
+    expect(sweepWorkerModels({ workers } as never)).toBe(1);
+    expect(workers.garden[0].runningModel).toBe("opus");
+    expect(hasModelDrift(workers.garden[0])).toBe(false);
+  });
+
+  it("catches a claude-code worker running a different family than its pin", () => {
+    // 2026-09-09: four live workers launched `claude --rc --model opus` whose
+    // transcripts report claude-fable-5-1 from their first assistant message.
+    workers.garden = [worker({
+      harness: "claude-code",
+      model: "opus",
+      transcriptPath: transcript("drift", ["claude-opus-5", "claude-fable-5-1"]),
+    })];
+
+    expect(sweepWorkerModels({ workers } as never)).toBe(1);
+    expect(workers.garden[0].runningModel).toBe("fable");
+    expect(hasModelDrift(workers.garden[0])).toBe(true);
+  });
+
+  it("ignores a claude-code model id it cannot place in a family", () => {
+    // `<synthetic>` (and a provider's own id) is not evidence of anything: the
+    // previous reading stands rather than a drift nobody can substantiate.
+    workers.garden = [worker({
+      harness: "claude-code",
+      model: "opus",
+      transcriptPath: transcript("synthetic", ["<synthetic>"]),
     })];
 
     expect(sweepWorkerModels({ workers } as never)).toBe(0);
     expect(workers.garden[0].runningModel).toBeUndefined();
+  });
+
+  it("records an unpinned claude-code worker's family with nothing to drift from", () => {
+    workers.garden = [worker({
+      harness: "claude-code",
+      transcriptPath: transcript("unpinned", ["claude-fable-5-1"]),
+    })];
+
+    expect(sweepWorkerModels({ workers } as never)).toBe(1);
+    expect(workers.garden[0].runningModel).toBe("fable");
+    expect(hasModelDrift(workers.garden[0])).toBe(false);
   });
 });

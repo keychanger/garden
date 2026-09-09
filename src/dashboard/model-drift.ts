@@ -14,8 +14,9 @@
 // The observation is stored beside the pin, never over it: overwriting
 // `entry.model` would silence the row by adopting the accident, and the next
 // bounce would then relaunch on the drifted model deliberately. So the row
-// renders the observation and colors it when the two disagree (status.ts), and
-// `⌥i` -> model still restores the intent.
+// renders the observation in the pin's place, and names both as
+// `<running> ≠ <pinned>` when they disagree (status.ts) — while `⌥i` -> model
+// still restores the intent.
 import { resolveWorkerRunningModel } from "./harness/core.js";
 import { log } from "./log.js";
 import { updateWorkerFieldsIf, type WorkerEntry, type WorkerRegistry } from "./registry.js";
@@ -41,10 +42,11 @@ export function hasModelDrift(entry: WorkerEntry): boolean {
 // worker with no registry write at all.
 //
 // Harness-gated rather than status-gated: resolveWorkerRunningModel answers null
-// for any harness that cannot read its model back (every harness but Codex
-// today), so a fleet with no such worker pays one map lookup each. Workers whose
-// pane is gone are skipped — their reading can no longer move, and a dead
-// worker's rollout is history the operator cannot act on.
+// for any harness that cannot read its model back, so a fleet with no such
+// worker pays one map lookup each. Both registered harnesses read theirs today,
+// each from a bounded tail of its own transcript. Workers whose pane is gone are
+// skipped — their reading can no longer move, and a dead worker's rollout is
+// history the operator cannot act on.
 export function sweepWorkerModels(registry: WorkerRegistry): number {
   let moved = 0;
   for (const [project, entries] of Object.entries(registry.workers)) {
