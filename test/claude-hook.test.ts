@@ -450,9 +450,16 @@ describe("handleClaudeHook — core events", () => {
     });
     setCwd("garden", "bold-ash");
     const fs = (await import("node:fs")).default;
+    // A refused unlink means the sentinel SURVIVES, which is the whole reason the
+    // flag must stay: auto-continue still reads it and still skips. The surviving
+    // file is the load-bearing half of the scenario, so the mock has to report it
+    // — a throw alone describes a world where the gate quietly vanished.
     vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
       throw Object.assign(new Error("denied"), { code: "EACCES" });
     });
+    vi.mocked(fs.existsSync).mockImplementation(
+      (p: fs.PathLike) => String(p).endsWith(".garden-awaiting-input"),
+    );
 
     handleClaudeHook("prompt");
 
@@ -460,6 +467,28 @@ describe("handleClaudeHook — core events", () => {
     expect(entry.blockedQuestion).toBe("Commit binary ledgers?");
     expect(entry.blockedAt).toBe(123);
     expect(entry.agentStatus).toBe("working");
+  });
+
+  // validate.ts clears entry.worktreePath when the worktree goes missing, and a
+  // blocked worker can outlive its worktree. With no path there is no sentinel to
+  // hold the gate — isAwaitingInput returns false, so auto-continue is NOT being
+  // skipped — yet the row would keep claiming a block. Nothing could clear it:
+  // `garden resume` refuses a worker with no worktreePath, so the operator's only
+  // escape was deleting the worker.
+  it("clears a block on a worker whose worktree is gone, where no gate is held", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      prState: "merged",
+      blockedQuestion: "Commit binary ledgers?",
+      blockedAt: 123,
+    });
+    setCwd("garden", "bold-ash");
+
+    handleClaudeHook("prompt");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.blockedQuestion).toBeUndefined();
+    expect(entry.blockedAt).toBeUndefined();
   });
 
   it("stop sets idle from any prior state", () => {

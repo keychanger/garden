@@ -17,7 +17,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { tryGetProject } from "../../config.js";
 import { addAlert, readAlerts } from "../alerts.js";
-import { clearAwaitingInput, clearDoneSentinel, isDoneSet } from "../continue.js";
+import { clearAwaitingInput, clearDoneSentinel, isAwaitingInput, isDoneSet } from "../continue.js";
 import { getWorkerBaseBranch } from "../git.js";
 import { findWorkerPaneId, refreshDashboard } from "../header.js";
 import { log } from "../log.js";
@@ -413,13 +413,21 @@ const onPromptSubmitted: HookMethod = (ctx) => {
   // input (designer, or any worker using `garden blocked`) holds it while prState is still
   // `working`, so unlike the done-sentinel its clear is not gated on a terminal
   // prState. The operator's prompt is the resume signal.
-  const awaitingInputCleared = clearAwaitingInput(ctx.workerInfo.entry.worktreePath);
+  clearAwaitingInput(ctx.workerInfo.entry.worktreePath);
   // The prompt is the answer the worker was blocked on, so the question stops
-  // being true here — same signal, one field. Keep it visible if the sentinel
-  // could not be removed, or the row would claim the gate cleared while the
-  // next auto-continue still skips it.
+  // being true here — same signal, one field. Gated on the gate no longer being
+  // held, so the row cannot claim it cleared while the next auto-continue still
+  // skips. The predicate is `isAwaitingInput`, the SAME one autoContinueSkipReason
+  // reads, rather than whether the unlink succeeded — those differ for a worker
+  // with no worktreePath, which validate.ts clears when a worktree goes missing.
+  // There is no sentinel to hold the gate then, so nothing is being skipped; but
+  // an unlink that reports failure would pin the flag on forever, and `garden
+  // resume` refuses a pathless worker, leaving the operator no way to clear a row
+  // that is asking them for an answer they already gave. Sharing one predicate
+  // with the consumer makes that class of disagreement unrepresentable.
   if ((ctx.workerInfo.entry.blockedQuestion !== undefined
-      || ctx.workerInfo.entry.blockedAt !== undefined) && awaitingInputCleared) {
+      || ctx.workerInfo.entry.blockedAt !== undefined)
+      && !isAwaitingInput(ctx.workerInfo.entry.worktreePath)) {
     fields.blockedQuestion = undefined;
     fields.blockedAt = undefined;
   }
