@@ -119,7 +119,6 @@ export function buildSettingsJson(hookRunner: string, sandbox: SandboxConfig, st
     sandbox,
     statusLine: { type: "command", command: statusLineCmd },
     permissions: {
-      defaultMode: "auto",
       // Every subcommand of a compound bash call must match a rule, so tmux chains like `tmux ... | head` still prompt without tail-utility allowances.
       allow: [
         "Bash(tmux:*)",

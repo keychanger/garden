@@ -310,13 +310,12 @@ describe("claude-code adapter installRuntimeConfig", () => {
     expect(script).toContain("remaining_percentage");
   });
 
-  it("sets permissions.defaultMode to auto and pre-allows tmux plus read-only tail utilities so compound tmux chains don't escalate", () => {
+  it("pre-allows tmux plus read-only tail utilities so compound tmux chains don't escalate, and leaves defaultMode to the launch flag", () => {
     process.argv[1] = "/usr/local/bin/garden";
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
     const parsed = JSON.parse(written);
     expect(parsed.permissions).toEqual({
-      defaultMode: "auto",
       allow: [
         "Bash(tmux:*)",
         "Bash(echo:*)",
@@ -830,7 +829,7 @@ describe("buildWorktreeBootstrapScript", () => {
       c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
     );
     expect(call).toBeDefined();
-    expect(call![1] as string).toContain("claude --rc --session-id session-123");
+    expect(call![1] as string).toContain("claude --rc --permission-mode auto --session-id session-123");
   });
 
   // The launch env and the sandbox egress allowlist must name the SAME backend.

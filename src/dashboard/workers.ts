@@ -1145,7 +1145,7 @@ export function stopWorkerByName(projectName: string, workerName: string): void 
 // Kill and restart the Claude process in a worker's pane via `claude --resume`.
 // The pane, pane ID, worktree, and registry entry all stay put; only the Claude
 // process is replaced, which forces a fresh read of .claude/settings.json
-// (hook config, permissions.defaultMode) and drops any transient session state
+// (hook config, permission allowlist) and drops any transient session state
 // that's interrupting the operator (e.g., stuck in plan mode with no cycle back
 // to auto). Works on both visible and parked workers — we resolve the pane by
 // the worker's tracked window name, not the currently-active pane.

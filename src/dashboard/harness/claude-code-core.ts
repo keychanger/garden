@@ -94,6 +94,11 @@ export const claudeCodeCore: HarnessCore = {
 
   // `--rc` surfaces the session in the Claude app's remote sessions;
   // `--append-system-prompt-file` delivers the composed garden rules.
+  // `--permission-mode auto` must be a flag: Claude Code ignores `auto` as a
+  // project-settings `defaultMode` and falls back to the plan's built-in
+  // default, which is auto on Pro/Max/Team but manual on Enterprise — so a
+  // worker on an Enterprise `claudeProfile` started in manual mode (verified
+  // 2.1.267).
   // Byte-parity with the pre-adapter inline commands relies on sessionId
   // staying inside shellEscape's unquoted charset (UUIDs do) — a session
   // id outside it would render quoted where the legacy path was raw.
@@ -116,7 +121,7 @@ export const claudeCodeCore: HarnessCore = {
     const sessionFlag = opts.resume
       ? `--resume ${shellEscape(opts.sessionId)}`
       : `--session-id ${shellEscape(opts.sessionId)}`;
-    return `${plan.envPrefix}claude --rc${modelFlag}${effortFlag}${ultracodeFlags} ${sessionFlag} `
+    return `${plan.envPrefix}claude --rc --permission-mode auto${modelFlag}${effortFlag}${ultracodeFlags} ${sessionFlag} `
       + `--append-system-prompt-file ${shellEscape(opts.contextFile)}`;
   },
 
@@ -128,8 +133,7 @@ export const claudeCodeCore: HarnessCore = {
     // `--effort` is a top-level claude flag, so it composes with `-p` exactly
     // as it does with the interactive launch (verified against 2.1.215).
     const effortFlag = plan.effort ? ` --effort ${shellEscape(plan.effort)}` : "";
-    // `--permission-mode acceptEdits` is load-bearing: the worktree's
-    // .claude/settings.json sets `defaultMode: auto`, but auto mode never
+    // `--permission-mode acceptEdits` is load-bearing: auto mode never
     // engages under `-p` (verified 2.1.251 — no auto_mode attachment in any
     // headless transcript), so every Edit/Write falls to a permission prompt
     // that a headless session has nobody to answer and is rejected. Reviewers

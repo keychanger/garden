@@ -95,7 +95,7 @@ describe("worker bootstrap (real fs + real git)", () => {
     expect(postCmd).toMatch(/posttooluse$/);
   });
 
-  it("settings.json has permissions.defaultMode auto and the documented allowlist", async () => {
+  it("settings.json has the documented allowlist and no project-level defaultMode", async () => {
     const { createWorktree } = await import("../../src/dashboard/git.js");
     const { claudeCodeAdapter } = await import("../../src/dashboard/harness/claude-code.js");
 
@@ -104,7 +104,7 @@ describe("worker bootstrap (real fs + real git)", () => {
 
     const settings = JSON.parse(fs.readFileSync(
       path.join(worktreePath, ".claude", "settings.json"), "utf-8"));
-    expect(settings.permissions.defaultMode).toBe("auto");
+    expect(settings.permissions.defaultMode).toBeUndefined();
     expect(settings.permissions.allow).toContain("Bash(tmux:*)");
     expect(settings.permissions.allow).toContain("Bash(echo:*)");
     expect(settings.permissions.allow).toContain("Bash(head:*)");

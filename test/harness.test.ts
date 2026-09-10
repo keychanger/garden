@@ -154,7 +154,7 @@ describe("claude-code adapter dialect", () => {
       launchPlan: workerPlan("claude-code", { envPrefix: "CLAUDE_CONFIG_DIR=/p " }),
     });
     expect(cmd).toBe(
-      "CLAUDE_CONFIG_DIR=/p claude --rc --session-id abc-123 --append-system-prompt-file /tmp/ctx.md",
+      "CLAUDE_CONFIG_DIR=/p claude --rc --permission-mode auto --session-id abc-123 --append-system-prompt-file /tmp/ctx.md",
     );
   });
 
@@ -165,7 +165,7 @@ describe("claude-code adapter dialect", () => {
       launchPlan: workerPlan("claude-code", { model: "deepseek-v4-pro" }),
     });
     expect(cmd).toBe(
-      "claude --rc --model deepseek-v4-pro --resume abc-123 --append-system-prompt-file /tmp/ctx.md",
+      "claude --rc --permission-mode auto --model deepseek-v4-pro --resume abc-123 --append-system-prompt-file /tmp/ctx.md",
     );
   });
 
@@ -176,7 +176,7 @@ describe("claude-code adapter dialect", () => {
       launchPlan: workerPlan("claude-code", { model: "opus[1m]", ultracode: true }),
     });
     expect(cmd).toBe(
-      "claude --rc --model 'opus[1m]' --effort max "
+      "claude --rc --permission-mode auto --model 'opus[1m]' --effort max "
       + "--settings '{\"ultracodeKeywordTrigger\":\"on\"}' "
       + "--session-id abc-123 --append-system-prompt-file /tmp/ctx.md",
     );
@@ -199,7 +199,7 @@ describe("claude-code adapter dialect", () => {
       launchPlan: workerPlan("claude-code", { model: "sonnet", effort: "xhigh" }),
     });
     expect(cmd).toBe(
-      "claude --rc --model sonnet --effort xhigh "
+      "claude --rc --permission-mode auto --model sonnet --effort xhigh "
       + "--session-id abc-123 --append-system-prompt-file /tmp/ctx.md",
     );
   });
