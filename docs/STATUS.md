@@ -138,23 +138,37 @@ releases it back to `idle` (the "never mind" path) without sending a prompt.
 A worker that has pushed what it can and needs an operator decision before it
 can go further runs `garden blocked "<question>"`, which stamps
 `WorkerEntry.blockedQuestion` and writes the `.garden-awaiting-input` sentinel.
-The row rises to the top blocked-on-you band with the question as its
-description and the `⚑` icon `asking` uses, and an alert carries the question to
-an operator who is not watching the dashboard. Borrowing the icon is deliberate:
-it means the same thing to the operator, and the glyph it replaces on a worker
-blocked after a merge is `✓`, which argues with the row. The state cell is
-untouched and keeps reporting the state the poller acts on.
+`resolveWorkerStatus` then reports that worker as **`asking`** — the state garden
+already uses for "the agent needs you" — so it inherits that display treatment
+whole: the bold yellow row, the `⚑` icon, the top blocked-on-you band with the
+question as the row's description, the plot strip's yellow flag, and `whoami`.
+One derivation rather than parallel special cases. It outranks the lifecycle
+states, which describe where the worker's *code* is rather than what it needs
+from a person; `failing` is the exception, because red means something is broken
+and that outranks a question. No alert is raised: the alerts pane is for faults,
+and the plot strip is what makes a waiting question visible to an operator who is
+away from the row.
 
-This is deliberately **not** a display state or a `prState`. Blocked-on-the-
-operator is orthogonal to the lifecycle: a worker can be blocked while its
-branch is `merged`, or with no `prState` at all, and its `agentStatus` is
-whatever it was when the turn ended (`idle`). Making it a state would mean edges
-from and to nearly every other one; making it a field means the row can report
-"waiting on you" over any state the worker is actually in. The mid-turn `asking`
-state remains distinct, and remains a real state: `asking` is Claude blocked
-*inside* a turn on a permission prompt or plan question, detected by a hook,
-where blocked-on-the-operator is a worker that finished its turn cleanly and
-recorded that it cannot start the next one.
+This is a **display derivation only**, exactly like `isDelegating` → `working`
+above: `agentStatus` and `prState` are untouched in the registry, so review/merge
+gating and the poller keep seeing the real state (a blocked worker parked at
+`merged` still merges, still gates, still sorts by its real lifecycle where that
+matters). The state cell's elapsed counts from `blockedAt` rather than
+`lastStateChangeAt`, which a merge landing after the block would bump — restarting
+the counter at `asking 0m` for a question the operator has been sitting on for
+hours.
+
+It is deliberately **not** a `prState`. Blocked-on-the-operator is orthogonal to
+the lifecycle: a worker can be blocked while its branch is `merged`, or with no
+`prState` at all, and its `agentStatus` is whatever it was when the turn ended
+(`idle`). Making it a state would mean edges from and to nearly every other one;
+making it a field lets the row report "waiting on you" over any state the worker
+is actually in. `asking` is where the two meet, but only at the display layer:
+the stored `asking` agentStatus remains a distinct, real thing — Claude blocked
+*inside* a turn on a permission prompt or plan question, detected by a hook —
+while this is a worker that finished its turn cleanly and recorded that it cannot
+start the next one. They render identically because to the operator they mean the
+same thing; they stay separate everywhere a machine reads them.
 
 It clears where every other operator-input signal clears — `UserPromptSubmit`,
 which drops the question and the sentinel together, because the prompt is the

@@ -160,12 +160,14 @@ and list the rest in your pane message.
 
 ## What it does
 
-- Records the question on your registry entry, which lifts your row to the top
-  **blocked-on-you** band of the status pane, marks it with the \`⚑\` flag the
-  operator reads as "you are the blocker", and shows the question as the row's
-  description.
-- Raises a warn-level operator alert carrying the question — the surface that
-  reaches them when they are not looking at the dashboard.
+- Records the question on your registry entry, which makes your row display as
+  **asking** — garden's existing "the agent needs you" state. Your row turns bold
+  yellow, takes the \`⚑\` flag, rises to the top **blocked-on-you** band, and shows
+  your question as its description.
+- Flags the whole **plot** yellow in the top bar, so the operator sees a question
+  is waiting from anywhere in the dashboard without opening your pane.
+- Raises no alert. The alerts pane is for faults; you are asking a question, not
+  reporting a breakage.
 - Writes \`.garden-awaiting-input\`, which suppresses post-merge auto-continue, so
   garden will not prompt you to continue work you cannot continue.
 - Removes \`.garden-done\` if it is there, so you can never be read as finished

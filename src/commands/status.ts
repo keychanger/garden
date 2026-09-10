@@ -63,6 +63,13 @@ interface WorkerInfo {
   // The asking-style icon carries the same fact into the never-truncating row
   // core, so a narrow pane still says "blocked" when the text is gone.
   blockedQuestion?: string;
+  // Start of the current blocked episode (entry.blockedAt). Sources the state
+  // cell's elapsed suffix, so `asking 2h` counts from when the worker actually
+  // asked. lastStateChangeAt cannot: a worker that blocks and then has its branch
+  // merged half an hour later gets that field bumped by the merge, so the row
+  // would restart at `asking 0m` for a question the operator has been sitting on
+  // the whole time — under-reporting exactly the number that should be growing.
+  blockedAt?: number;
   // True when the row's state comes from prState `failing` but the agent is
   // mid-turn (agentStatus `working`) — the operator prompted the failed worker
   // and it is working the problem. The row stays red and still reads `failing`;
@@ -182,15 +189,6 @@ const STATUS_ICONS: Record<WorkerStatus, string> = {
 };
 
 function iconFor(worker: WorkerInfo): string {
-  // A worker stopped on an operator decision wears the same flag as the mid-turn
-  // `asking` state, because it means the same thing to the operator: you are the
-  // blocker. Only the icon is borrowed — the state cell still reports the real
-  // lifecycle state (`merged`, `idle`), which is what the poller will act on.
-  // Worth overriding because the glyph it replaces argues with the row: a worker
-  // blocked after a merge otherwise carries `✓`, and a green check beside an
-  // unanswered question is the same "looks finished" reading this whole exit
-  // exists to remove.
-  if (worker.blockedQuestion !== undefined) return STATUS_ICONS.asking;
   // A failing worker the operator has put back to work keeps everything that
   // says "broken" — the red row, the `failing` state cell — and swaps only its
   // icon for the spinner, so a row being worked on is distinguishable from one
@@ -554,7 +552,10 @@ function formatStatus(worker: WorkerInfo): string {
 // computeStatusWidth (which measures it) so the measured width and the rendered
 // text can never drift.
 function stateCell(worker: WorkerInfo, now: number): string {
-  return `${formatStatus(worker)}${formatDelegatingSuffix(worker)}${formatTimeInState(worker.status, worker.lastStateChangeAt, now)}`;
+  // blockedAt is set only on a blocked worker, so this needs no branch: a real
+  // mid-turn `asking` has none and keeps its hook-stamped lastStateChangeAt.
+  const since = worker.blockedAt ?? worker.lastStateChangeAt;
+  return `${formatStatus(worker)}${formatDelegatingSuffix(worker)}${formatTimeInState(worker.status, since, now)}`;
 }
 
 // Dim `bg` tag on a row whose `working` is derived from live subagent activity
@@ -716,10 +717,30 @@ function padEndVisible(s: string, width: number): string {
 // merge finalization detects that the worker is already mid-turn; this function
 // never mutates state.
 export function resolveWorkerStatus(
-  entry: { agentStatus?: string; prState?: string; subagentActivityAt?: number; lastStateChangeAt?: number } | undefined,
+  entry: {
+    agentStatus?: string; prState?: string; subagentActivityAt?: number;
+    lastStateChangeAt?: number; blockedQuestion?: string;
+  } | undefined,
   now: number = Date.now(),
 ): WorkerStatus {
   const pr = entry?.prState;
+  // A worker stopped on an operator decision (`garden blocked`) displays as
+  // `asking`, the state garden already uses for "the agent needs you". It is the
+  // same fact, so it earns the same treatment everywhere at once — the bold
+  // yellow row, the ⚑ icon, the plot strip's yellow flag, `whoami` — instead of
+  // three parallel special cases drifting apart. It outranks the lifecycle states
+  // because those describe where the worker's CODE is (`merged` is explicitly a
+  // transient beat, not an operator signal) while this describes what the worker
+  // needs from a person. `failing` is the exception: red means something is
+  // broken, which is more urgent than a question.
+  //
+  // Display derivation ONLY, exactly like the isDelegating branch below:
+  // agentStatus and prState are untouched in the registry, so review/merge gating
+  // and the poller keep seeing the real state. The two are distinguishable where
+  // it matters — a true `asking` is an agent blocked mid-turn (hook-detected),
+  // this is a worker that ended its turn and recorded that it cannot start the
+  // next one.
+  if (pr !== "failing" && entry?.blockedQuestion !== undefined) return "asking";
   if (pr === "reviewing" || pr === "merge-pending" || pr === "resolving" || pr === "ci-fixing" || pr === "failing" || pr === "merged" || pr === "done") {
     return pr;
   }
@@ -1193,6 +1214,7 @@ function collectWorkers(
       blockedQuestion: entry?.blockedQuestion === undefined
         ? undefined
         : stripControlSequences(entry.blockedQuestion).replace(/\s+/g, " ").trim(),
+      blockedAt: entry?.blockedAt,
       failingBusy: isFailingBusy(entry),
       delegating: isDelegating(entry),
       failCount: entry?.failCount ?? 0,
@@ -1227,6 +1249,7 @@ function collectWorkers(
       blockedQuestion: entry?.blockedQuestion === undefined
         ? undefined
         : stripControlSequences(entry.blockedQuestion).replace(/\s+/g, " ").trim(),
+      blockedAt: entry?.blockedAt,
       failingBusy: isFailingBusy(entry),
       delegating: isDelegating(entry),
       failCount: entry?.failCount ?? 0,

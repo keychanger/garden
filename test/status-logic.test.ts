@@ -1530,17 +1530,46 @@ describe("blocked-on-operator row", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain(`${YELLOW}?`);
   });
 
-  it("wears the asking flag rather than the merge check", async () => {
+  // A blocked worker gets garden's existing "the agent needs you" treatment
+  // wholesale — the `asking` display state — rather than a parallel set of
+  // special cases: bold yellow row, ⚑ icon, and (see plot-status) a yellow plot
+  // flag, all from one derivation.
+  it("displays as asking, in bold yellow, with the flag rather than the merge check", async () => {
     vi.mocked(getWorkers).mockReturnValue([{
       name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", prState: "merged",
       blockedQuestion: "Which shape?",
     }]);
     const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(stripAnsi(line)).toContain("asking");
+    expect(line).toContain("\x1b[1;33m");    // bold yellow — the asking row color
     expect(line).toContain("\u2691");        // ⚑ — you are the blocker
     expect(line).not.toContain("\u2713");    // ✓ — would argue with the question
-    // The state cell still tells the truth about the lifecycle: the poller acts
-    // on `merged`, and the icon is an operator-attention signal, not a state.
-    expect(stripAnsi(line)).toContain("merged");
+  });
+
+  // Red outranks yellow: something broken is more urgent than a question, and a
+  // failing row must not be recolored into looking merely inquisitive.
+  it("leaves a failing worker red even when it recorded a question", async () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", prState: "failing",
+      blockedQuestion: "Which shape?",
+    }]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(stripAnsi(line)).toContain("failing");
+    expect(line).toContain("\x1b[1;31m");
+  });
+
+  // lastStateChangeAt is bumped by a merge that lands after the block, which
+  // would restart the counter at 0m for a question the operator has been sitting
+  // on the whole time. blockedAt is when they were actually asked.
+  it("counts the elapsed from when the worker asked, not its last lifecycle move", async () => {
+    const now = Date.now();
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", prState: "merged",
+      blockedQuestion: "Which shape?",
+      blockedAt: now - 2 * 60 * 60 * 1000,
+      lastStateChangeAt: now - 60 * 1000,
+    }]);
+    expect(stripAnsi(lineFor(renderQuickStatus(state), "bold-ash"))).toContain("asking 2h");
   });
 
   it("leaves an unblocked row untouched", async () => {

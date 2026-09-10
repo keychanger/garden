@@ -177,7 +177,7 @@ Dashboard:
   hold <worker>                  Interrupt a working worker and mark it 'paused' (sends Escape; ⌥e in the dashboard toggles this on the focused worker; the next prompt resumes it)
   pause <worker>                 Suppress post-merge auto-continue (writes the .garden-done sentinel; a worker UserPromptSubmit also clears it, so prompting an explicitly-paused worker is itself an unpause)
   resume <worker>                Re-arm post-merge auto-continue (clears done/blocked sentinels and any blocked question)
-  blocked "<question>" [-w <worker>]  Park a worker as blocked on your decision: flags the row, suppresses auto-continue, alerts you (workers self-resolve via $GARDEN_WORKER; your next prompt clears it)
+  blocked "<question>" [-w <worker>]  Park a worker as blocked on your decision: its row and plot show 'asking' in yellow with the question, and auto-continue is suppressed (workers self-resolve via $GARDEN_WORKER; your next prompt clears it)
   resurrect                      List killed workers rebuildable from their tombstones (newest first)
   resurrect <worker>             Rebuild a killed worker: worktree at its original path, entry restored, session resumed
   resurrect --search <expr>      Narrow the list by name/task/branch and transcript content ("what it did")

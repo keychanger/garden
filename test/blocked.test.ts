@@ -50,7 +50,7 @@ async function readAlertMessages(): Promise<string[]> {
 describe("blockWorker", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("writes the human-gate sentinel, stamps the question, and alerts the operator", async () => {
+  it("writes the human-gate sentinel and stamps the question", async () => {
     const { worktree } = seedWorker();
     const { blockWorker } = await import("../src/dashboard/workers.js");
 
@@ -59,9 +59,20 @@ describe("blockWorker", () => {
     expect(result.ok).toBe(true);
     expect(fs.existsSync(path.join(worktree, ".garden-awaiting-input"))).toBe(true);
     expect((await readEntry())?.blockedQuestion).toBe("Should golden bookmarks be committed?");
-    expect(await readAlertMessages()).toEqual([
-      "alpha is waiting on your decision: Should golden bookmarks be committed?",
-    ]);
+    expect((await readEntry())?.blockedAt).toBeTypeOf("number");
+  });
+
+  // The alerts pane is where faults go — ✖/⚠ rows that read as "something is
+  // broken". A worker asking a question is the system working. Its visibility
+  // comes from the display state instead (see resolveWorkerStatus), which is
+  // yellow at both the row and the plot strip (operator call, 2026-09-09).
+  it("raises no alert — a question is not a fault", async () => {
+    seedWorker();
+    const { blockWorker } = await import("../src/dashboard/workers.js");
+
+    blockWorker("proj", "alpha", "Should golden bookmarks be committed?");
+
+    expect(await readAlertMessages()).toEqual([]);
   });
 
   // The load-bearing invariant: a worker cannot hold both exits at once, so a
@@ -83,7 +94,7 @@ describe("blockWorker", () => {
   // IPC. A repaint that throws there must not cost the alert, or a worker ends
   // up holding a sentinel nobody was told about: silently stuck, which is the
   // exact failure this command exists to remove.
-  it("still records and alerts when the dashboard repaint is unreachable", async () => {
+  it("still records the block when the dashboard repaint is unreachable", async () => {
     const { worktree } = seedWorker();
     const { refreshDashboard } = await import("../src/dashboard/header.js");
     vi.mocked(refreshDashboard).mockImplementationOnce(() => {
@@ -95,7 +106,6 @@ describe("blockWorker", () => {
 
     expect(result.ok).toBe(true);
     expect((await readEntry())?.blockedQuestion).toBe("Which product shape?");
-    expect(await readAlertMessages()).toHaveLength(1);
     expect(fs.existsSync(path.join(worktree, ".garden-awaiting-input"))).toBe(true);
   });
 
@@ -164,34 +174,6 @@ describe("blockWorker", () => {
     const stored = (await readEntry())?.blockedQuestion ?? "";
     expect(stored).toHaveLength(MAX_BLOCKED_QUESTION_LEN);
     expect(stored.endsWith("…")).toBe(true);
-  });
-
-  it("re-blocking the same worker does not stack duplicate alerts within the dedup window", async () => {
-    seedWorker();
-    const { blockWorker } = await import("../src/dashboard/workers.js");
-
-    blockWorker("proj", "alpha", "Which shape?");
-    blockWorker("proj", "alpha", "Which shape, restated a little differently?");
-
-    expect(await readAlertMessages()).toHaveLength(1);
-  });
-
-  it("raises a fresh alert after the operator clears one block and the worker blocks again", async () => {
-    seedWorker();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    const { blockWorker } = await import("../src/dashboard/workers.js");
-    const { resume } = await import("../src/commands/resume.js");
-
-    try {
-      blockWorker("proj", "alpha", "Which shape?");
-      await captureConsoleLog(() => resume(["alpha"]));
-      clock.mockReturnValue(1_800_000_000_001);
-      blockWorker("proj", "alpha", "Which rollout?");
-
-      expect(await readAlertMessages()).toHaveLength(2);
-    } finally {
-      clock.mockRestore();
-    }
   });
 });
 

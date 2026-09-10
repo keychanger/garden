@@ -1368,9 +1368,12 @@ export interface BlockedResult {
 //   - .garden-done removed, making the two exits mutually exclusive by
 //     construction — a blocked worker can never finalize as `done`, and so can
 //     never trip the holistic gate;
-//   - entry.blockedQuestion, which lifts the row to the blocked-on-you tier and
-//     carries the question onto it.
-// Plus the alert, which is the surface that actually reaches an absent operator.
+//   - entry.blockedQuestion, which lifts the row to the blocked-on-you tier,
+//     carries the question onto it, and makes the row display as `asking` —
+//     garden's existing "the agent needs you" treatment, yellow at both the
+//     worker row and the plot strip. That display state is the operator-facing
+//     surface; this raises no alert, because the alerts pane is for faults and a
+//     worker asking a question is not one.
 // The operator's next prompt clears all of it (hooks/default.ts).
 export function blockWorker(project: string, worker: string, question: string): BlockedResult {
   const normalized = stripControlSequences(question).replace(/\s+/g, " ").trim();
@@ -1431,26 +1434,22 @@ export function blockWorker(project: string, worker: string, question: string): 
     worker,
     data: { project, question: text },
   });
-  // Stable for one blocked episode, not the message: rewording a standing
-  // blocker updates the row without stacking an alert, while clearing and
-  // later re-entering the human gate gets a new blockedAt and a fresh alert.
-  addAlert({
-    level: "warn",
-    source: "workers",
-    project,
-    worker,
-    message: `${worker} is waiting on your decision: ${text}`,
-    dedupKey: `blocked:${project}:${worker}:${blockedAt}`,
-  });
-  // Last, and non-fatal. Ordering is load-bearing: the alert above is the whole
-  // point of the command — the surface that reaches an operator who is not
-  // watching — while this is a repaint they will get anyway on the next hook.
-  // And it is the one step that can genuinely fail here: the primary caller is a
-  // worker running inside an OS sandbox that blocks the tmux server socket (the
-  // same wall that makes `garden handoff` go through request-file IPC), so a
-  // throw at this line would leave a worker holding a sentinel with no alert and
-  // no log — silently stuck, which is precisely the failure this command exists
-  // to eliminate. A repaint the operator does not get is not worth that.
+  // Deliberately NOT an alert. The alerts pane is where faults go — its rows wear
+  // ✖/⚠ and read as "something is broken" — and a worker asking a question is the
+  // system working, not failing (operator call, 2026-09-09). The visibility comes
+  // instead from the display state: resolveWorkerStatus reports a worker with a
+  // recorded question as `asking`, which is garden's existing vocabulary for "the
+  // agent needs you" and already carries the bold yellow row, the ⚑ icon, and the
+  // plot strip's yellow flag. The plot strip is what covers the away case the
+  // alert was reaching for — it aggregates across every project in the plot, so
+  // one glance at the top bar shows a question waiting without opening anything.
+  //
+  // Non-fatal, and last. The row and the sentinel are the operator-visible half
+  // and both have already landed; this is a repaint the next hook delivers
+  // anyway. It is also the one step here that can genuinely fail: the primary
+  // caller is a worker inside an OS sandbox that blocks the tmux server socket
+  // (the same wall that makes `garden handoff` use request-file IPC), so a throw
+  // at this line must not lose the writes above it.
   try {
     refreshDashboard();
   } catch (err) {
