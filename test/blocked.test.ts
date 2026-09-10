@@ -5,7 +5,7 @@ import path from "node:path";
 import { useTmpHome, captureConsoleLog } from "./helpers.js";
 
 // The dashboard repaint is a tmux side effect with nothing to assert; everything
-// else (sentinels, registry, alerts) runs against the real temp HOME so the
+// else (sentinels, registry, alert absence) runs against the real temp HOME so the
 // interactions between them are exercised rather than described.
 vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
@@ -91,9 +91,7 @@ describe("blockWorker", () => {
 
   // The primary caller runs inside a worker's OS sandbox, which blocks the tmux
   // server socket — the same wall that makes `garden handoff` use request-file
-  // IPC. A repaint that throws there must not cost the alert, or a worker ends
-  // up holding a sentinel nobody was told about: silently stuck, which is the
-  // exact failure this command exists to remove.
+  // IPC. A repaint that throws there must not undo the durable row/plot signal.
   it("still records the block when the dashboard repaint is unreachable", async () => {
     const { worktree } = seedWorker();
     const { refreshDashboard } = await import("../src/dashboard/header.js");
@@ -165,7 +163,7 @@ describe("blockWorker", () => {
     expect((await readEntry())?.blockedQuestion).toBe("Which shape? Decide now.");
   });
 
-  it("truncates an over-long question so it cannot push the row and alert off-screen", async () => {
+  it("truncates an over-long question so it cannot push the useful row text off-screen", async () => {
     seedWorker();
     const { blockWorker, MAX_BLOCKED_QUESTION_LEN } = await import("../src/dashboard/workers.js");
 

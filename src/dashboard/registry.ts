@@ -215,9 +215,8 @@ export interface WorkerEntry {
   // by the operator's next prompt (hooks/default.ts onPromptSubmitted), which
   // is also what clears the sentinel that gates auto-continue.
   blockedQuestion?: string;
-  // Start of the current blocked episode. Keeps repeated wording changes for
-  // one standing block on one alert dedup key while allowing a later human
-  // gate on the same worker to raise a fresh alert.
+  // Start of the current blocked episode. Rewording a standing question keeps
+  // its elapsed time, while a later human gate starts a fresh timer.
   blockedAt?: number;
   // Epoch ms when a mutating tool call (Edit/Write) completed on the worker
   // while its review was in flight (stamped by hooks/default.ts). The reviewer

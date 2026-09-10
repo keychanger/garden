@@ -187,6 +187,14 @@ describe("installClaudeSkills", () => {
     // line would leave the worker picking the exit that reads as finished.
     expect(BLOCKED_SKILL_CONTENT).toMatch(/When NOT to use/);
     expect(BLOCKED_SKILL_CONTENT).toMatch(/You are actually finished/);
+    expect(BLOCKED_SKILL_CONTENT).toContain("Flags the whole **plot** yellow");
+    expect(BLOCKED_SKILL_CONTENT).toContain("Raises no alert");
+    expect(BLOCKED_SKILL_CONTENT).not.toContain("alerts the operator");
+  });
+
+  it("designer's human gate describes the row and plot signal without promising an alert", () => {
+    expect(DESIGNER_SKILL_CONTENT).toContain("flags the plot yellow");
+    expect(DESIGNER_SKILL_CONTENT).not.toContain("alerts the operator");
   });
 
   it("planner skill declares its name and carries the method checklist", () => {

@@ -52,9 +52,9 @@ interface WorkerInfo {
   stale: boolean;
   // True when the worker holds the `.garden-awaiting-input` sentinel — a
   // designer (or future plan worker) paused at the human gate, waiting on the
-  // operator. Distinct from the mid-turn `asking` state (a first-class status):
-  // the worker is still in poller state `working`, it just wrote the sentinel
-  // and ended its turn. Renders a `?` only when no question was recorded.
+  // operator. The worker is still in poller state `working`, it just wrote the
+  // sentinel and ended its turn. A recorded question derives the same `asking`
+  // display as a mid-turn prompt; the bare sentinel renders a fallback `?`.
   awaitingInput: boolean;
   // The question a worker stopped to ask, from entry.blockedQuestion (written
   // by `garden blocked`). Takes the elastic detail column ahead of activity —
@@ -552,9 +552,12 @@ function formatStatus(worker: WorkerInfo): string {
 // computeStatusWidth (which measures it) so the measured width and the rendered
 // text can never drift.
 function stateCell(worker: WorkerInfo, now: number): string {
-  // blockedAt is set only on a blocked worker, so this needs no branch: a real
-  // mid-turn `asking` has none and keeps its hook-stamped lastStateChangeAt.
-  const since = worker.blockedAt ?? worker.lastStateChangeAt;
+  // Only a question-derived `asking` uses the blocked episode's timestamp. A
+  // failing lifecycle still outranks the question, so its elapsed must remain
+  // anchored to the failure transition rather than misreporting time blocked.
+  const since = worker.status === "asking" && worker.blockedQuestion !== undefined
+    ? worker.blockedAt ?? worker.lastStateChangeAt
+    : worker.lastStateChangeAt;
   return `${formatStatus(worker)}${formatDelegatingSuffix(worker)}${formatTimeInState(worker.status, since, now)}`;
 }
 
@@ -710,12 +713,9 @@ function padEndVisible(s: string, width: number): string {
   return pad > 0 ? s + " ".repeat(pad) : s;
 }
 
-// Combine agentStatus and prState into a single display state.
-// Lifecycle states (reviewing, merge-pending, failing, merged, done) take
-// priority because they describe where the worker's *code* is, not what
-// Claude is doing right now. `merged`/`done` clear on UserPromptSubmit or when
-// merge finalization detects that the worker is already mid-turn; this function
-// never mutates state.
+// Combine agentStatus and prState into a single display state. Lifecycle states
+// normally take priority; a recorded operator question derives `asking` over
+// them except for `failing`. This function never mutates stored state.
 export function resolveWorkerStatus(
   entry: {
     agentStatus?: string; prState?: string; subagentActivityAt?: number;

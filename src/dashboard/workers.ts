@@ -1342,8 +1342,8 @@ export function holdWorker(project: string, worker: string): HoldDecision {
   return decision;
 }
 
-// Longest question `garden blocked` will record. The text rides an alert and a
-// status row, so an essay would push the useful part off both; a worker with
+// Longest question `garden blocked` will record. The text rides the status row,
+// so an essay would push the useful part off-screen; a worker with
 // more to say puts it in its pane and names the decision here.
 export const MAX_BLOCKED_QUESTION_LEN = 280;
 

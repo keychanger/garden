@@ -19,7 +19,7 @@ These are the only states the user sees in the status pane.
 | loading       | `H`  | Worker pane started, bootstrap running, Claude not yet launched. |
 | ready         | `*`  | Fresh worker. Claude loaded, waiting for first input. |
 | working       | `@`  | Claude is generating a response to a submitted prompt, or the display is deriving `working bg` from live delegated work. See "What 'working' means" below. |
-| asking        | `?`  | Claude is blocked mid-turn waiting for operator input — plan approval, a question answer, or a permission-request escalation. The turn has not ended. |
+| asking        | `?`  | The worker needs operator input: either the agent is blocked mid-turn, or a completed turn recorded `blockedQuestion`. |
 | idle          | `#`  | Turn has ended — Claude finished its response and is waiting at the prompt for the next user message. Not in the review cycle. |
 | paused        | `‖`  | Operator interrupted the worker mid-turn and is holding it (the `hold` action / `⌥e`). Distinct from `idle`: the operator deliberately halted active work and intends to redirect. Cleared by the next prompt. See "Operator hold" below. |
 | reviewing     | `%`  | Automated reviewer is checking the worker's code. |
@@ -133,7 +133,7 @@ intent, even though both sit at the prompt awaiting input.
 dashboard `⌥e` hotkey also toggles: pressing it on an already-held worker
 releases it back to `idle` (the "never mind" path) without sending a prompt.
 
-### Blocked on the operator (a row flag, not a state)
+### Blocked on the operator (a display derivation, not a stored state)
 
 A worker that has pushed what it can and needs an operator decision before it
 can go further runs `garden blocked "<question>"`, which stamps
@@ -153,10 +153,11 @@ This is a **display derivation only**, exactly like `isDelegating` → `working`
 above: `agentStatus` and `prState` are untouched in the registry, so review/merge
 gating and the poller keep seeing the real state (a blocked worker parked at
 `merged` still merges, still gates, still sorts by its real lifecycle where that
-matters). The state cell's elapsed counts from `blockedAt` rather than
-`lastStateChangeAt`, which a merge landing after the block would bump — restarting
-the counter at `asking 0m` for a question the operator has been sitting on for
-hours.
+matters). While that derivation is displayed as `asking`, the state cell's
+elapsed counts from `blockedAt` rather than `lastStateChangeAt`, which a merge
+landing after the block would bump — restarting the counter at `asking 0m` for a
+question the operator has been sitting on for hours. If `failing` overrides the
+question, its elapsed remains anchored to the failure transition.
 
 It is deliberately **not** a `prState`. Blocked-on-the-operator is orthogonal to
 the lifecycle: a worker can be blocked while its branch is `merged`, or with no
@@ -920,7 +921,11 @@ working, it is working — full stop.
 
 ```mermaid
 flowchart TD
-    Start["resolveWorkerStatus(agentStatus, prState)"] --> A{prState set?}
+    Start["resolveWorkerStatus(agentStatus, prState, blockedQuestion)"] --> Q{blockedQuestion set?}
+    Q -->|yes| F{prState failing?}
+    F -->|yes| failing
+    F -->|no| asking
+    Q -->|no| A{prState set?}
     A -->|reviewing| reviewing
     A -->|merge-pending| merge_pending["merge-pending"]
     A -->|resolving| resolving
@@ -932,15 +937,18 @@ flowchart TD
 ```
 
 Lifecycle states (`reviewing`, `merge-pending`, `resolving`, `ci-fixing`,
-`failing`, `merged`, `done`) take priority because they describe where the worker's
-*code* is, not what Claude is doing right now. `merged` and `done` are
-the only ones that clear on `UserPromptSubmit` — that clear is performed
-by the hook handler, not by this combine function.
+`failing`, `merged`, `done`) normally take priority because they describe where
+the worker's *code* is, not what Claude is doing right now. A recorded blocked
+question derives `asking` over them because operator attention is more urgent;
+`failing` alone stays on top because a broken pipeline is more urgent still.
+`merged` and `done` are the only lifecycle states that clear on
+`UserPromptSubmit` — that clear is performed by the hook handler, not by this
+combine function.
 
-The "return agentStatus" leaf carries one derived branch: an `idle`
-worker that `isDelegating` (live subagent activity — see "Delegated
-background work") resolves to `working` for display. The registry value
-is untouched; the derivation lives entirely in this one reader.
+The reader carries two derived branches: `blockedQuestion` → `asking` as shown
+above, and an `idle` worker that `isDelegating` (live subagent activity — see
+"Delegated background work") → `working`. Registry values are untouched; both
+derivations live entirely in this one reader.
 
 ### Hook → display pipeline
 

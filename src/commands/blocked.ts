@@ -4,7 +4,7 @@
 // advance you) and "done" (.garden-done), this is the exit for a worker that
 // has pushed what it can and genuinely cannot proceed without an operator
 // decision. It parks the worker on the blocked-on-you tier with the question on
-// its row, suppresses auto-continue, and raises an alert — see blockWorker
+// its row and plot as asking, and suppresses auto-continue — see blockWorker
 // (dashboard/workers.ts) for why the other two exits could not express this.
 //
 // Self-resolves the worker via $GARDEN_WORKER so a worker can invoke it from

@@ -20,8 +20,12 @@ vi.mock("../src/dashboard/registry.js", () => {
 });
 
 vi.mock("../src/commands/status.js", () => ({
-  resolveWorkerStatus: (entry: { prState?: string; agentStatus?: string } | undefined) =>
-    entry?.prState ?? entry?.agentStatus ?? "ready",
+  resolveWorkerStatus: (entry: {
+    prState?: string; agentStatus?: string; blockedQuestion?: string;
+  } | undefined) =>
+    entry?.blockedQuestion !== undefined && entry.prState !== "failing"
+      ? "asking"
+      : entry?.prState ?? entry?.agentStatus ?? "ready",
 }));
 
 // Stub only the gate accessors (keep the rest of config real) so the gate
@@ -113,6 +117,15 @@ describe("whoami command", () => {
     const parsed = JSON.parse(lines[0]);
     expect(parsed.siblings.map((s: { name: string }) => s.name)).toEqual(["alpha-fern", "swift-oak"]);
     expect(parsed.siblings.find((s: { name: string }) => s.name === "swift-oak").displayStatus).toBe("reviewing");
+  });
+
+  it("reports a worker with a recorded blocked question as asking", async () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "merged", blockedQuestion: "Which shape?" }),
+    ]);
+
+    const lines = await captureConsoleLog(() => whoami(["bold-ash"]));
+    expect(JSON.parse(lines[0]).displayStatus).toBe("asking");
   });
 
   it("serializes epoch-ms timestamps to ISO strings", async () => {

@@ -143,6 +143,12 @@ describe("resolveWorkerStatus", () => {
     expect(resolveWorkerStatus({ agentStatus: "paused", prState: "reviewing" })).toBe("reviewing");
   });
 
+  it("derives asking from a blocked question over lifecycle states except failing", () => {
+    expect(resolveWorkerStatus({ agentStatus: "idle", prState: "reviewing", blockedQuestion: "Proceed?" })).toBe("asking");
+    expect(resolveWorkerStatus({ agentStatus: "idle", prState: "done", blockedQuestion: "Proceed?" })).toBe("asking");
+    expect(resolveWorkerStatus({ agentStatus: "idle", prState: "failing", blockedQuestion: "Proceed?" })).toBe("failing");
+  });
+
   it("prState='working' is not displayed (agentStatus shows through)", () => {
     // prState='working' means "no in-flight lifecycle state". The display
     // should reflect what Claude is doing, not the placeholder.
@@ -1549,12 +1555,17 @@ describe("blocked-on-operator row", () => {
   // Red outranks yellow: something broken is more urgent than a question, and a
   // failing row must not be recolored into looking merely inquisitive.
   it("leaves a failing worker red even when it recorded a question", async () => {
+    const now = Date.now();
     vi.mocked(getWorkers).mockReturnValue([{
       name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", prState: "failing",
       blockedQuestion: "Which shape?",
+      blockedAt: now - 2 * 60 * 60 * 1000,
+      lastStateChangeAt: now - 2 * 60 * 1000,
     }]);
     const line = lineFor(renderQuickStatus(state), "bold-ash");
     expect(stripAnsi(line)).toContain("failing");
+    expect(stripAnsi(line)).toContain("failing 2m");
+    expect(stripAnsi(line)).not.toContain("failing 2h");
     expect(line).toContain("\x1b[1;31m");
   });
 

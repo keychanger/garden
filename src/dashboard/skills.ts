@@ -79,7 +79,7 @@ export const BLOCKED_SKILL_FILENAME = "SKILL.md";
 // nothing), so it picked one and the operator learned nothing.
 export const BLOCKED_SKILL_CONTENT = `---
 name: blocked
-description: Use when you cannot make further progress on the operator's request without a decision only they can make — a product-shape question, a spend/credentials approval, a choice between paths you have no basis to pick between. Records the question on your dashboard row, alerts the operator, and suppresses post-merge auto-continue so garden does not prompt you to continue work you are not able to continue. Do NOT use for a problem you could solve yourself, for a review failure, or when you are simply finished (use \`done\`).
+description: Use when you cannot make further progress on the operator's request without a decision only they can make — a product-shape question, a spend/credentials approval, a choice between paths you have no basis to pick between. Records the question as an asking state on your dashboard row and plot, and suppresses post-merge auto-continue so garden does not prompt you to continue work you are not able to continue. Do NOT use for a problem you could solve yourself, for a review failure, or when you are simply finished (use \`done\`).
 ---
 
 # Blocked
@@ -101,8 +101,8 @@ Without it, a worker in your position had to pick one of the other two, and both
 lie. \`done\` puts a green check on your row and tells garden the task is
 complete — it also arms the whole-task holistic review over a task that is not
 whole. Ending your turn silently leaves an ordinary idle row. Neither says "the
-operator's answer is the blocker", so an operator away from their dashboard sees
-nothing at all, and the work sits until they happen to read your pane. That is
+operator's answer is the blocker", so an operator away from the worker's pane sees
+nothing at all, and the work sits until they happen to open it. That is
 exactly what happened to the worker this skill was built for: it stopped two
 phases short, named both remaining phases in its final message, and looked
 finished for hours.
@@ -123,8 +123,8 @@ travels to the places they will actually look.
 ## Writing the question
 
 One sentence, phrased as the decision you need made. It appears on your dashboard
-row and in an operator alert, so it should be readable with no other context, and
-it is capped at 280 characters — put the reasoning in your pane message, not here.
+row, so it should be readable with no other context, and it is capped at 280
+characters — put the reasoning in your pane message, not here.
 
 - Good: \`"Should evening calls advance the run, or sit outside it?"\`
 - Good: \`"Committing golden bookmarks means committing binary SQLite ledgers a schema change can break — do it anyway?"\`
@@ -559,7 +559,7 @@ Write \`.garden/designer/options.md\`: **2–3 distinct approaches**, each a sho
 
 Write \`.garden/designer/questions.md\`: a **numbered** list of specific clarifying questions, each naming the decision it affects (e.g. "3. Should X live in the poller or the hook? — decides whether Y is synchronous."). Ask only what genuinely changes the design; do not pad.
 
-Then present a brief summary of the options and questions in your pane, run \`garden blocked "<the decision you need>"\` (one line, the choice you are asking them to make), and **END YOUR TURN**. You are now at the human gate: the operator answers in chat. You are not stuck and not done — you are waiting. That command lifts your row to the top blocked-on-you band with the question on it and alerts the operator, so a gate you enter while they are away is still visible; it all clears automatically when they send their next message.
+Then present a brief summary of the options and questions in your pane, run \`garden blocked "<the decision you need>"\` (one line, the choice you are asking them to make), and **END YOUR TURN**. You are now at the human gate: the operator answers in chat. You are not stuck and not done — you are waiting. That command lifts your row to the top blocked-on-you band and flags the plot yellow with the question on the row, so a gate remains visible without opening your pane; it all clears automatically when they send their next message.
 
 ### 3. Converge — loops
 When the operator responds, capture their answers to \`.garden/designer/answers.md\` (so later turns read them deterministically even if the conversation compacts). Incorporate the answers, pick an approach (or let the operator pick), and draft the artifact at \`.garden/designer/artifact.md\`.

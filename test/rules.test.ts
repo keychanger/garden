@@ -240,6 +240,8 @@ describe("buildWorktreeRules — grow workflow", () => {
     const result = buildWorktreeRules("tall-fern", "main");
     expect(result).toContain("garden blocked");
     expect(result).toContain("blocked` skill");
+    expect(result).toContain("flags the plot as asking");
+    expect(result).not.toContain("alerts the operator");
   });
 
   it("grow paragraphs append AFTER the worktree workflow baseline", async () => {
@@ -296,6 +298,8 @@ describe("buildWorktreeRules — designer workflow", () => {
     // A seedless plant sends no message — the prompt itself must say where
     // the brief comes from.
     expect(result).toContain("design brief arrives as their first message");
+    expect(result).toContain("flags the plot as asking");
+    expect(result).not.toContain("alerts the operator");
   });
 
   it("suppresses the checks paragraph even when a checksCommand is configured", async () => {

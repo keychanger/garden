@@ -106,7 +106,7 @@ const MERGE_CONTINUE_BASE =
   + "basis to pick between — that is neither `done` nor a reason to invent "
   + "different work. Run `garden blocked \"<the decision you need>\"` (the "
   + "`blocked` skill) and end your turn: it puts the question on your row and "
-  + "alerts the operator. Do NOT reach for `done` in that situation — it reads "
+  + "flags the plot as `asking`. Do NOT reach for `done` in that situation — it reads "
   + "as \"the task is complete\" and the operator learns nothing about what is "
   + "actually waiting on them.";
 
@@ -216,7 +216,7 @@ export function clearAwaitingInput(worktreePath: string | undefined): boolean {
 // Written on the worker's behalf by `garden blocked` (workers.ts blockWorker)
 // so the question and the auto-continue suppression are stamped in one place.
 // The file is empty — its presence is the signal; the question itself lives on
-// WorkerEntry.blockedQuestion, where the row renderer and the alert can read it
+// WorkerEntry.blockedQuestion, where the row and plot renderers can read it
 // without a filesystem hop.
 export function setAwaitingInput(worktreePath: string | undefined): boolean {
   if (!worktreePath) return false;
