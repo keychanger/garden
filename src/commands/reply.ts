@@ -6,8 +6,8 @@
 // Idempotency / overwrite behavior: multiple reply calls append to the
 // existing note with a blank line between, so an agent that drops a few
 // staged notes during its work doesn't have to manage the buffer itself.
-// `--replace` clobbers the buffer if a fresh-start is needed. The note is
-// cleared after the callback fires.
+// `--replace` clobbers the buffer if a fresh-start is needed. The callback
+// fires once per child, so the note is read once and never re-delivered.
 //
 // No env: this command must be run inside a worker pane (GARDEN_PROJECT +
 // GARDEN_WORKER set) — there's nothing to attach the note to otherwise.

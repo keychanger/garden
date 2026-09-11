@@ -22,7 +22,9 @@ import path from "node:path";
 import fs from "node:fs";
 import { DASHBOARD_SESSION } from "../session.js";
 import { readDashState } from "./state.js";
-import { findWorkerByName, updateWorkerFields, type AgentStatus } from "./registry.js";
+import {
+  findWorkerByName, updateWorkerFields, updateWorkerFieldsIf, type AgentStatus,
+} from "./registry.js";
 import {
   shellEscape, getFirstPaneId, paneExists, windowExists, pasteAndSubmit,
   pressEnter, capturePaneText, capturePaneCursor, paneRunningOnlyShell,
@@ -426,12 +428,24 @@ export function rearmContinueIfDrafting(
     "--attempt", String(attempt + 1));
 }
 
-// Build and dispatch a handoff-callback prompt at the parent pane of a worker
-// that just reached a terminal prState (merged/done/failing). Best-effort:
-// silently no-ops if the parent has been removed, has no live pane, or is
-// currently mid-turn (continueWorker's agentStatus gate). One-shot per child:
-// the caller is expected to have checked + set handoffCallbackFiredAt under
-// the registry lock to prevent re-fires from replayed terminal transitions.
+const DELIVER_HANDOFF_CALLBACKS = "_deliver-handoff-callbacks";
+const HANDOFF_CALLBACK_DELAY_MS = 5000;
+const HANDOFF_CALLBACK_FOOTER =
+  "This is an informational nudge — the work you handed off has settled. If "
+  + "you were waiting on it to proceed, take the next step. If you have already "
+  + "finished and moved on, you can ignore this and end your turn.";
+
+// Record a handoff callback on the parent of a worker that just reached a
+// terminal prState (merged/done/failing), then try to paste it. One-shot per
+// child: the caller has already claimed handoffCallbackFiredAt under the
+// registry lock, so a replayed terminal transition never reaches here twice.
+//
+// The callback stays owed on the parent (pendingHandoffCallbacks) until a paste
+// lands. A parent that is mid-turn, held, or drafting when its child settles
+// gets it at its next turn end (dispatchOwedHandoffCallbacks, from the Stop
+// hook). It is recorded BEFORE the first attempt so a turn end racing this call
+// always finds it: either that turn end sees the owed entry, or it happened
+// first and the parent is idle for the attempt below.
 //
 // The prompt is informational. We're not asking the parent to do anything
 // specific — just letting it know the worker it spawned has settled. If the
@@ -457,14 +471,55 @@ export function notifyHandoffCallback(opts: {
   if (opts.replyNote && opts.replyNote.trim()) {
     lines.push("", `Reply from ${opts.childWorker}:`, opts.replyNote.trim());
   }
-  lines.push(
-    "",
-    "This is an informational nudge — the child worker you handed off to has "
-    + "settled. If you were waiting on it to proceed, take the next step. If "
-    + "you have already finished and moved on, you can ignore this and end "
-    + "your turn.",
-  );
-  continueWorker(opts.parentProject, opts.parentWorker, lines.join("\n"), "handoff-callback");
+  const callback = lines.join("\n");
+  const recorded = updateWorkerFieldsIf(opts.parentProject, opts.parentWorker, entry => ({
+    fields: { pendingHandoffCallbacks: [...(entry.pendingHandoffCallbacks ?? []), callback] },
+    result: true,
+  }));
+  if (!recorded) {
+    log.info("workers", "handoff callback dropped, parent worker gone", {
+      worker: opts.parentWorker,
+      data: { project: opts.parentProject, child: `${opts.childProject}/${opts.childWorker}` },
+    });
+    return;
+  }
+  if (!deliverHandoffCallbacks(opts.parentProject, opts.parentWorker)) {
+    rearmContinueIfDrafting(DELIVER_HANDOFF_CALLBACKS, opts.parentProject, opts.parentWorker, 0);
+  }
+}
+
+// Paste every callback owed to this worker as one prompt, so a fan-out whose
+// children all settled during one turn reads as a single nudge. Returns true
+// when nothing remains owed. Only the callbacks actually pasted are cleared: one
+// recorded while this paste was in flight stays owed for the next turn end.
+export function deliverHandoffCallbacks(projectName: string, workerName: string): boolean {
+  const owed = findWorkerByName(projectName, workerName)?.pendingHandoffCallbacks ?? [];
+  if (owed.length === 0) return true;
+  const text = [...owed, HANDOFF_CALLBACK_FOOTER].join("\n\n");
+  if (!continueWorker(projectName, workerName, text, "handoff-callback")) {
+    log.info("workers", "handoff callback owed, parent not ready", {
+      worker: workerName,
+      data: { project: projectName, owed: owed.length },
+    });
+    return false;
+  }
+  updateWorkerFieldsIf(projectName, workerName, entry => {
+    const remaining = (entry.pendingHandoffCallbacks ?? []).filter(c => !owed.includes(c));
+    return {
+      fields: { pendingHandoffCallbacks: remaining.length > 0 ? remaining : undefined },
+      result: undefined,
+    };
+  });
+  return true;
+}
+
+// Called at a worker's turn end. Delivery is delayed like the post-merge
+// continue so the pane is unambiguously idle (Stop hook returned, TUI redraw
+// done) before garden pastes into it.
+export function dispatchOwedHandoffCallbacks(projectName: string, workerName: string): void {
+  if (!findWorkerByName(projectName, workerName)?.pendingHandoffCallbacks?.length) return;
+  spawnDelayed(resolveGardenRunner(), HANDOFF_CALLBACK_DELAY_MS, DELIVER_HANDOFF_CALLBACKS,
+    projectName, workerName);
 }
 
 // Send a continue prompt to a worker pane. Called via the _continue-worker

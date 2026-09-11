@@ -13,7 +13,7 @@ import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.j
 import { newWorker, killPane, bounceActiveWorker, holdActiveWorker } from "./workers.js";
 import {
   continueWorker, continueWorkerAfterMerge, continueWorkerAfterMergeIfStuck,
-  continueWorkerIfStuck, rearmContinueIfDrafting, seedWorker,
+  continueWorkerIfStuck, deliverHandoffCallbacks, rearmContinueIfDrafting, seedWorker,
 } from "./continue.js";
 import { growAutoContinueAfterMerge } from "./grow-continue.js";
 import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
@@ -158,6 +158,12 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_continue-worker-after-merge-if-stuck") {
     if (args[1] && args[2]) continueWorkerAfterMergeIfStuck(args[1], args[2]);
+    return;
+  }
+  if (sub === "_deliver-handoff-callbacks") {
+    if (args[1] && args[2] && !deliverHandoffCallbacks(args[1], args[2])) {
+      rearmContinueIfDrafting("_deliver-handoff-callbacks", args[1], args[2], getAttempt(args));
+    }
     return;
   }
   if (sub === "_trellis-continue-after-merge") {

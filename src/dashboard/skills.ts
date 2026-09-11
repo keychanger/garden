@@ -392,13 +392,13 @@ EOF
 What this does:
 
 - Records a parent → child link on the new worker's registry entry.
-- When the child reaches its first terminal \`prState\` (\`merged\`, \`done\`, or \`failing\`), garden fires a one-shot \`[garden] Handoff callback: …\` prompt at *your* pane summarizing the outcome. You can then take the next step (or call \`done\` yourself).
+- When the child reaches its first terminal \`prState\` (\`merged\`, \`done\`, or \`failing\`), garden fires a one-shot \`[garden] Handoff callback: …\` prompt at *your* pane summarizing the outcome. You can then take the next step (or call \`done\` yourself). If you are mid-turn when a child settles, the callback waits and arrives as soon as your turn ends; children that settle during the same turn arrive together as one prompt.
 - The child can optionally stage a freeform note for you via \`garden reply -m "<text>"\` (or \`--replace\` to overwrite an earlier draft, or stdin for multi-line). Whatever's staged at terminal time gets folded into the callback prompt.
 
 When NOT to use callback mode:
 
 - Fan-out (1:N) where you have no further work pending the results — just hand off and \`done\`. The operator gets the merge notifications via the dashboard; you don't need to relay them.
-- You intend to invoke \`done\` immediately. The callback can't reach a pane whose worker already declared done. (The dispatch is still safe — it'll just silently no-op — but you've lost the signal.)
+- You intend to invoke \`done\` immediately. A callback arriving after that submits a fresh prompt into your finished session and reopens it for no reason.
 - The child task is long-running and you have nothing to do in the meantime. Marking yourself \`done\` and letting the operator follow the child directly is simpler than parking a live pane for hours.
 
 ### Replying from the child side
@@ -409,7 +409,7 @@ If you *are* the child worker (your seed message says \`[handoff from <project>/
 garden reply -m "Root cause is in src/foo.ts:42 — the retry loop is unbounded."
 \`\`\`
 
-Multiple \`garden reply\` calls accumulate (joined by blank lines). Use \`--replace\` to clobber an earlier draft. The note is cleared after the callback fires.
+Multiple \`garden reply\` calls accumulate (joined by blank lines). Use \`--replace\` to clobber an earlier draft. The callback fires once, so anything staged after it has fired never reaches the parent.
 
 For fan-out, run the command once per item, each with its own briefing scoped to that item alone:
 

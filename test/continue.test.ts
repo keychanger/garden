@@ -86,7 +86,7 @@ import {
   continueWorker, continueWorkerAfterMerge, continueWorkerAfterMergeIfStuck,
   continueWorkerIfStuck,
   dispatchDelayedContinue, dispatchDelayedAutoContinue,
-  dispatchDelayedSeed, seedWorker, classifySeedDelivery, notifyHandoffCallback,
+  dispatchDelayedSeed, seedWorker, classifySeedDelivery,
   donePath, isDoneSet, clearDoneSentinel,
   awaitingInputPath, isAwaitingInput, setAwaitingInput, clearAwaitingInput,
   extractOperatorDraft, extractDraftInfo, isOwnStuckPaste,
@@ -1623,94 +1623,6 @@ describe("seedWorker", () => {
     expect(fs.unlinkSync).not.toHaveBeenCalled();
   });
 });
-
-describe("notifyHandoffCallback", () => {
-  beforeEach(() => {
-    // Default: parent is idle in a known window, pane resolves cleanly.
-    vi.mocked(findWorkerByName).mockReturnValue({
-      name: "calm-bay", sessionId: "s", task: "",
-      agentStatus: "idle",
-    });
-    vi.mocked(readDashState).mockReturnValue(makeState({
-      activeWindowName: "_fox-worker-calm-bay",
-      activePaneId: "%5",
-      activeProject: "fox",
-    }));
-    vi.mocked(paneExists).mockReturnValue(true);
-    vi.mocked(windowExists).mockReturnValue(true);
-  });
-
-  it("pastes a callback prompt naming the child + state into the parent pane", () => {
-    notifyHandoffCallback({
-      childProject: "wolf",
-      childWorker: "bold-ash",
-      childBranch: "bold-ash",
-      terminalState: "merged",
-      parentProject: "fox",
-      parentWorker: "calm-bay",
-      replyNote: undefined,
-    });
-
-    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
-    const [, message] = vi.mocked(pasteAndSubmit).mock.calls[0];
-    expect(message).toContain("Handoff callback");
-    expect(message).toContain("wolf/bold-ash");
-    expect(message).toContain("merged");
-    expect(message).toContain("branch: bold-ash");
-  });
-
-  it("inlines the reply note when present", () => {
-    notifyHandoffCallback({
-      childProject: "wolf",
-      childWorker: "bold-ash",
-      childBranch: "bold-ash",
-      terminalState: "done",
-      parentProject: "fox",
-      parentWorker: "calm-bay",
-      replyNote: "Investigated the bug — root cause is in src/foo.ts:42.",
-    });
-
-    const [, message] = vi.mocked(pasteAndSubmit).mock.calls[0];
-    expect(message).toContain("Reply from bold-ash:");
-    expect(message).toContain("root cause is in src/foo.ts:42");
-  });
-
-  it("labels failing terminal state distinctly so the parent knows it needs attention", () => {
-    notifyHandoffCallback({
-      childProject: "wolf",
-      childWorker: "bold-ash",
-      childBranch: undefined,
-      terminalState: "failing",
-      parentProject: "fox",
-      parentWorker: "calm-bay",
-      replyNote: undefined,
-    });
-
-    const [, message] = vi.mocked(pasteAndSubmit).mock.calls[0];
-    expect(message).toContain("failing");
-    expect(message).toContain("operator attention");
-  });
-
-  it("silently no-ops when the parent is currently working (continueWorker gate)", () => {
-    vi.mocked(findWorkerByName).mockReturnValue({
-      name: "calm-bay", sessionId: "s", task: "",
-      agentStatus: "working",
-    });
-
-    notifyHandoffCallback({
-      childProject: "wolf",
-      childWorker: "bold-ash",
-      childBranch: "bold-ash",
-      terminalState: "merged",
-      parentProject: "fox",
-      parentWorker: "calm-bay",
-      replyNote: undefined,
-    });
-
-    expect(pasteAndSubmit).not.toHaveBeenCalled();
-  });
-});
-
 
 // ===========================================================================
 // Delivery verification — the content check that catches a mangled paste

@@ -404,12 +404,16 @@ export interface WorkerEntry {
   // doesn't double-fire. handoffReplyNote is an optional freeform string the
   // child can attach via `garden reply` before terminating; it gets inlined
   // into the callback prompt. All fields are absent on non-handoff workers.
+  // pendingHandoffCallbacks lives on the PARENT: callback messages from its
+  // children that have not yet landed in its pane (it was mid-turn, held, or
+  // drafting). Delivered as one prompt at its next turn end, then cleared.
   handoffRequestId?: string;
   parentWorker?: string;
   parentProject?: string;
   handoffCallbackExpected?: boolean;
   handoffCallbackFiredAt?: number;
   handoffReplyNote?: string;
+  pendingHandoffCallbacks?: string[];
   // Bead id this worker is building (bd's work graph — board's
   // docs/DELEGATION.md). Stamped at creation by the intake dispatcher and by
   // `garden handoff --bead`; the registry→bd half of the bead↔worker join

@@ -39,6 +39,10 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
   triggerProjectPoll: vi.fn(),
 }));
 
+vi.mock("../src/dashboard/continue.js", () => ({
+  dispatchOwedHandoffCallbacks: vi.fn(),
+}));
+
 vi.mock("../src/dashboard/tmux.js", () => ({
   shellEscape: vi.fn((value: string) => value),
   pasteAndSubmit: vi.fn(),
@@ -51,6 +55,7 @@ import {
 } from "../src/dashboard/codex-input.js";
 import { updateWorkerFieldsIf } from "../src/dashboard/registry.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
+import { dispatchOwedHandoffCallbacks } from "../src/dashboard/continue.js";
 
 const requestedAt = Date.parse("2026-08-07T23:35:24.483Z");
 const answeredAt = Date.parse("2026-08-07T23:36:04.112Z");
@@ -160,6 +165,9 @@ describe("reconcileCodexInputRequests", () => {
     expect(reconcileCodexInputRequests()).toBe(true);
     expect(worker.agentStatus).toBe("idle");
     expect(triggerProjectPoll).toHaveBeenCalledWith("garden");
+    // The heal stands in for the missed Stop, so it must also deliver any
+    // handoff callback that reached this worker mid-turn.
+    expect(dispatchOwedHandoffCallbacks).toHaveBeenCalledWith("garden", worker.name);
   });
 
   it("heals a worker whose prState advanced after the turn ended", () => {

@@ -39,6 +39,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
 vi.mock("../src/dashboard/continue.js", () => ({
   clearAwaitingInput: vi.fn(),
   clearDoneSentinel: vi.fn(),
+  dispatchOwedHandoffCallbacks: vi.fn(),
   isDoneSet: vi.fn(() => false),
 }));
 vi.mock("../src/dashboard/git.js", () => ({
@@ -260,5 +261,20 @@ describe("onToolActivity — subagent activity stamp (delegating display)", () =
       }, "Read", "a6159cebbfb14984c"));
     expect(vi.mocked(updateWorkerFields)).not.toHaveBeenCalled();
     expect(refreshDashboard).not.toHaveBeenCalled();
+  });
+});
+
+describe("onTurnEnded — owed handoff callbacks", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("schedules delivery of callbacks that reached the worker mid-turn", async () => {
+    const { dispatchOwedHandoffCallbacks } = await import("../src/dashboard/continue.js");
+    const ctx = { ...toolCtx({}), event: "stop" } as HookContext;
+
+    workerHookHandlers.onTurnEnded?.(ctx);
+
+    expect(dispatchOwedHandoffCallbacks).toHaveBeenCalledWith("myproject", "bold-ash");
   });
 });

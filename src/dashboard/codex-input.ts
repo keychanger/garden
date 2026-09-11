@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { readRegistry, updateWorkerFieldsIf, type WorkerEntry } from "./registry.js";
 import { codexHome, readCodexInputRequestState, readCodexTurnState } from "./harness/codex-core.js";
+import { dispatchOwedHandoffCallbacks } from "./continue.js";
 import { log } from "./log.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
 
@@ -97,7 +98,10 @@ export function reconcileCodexInputRequests(changedTranscriptPath?: string): boo
     });
     if (!applied) continue;
     changed = true;
-    if (update.to === "idle") triggerProjectPoll(update.project);
+    if (update.to === "idle") {
+      triggerProjectPoll(update.project);
+      dispatchOwedHandoffCallbacks(update.project, update.workerName);
+    }
     log.info("codex-input", update.to === "idle"
       ? "reconciled turn end missed by the Stop hook"
       : "reconciled request_user_input state", {

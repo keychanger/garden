@@ -17,7 +17,9 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { tryGetProject } from "../../config.js";
 import { addAlert, readAlerts } from "../alerts.js";
-import { clearAwaitingInput, clearDoneSentinel, isAwaitingInput, isDoneSet } from "../continue.js";
+import {
+  clearAwaitingInput, clearDoneSentinel, dispatchOwedHandoffCallbacks, isAwaitingInput, isDoneSet,
+} from "../continue.js";
 import { getWorkerBaseBranch } from "../git.js";
 import { findWorkerPaneId, refreshDashboard } from "../header.js";
 import { log } from "../log.js";
@@ -441,6 +443,7 @@ const onTurnEnded: HookMethod = (ctx) => {
   // already written agentStatus="idle". See STATUS.md invariant 2 (review
   // entry) and invariant 4 (merged stickiness).
   routeStopHookEnd(ctx.workerInfo.project, ctx.workerInfo.name);
+  dispatchOwedHandoffCallbacks(ctx.workerInfo.project, ctx.workerInfo.name);
   maybeRefreshUsage(resolveGardenRunner());
   // No Codex usage capture here: the meter is fed role-agnostically from the
   // watchdog tick (codex-usage.ts captureCodexUsageLatest), since the headless
