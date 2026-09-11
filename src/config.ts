@@ -280,52 +280,58 @@ export function beadsStoreError(project: Pick<ProjectConfig, "path" | "beadsDir"
   return null;
 }
 
-function realpathOrSelf(p: string): string {
+function realSandboxPath(p: string): string {
   try {
     return fs.realpathSync(p);
-  } catch {
-    return p;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const parent = path.dirname(p);
+    if (parent === p) throw error;
+    return path.join(realSandboxPath(parent), path.basename(p));
   }
 }
 
 function pathContains(parent: string, child: string): boolean {
-  const rel = path.relative(parent, child);
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+  return child === parent || child.startsWith(`${parent}${path.sep}`);
 }
 
 // Why an operator-supplied sandbox write root is too broad to grant, or null.
-// Checked against both the lexical path and, when it exists, its realpath, so a
-// symlink cannot smuggle in a target the lexical check would refuse.
+// The input is canonical, including symlinks in an existing ancestor of a
+// missing leaf.
 function sandboxWriteRootRefusal(root: string): string | null {
-  const homes = [HOME_DIR, realpathOrSelf(HOME_DIR)];
-  const controls = [CONTROL_DIR, realpathOrSelf(CONTROL_DIR)];
-  for (const candidate of new Set([root, realpathOrSelf(root)])) {
-    const parent = path.dirname(candidate);
-    if (path.dirname(parent) === parent) return "is the filesystem root or a top-level directory";
-    if (homes.some(home => pathContains(candidate, home))) return "contains the home directory";
-    if (controls.some(control => pathContains(candidate, control) || pathContains(control, candidate))) {
-      return `overlaps garden's control plane (${CONTROL_DIR}), which no worker may write`;
-    }
+  const parent = path.dirname(root);
+  if (path.dirname(parent) === parent) return "is the filesystem root or a top-level directory";
+  if (pathContains(root, realSandboxPath(HOME_DIR))) return "contains the home directory";
+  const control = realSandboxPath(CONTROL_DIR);
+  if (pathContains(root, control) || pathContains(control, root)) {
+    return `overlaps garden's control plane (${CONTROL_DIR})`;
   }
   return null;
 }
 
 // The canonical form of a sandbox write root: `~` expanded against HOME,
-// normalized to an absolute path with no trailing slash or `..` segments.
-// Throws when the path is relative or too broad to grant (the filesystem root,
-// a top-level directory, the home directory or any ancestor of it, or garden's
-// control plane). Only the path is inspected, never file contents.
+// normalized to an absolute path with no trailing slash or `..` segments, and
+// symlinks resolved through the nearest existing ancestor. Existing targets
+// must be directories. Throws when the path is relative or too broad to grant
+// (the filesystem root, a top-level directory, the home directory or any
+// ancestor of it, or garden's control plane). Only path metadata is inspected,
+// never file contents.
 export function normalizeSandboxWriteRoot(raw: string): string {
   const expanded = expandHome(raw.trim());
   if (!path.isAbsolute(expanded)) {
-    throw new Error(`sandbox write root must be an absolute or ~/ path, got '${raw}'`);
+    throw new Error(`sandbox write root requires an absolute or ~/ path: '${raw}'`);
   }
   const root = path.resolve(expanded);
-  const refusal = sandboxWriteRootRefusal(root);
-  if (refusal) {
-    throw new Error(`refusing sandbox write root '${raw}' (${root}): it ${refusal}. Grant a narrower directory such as ~/.config/gcloud.`);
+  const canonicalRoot = realSandboxPath(root);
+  const target = fs.statSync(root, { throwIfNoEntry: false });
+  if ((!target && fs.lstatSync(root, { throwIfNoEntry: false })) || (target && !target.isDirectory())) {
+    throw new Error(`sandbox write root is not a directory: ${root}`);
   }
-  return root;
+  const refusal = sandboxWriteRootRefusal(canonicalRoot);
+  if (refusal) {
+    throw new Error(`sandbox write root ${root}: ${refusal}`);
+  }
+  return canonicalRoot;
 }
 
 // The extra write roots a project's worker sandbox grants (Claude Code

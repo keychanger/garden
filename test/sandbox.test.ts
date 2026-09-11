@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
 import { buildSandboxConfig } from "../src/dashboard/sandbox.js";
@@ -83,7 +84,7 @@ describe("buildSandboxConfig", () => {
     const allowWrite = cfg.filesystem.allowWrite;
     expect(allowWrite).toEqual(expect.arrayContaining([
       "~/.npm", "~/.cache", "~/.garden/sessions", "/tmp", "/wt/alpha", "/repo/.beads",
-      path.join(process.env.HOME!, ".config", "gcloud"), "/opt/creds/shared",
+      path.join(fs.realpathSync(process.env.HOME!), ".config", "gcloud"), "/opt/creds/shared",
     ]));
     expect(allowWrite.filter((p) => p === "/opt/creds/shared")).toHaveLength(1);
   });

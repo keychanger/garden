@@ -836,6 +836,8 @@ describe("sandboxWriteRoots project config subcommand", () => {
 
   it("grants no extra roots by default", async () => {
     const { config, loadConfig } = await setup();
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("sandboxWriteRoots")).toBe(true);
     expect(loadConfig().projects.wolf.sandboxWriteRoots).toBeUndefined();
     const listed = await captureLog(() => config(["wolf", "sandboxWriteRoots"]));
     expect(JSON.parse(listed)).toEqual({ sandboxWriteRoots: [] });
@@ -849,7 +851,9 @@ describe("sandboxWriteRoots project config subcommand", () => {
       await config(["wolf", "sandboxWriteRoots", "add", `${gcloud}/`]);
       await config(["wolf", "sandboxWriteRoots", "add", "~/.config/../.config/gcloud"]);
     });
-    expect(loadConfig().projects.wolf.sandboxWriteRoots).toEqual([gcloud]);
+    expect(loadConfig().projects.wolf.sandboxWriteRoots).toEqual([
+      path.join(fs.realpathSync(tmpHome), ".config", "gcloud"),
+    ]);
   });
 
   it("lists roots, shows them in the project config, and removes them by any spelling", async () => {
@@ -860,9 +864,10 @@ describe("sandboxWriteRoots project config subcommand", () => {
       await config(["wolf", "sandboxWriteRoots", "add", "/opt/shared/cache"]);
     });
     const listed = await captureLog(() => config(["wolf", "sandboxWriteRoots", "list"]));
-    expect(JSON.parse(listed)).toEqual({ sandboxWriteRoots: [gcloud, "/opt/shared/cache"] });
+    const canonicalGcloud = path.join(fs.realpathSync(tmpHome), ".config", "gcloud");
+    expect(JSON.parse(listed)).toEqual({ sandboxWriteRoots: [canonicalGcloud, "/opt/shared/cache"] });
     const shown = await captureLog(() => config(["wolf"]));
-    expect(JSON.parse(shown).sandboxWriteRoots).toBe(`${gcloud}, /opt/shared/cache`);
+    expect(JSON.parse(shown).sandboxWriteRoots).toBe(`${canonicalGcloud}, /opt/shared/cache`);
 
     await captureLog(() => config(["wolf", "sandboxWriteRoots", "remove", "~/.config/gcloud/"]));
     expect(loadConfig().projects.wolf.sandboxWriteRoots).toEqual(["/opt/shared/cache"]);
@@ -899,10 +904,48 @@ describe("sandboxWriteRoots project config subcommand", () => {
       .rejects.toThrow(/contains the home directory/);
   });
 
+  it("refuses a missing descendant routed by a symlink into garden's control plane", async () => {
+    const { config } = await setup();
+    const { CONTROL_DIR } = await import("../src/paths.js");
+    fs.mkdirSync(CONTROL_DIR, { recursive: true });
+    const link = path.join(tmpHome, "looks-narrow");
+    fs.symlinkSync(CONTROL_DIR, link);
+    await expect(config(["wolf", "sandboxWriteRoots", "add", path.join(link, "future")]))
+      .rejects.toThrow(/control plane/);
+  });
+
+  it("refuses an existing file because write roots must be directories", async () => {
+    const { config } = await setup();
+    const file = path.join(tmpHome, ".config", "credentials.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "secret");
+    await expect(config(["wolf", "sandboxWriteRoots", "add", file]))
+      .rejects.toThrow(/not a directory/);
+  });
+
+  it("stores the resolved target of a symlink instead of a mutable alias", async () => {
+    const { config, loadConfig } = await setup();
+    const target = path.join(tmpHome, ".config", "gcloud");
+    fs.mkdirSync(target, { recursive: true });
+    const link = path.join(tmpHome, "gcloud-link");
+    fs.symlinkSync(target, link);
+    await captureLog(() => config(["wolf", "sandboxWriteRoots", "add", link]));
+    expect(loadConfig().projects.wolf.sandboxWriteRoots).toEqual([fs.realpathSync(target)]);
+  });
+
+  it("refuses a symlink whose target cannot be resolved", async () => {
+    const { config } = await setup();
+    const link = path.join(tmpHome, "broken-link");
+    fs.symlinkSync(path.join(tmpHome, "missing-target"), link);
+    await expect(config(["wolf", "sandboxWriteRoots", "add", link]))
+      .rejects.toThrow(/not a directory/);
+  });
+
   it("rejects an unknown verb or a missing path with usage", async () => {
     const { config } = await setup();
     await expect(config(["wolf", "sandboxWriteRoots", "add"])).rejects.toThrow(/Usage: garden config/);
     await expect(config(["wolf", "sandboxWriteRoots", "grant", "/opt/x"])).rejects.toThrow(/Usage: garden config/);
+    await expect(config(["wolf", "sandboxWriteRoots", "list", "/opt/x"])).rejects.toThrow(/Usage: garden config/);
   });
 });
 

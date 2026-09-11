@@ -207,7 +207,7 @@ function handleSandboxWriteRootsCommand(
   rootArgs: string[],
 ): void {
   const [verb, root] = rootArgs;
-  if (verb === undefined || verb === "list") {
+  if (verb === undefined || (verb === "list" && rootArgs.length === 1)) {
     const roots = project.sandboxWriteRoots ?? [];
     output({ sandboxWriteRoots: roots }, () => (roots.length > 0 ? roots.join("\n") : "(not set)"));
     return;

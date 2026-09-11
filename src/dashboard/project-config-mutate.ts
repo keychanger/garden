@@ -373,19 +373,26 @@ export function setProjectRoleDim(projectName: string, roleArg: string, roleKey:
   });
 }
 
-// Roots compare in normalized form, so `~/x` and its absolute spelling are one
-// root — including a hand-edited entry stored in the `~` form.
-function sameSandboxWriteRoot(stored: string, root: string): boolean {
-  return path.resolve(expandHome(stored.trim())) === root;
+// Roots compare in lexical and canonical form, so `~/x`, an absolute spelling,
+// and a symlink to the same directory are one root. The lexical arm lets an
+// invalid hand-edited entry remain removable.
+function sameSandboxWriteRoot(stored: string, roots: ReadonlySet<string>): boolean {
+  if (roots.has(path.resolve(expandHome(stored.trim())))) return true;
+  try {
+    return roots.has(normalizeSandboxWriteRoot(stored));
+  } catch {
+    return false;
+  }
 }
 
 export function addSandboxWriteRoot(projectName: string, rawRoot: string): MutateResult {
   const root = normalizeSandboxWriteRoot(rawRoot);
+  const candidates = new Set([root]);
   return mutateConfig(cfg => {
     const project = cfg.projects[projectName];
     if (!project) throw new Error(`Unknown project: ${projectName}`);
     const roots = project.sandboxWriteRoots ?? [];
-    if (roots.some(r => sameSandboxWriteRoot(r, root))) {
+    if (roots.some(r => sameSandboxWriteRoot(r, candidates))) {
       return { message: `${root} is already a sandbox write root for ${projectName}` };
     }
     project.sandboxWriteRoots = [...roots, root];
@@ -401,11 +408,15 @@ export function addSandboxWriteRoot(projectName: string, rawRoot: string): Mutat
 // now refuse (a hand edit) can still be removed.
 export function removeSandboxWriteRoot(projectName: string, rawRoot: string): MutateResult {
   const root = path.resolve(expandHome(rawRoot.trim()));
+  const candidates = new Set([root]);
+  try {
+    candidates.add(normalizeSandboxWriteRoot(rawRoot));
+  } catch { /* invalid hand-edited entries remain removable by lexical spelling */ }
   return mutateConfig(cfg => {
     const project = cfg.projects[projectName];
     if (!project) throw new Error(`Unknown project: ${projectName}`);
     const roots = project.sandboxWriteRoots ?? [];
-    const kept = roots.filter(r => !sameSandboxWriteRoot(r, root));
+    const kept = roots.filter(r => !sameSandboxWriteRoot(r, candidates));
     if (kept.length === roots.length) {
       throw new Error(
         `${root} is not a sandbox write root for ${projectName}. Current: ${roots.length > 0 ? roots.join(", ") : "(none)"}`,
