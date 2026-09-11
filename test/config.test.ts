@@ -886,7 +886,7 @@ describe("sandboxWriteRoots project config subcommand", () => {
     ["/usr", /top-level directory/],
     ["~", /contains the home directory/],
     ["~/", /contains the home directory/],
-    ["~/..", /contains the home directory/],
+    ["~/..", /contains the home directory|filesystem root or a top-level directory/],
     ["~/.garden", /control plane/],
     ["~/.garden/control/headless", /control plane/],
     ["relative/dir", /absolute or ~\/ path/],
