@@ -289,15 +289,15 @@ export function formatRightBar(unread: number, behind?: number | null): string {
 // Those colors are the focused client's. tmux resolves the conditional per
 // client, so a client whose terminal window has lost focus draws a dim grey bar
 // instead — the garden window reads as inactive while you type elsewhere. tmux
-// only learns focus when focus-events is on (setupStatusBar); without it every
-// client stays flagged focused. Commas inside the branches must be escaped as
+// reads focus from client_flags; setupStatusBar enables focus reporting and
+// refreshes the client on focus changes. Commas inside the branches are escaped as
 // `#,` or tmux reads them as the branch separator.
 const UNFOCUSED_BAR_STYLE = "bg=colour236,fg=colour244";
 
 export function statusBarStyle(behind?: number | null): string {
   const focused = behind && behind > 0 ? "bg=yellow,fg=black" : "bg=green,fg=black";
   const escape = (style: string) => style.split(",").join("#,");
-  return `#{?client_focused,${escape(focused)},${escape(UNFOCUSED_BAR_STYLE)}}`;
+  return `#{?#{m:*focused*,#{client_flags}},${escape(focused)},${escape(UNFOCUSED_BAR_STYLE)}}`;
 }
 
 // Set @garden_right and kick the status client so the badge appears/clears

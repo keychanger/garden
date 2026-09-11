@@ -355,6 +355,14 @@ describe("setupStatusBar", () => {
     expect(calls).toContainEqual(["set-option", "-s", "focus-events", "on"]);
   });
 
+  it("refreshes only the client whose focus changed", () => {
+    setupStatusBar("garden");
+    for (const event of ["client-focus-in", "client-focus-out"]) {
+      expect(tmux).toHaveBeenCalledWith("set-hook", "-t", "garden-dashboard", event,
+        "refresh-client -S");
+    }
+  });
+
   it("sets status-interval to 30 seconds", () => {
     setupStatusBar("garden");
     const calls = vi.mocked(tmux).mock.calls;

@@ -51,7 +51,7 @@ export function setupStatusBar(_gardenRunner: string): void {
   const mainWindow = `${DASHBOARD_SESSION}:main`;
   const opts: Array<[string[], string]> = [
     // Server option: without it tmux never hears the terminal's focus in/out,
-    // so statusBarStyle's client_focused branch could not dim the bar.
+    // so statusBarStyle's focus branch could not dim the bar.
     [["-s", "focus-events", "on"], "focus-events"],
     // Session options
     [["-t", target, "mouse", "on"], "mouse"],
@@ -87,6 +87,11 @@ export function setupStatusBar(_gardenRunner: string): void {
   ];
   for (const [args] of opts) {
     try { tmux("set-option", ...args); } catch { /* ignore */ }
+  }
+  for (const event of ["client-focus-in", "client-focus-out"]) {
+    try {
+      tmux("set-hook", "-t", target, event, "refresh-client -S");
+    } catch { /* ignore */ }
   }
 }
 
