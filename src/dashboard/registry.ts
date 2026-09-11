@@ -758,10 +758,10 @@ function withRegistryLock<T>(fn: () => T): T {
 // Shape guard for parsed registry. Top-level must be an object with a
 // `workers` field that maps project names to arrays. Per-entry validation
 // requires `name` to be a string, type-checks the guarded scalar fields when
-// present, and separately validates the bounded bead id and ciNoRuns stamp;
-// remaining WorkerEntry fields are optional and untyped here, and absence is
-// always legal (legacy entries from earlier garden versions don't carry
-// baseBranch, workflow, etc.). A failed check signals hand-edit
+// present, and separately validates the callback queue, bounded bead id, and
+// ciNoRuns stamp; remaining WorkerEntry fields are optional and untyped here,
+// and absence is always legal (legacy entries from earlier garden versions
+// don't carry baseBranch, workflow, etc.). A failed check signals hand-edit
 // corruption, a forged entry, or a half-write that escaped atomic-rename;
 // fall back to empty rather than feed junk into the poller.
 //
@@ -795,6 +795,11 @@ function isWorkerRegistry(x: unknown): x is WorkerRegistry {
       }
       for (const field of GUARDED_NUMBER_FIELDS) {
         if (entry[field] !== undefined && typeof entry[field] !== "number") return false;
+      }
+      if (entry.pendingHandoffCallbacks !== undefined
+          && (!Array.isArray(entry.pendingHandoffCallbacks)
+            || !entry.pendingHandoffCallbacks.every(callback => typeof callback === "string"))) {
+        return false;
       }
       if (entry.bead !== undefined
           && (typeof entry.bead !== "string"

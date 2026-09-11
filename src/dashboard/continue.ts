@@ -493,11 +493,22 @@ export function notifyHandoffCallback(opts: {
 // when nothing remains owed. Only the callbacks actually pasted are cleared: one
 // recorded while this paste was in flight stays owed for the next turn end.
 export function deliverHandoffCallbacks(projectName: string, workerName: string): boolean {
-  const owed = findWorkerByName(projectName, workerName)?.pendingHandoffCallbacks ?? [];
+  const entry = findWorkerByName(projectName, workerName);
+  const owed = entry?.pendingHandoffCallbacks ?? [];
   if (owed.length === 0) return true;
   const text = [...owed, HANDOFF_CALLBACK_FOOTER].join("\n\n");
   if (!continueWorker(projectName, workerName, text, "handoff-callback")) {
     log.info("workers", "handoff callback owed, parent not ready", {
+      worker: workerName,
+      data: { project: projectName, owed: owed.length },
+    });
+    return false;
+  }
+  // continueWorker also returns true when it only re-submits a PREVIOUS
+  // garden paste whose Enter was eaten. In that case it leaves continueSentAt
+  // unchanged, and this callback was not pasted at all, so it must stay owed.
+  if (findWorkerByName(projectName, workerName)?.continueSentAt === entry?.continueSentAt) {
+    log.info("workers", "handoff callback still owed after re-submitting prior paste", {
       worker: workerName,
       data: { project: projectName, owed: owed.length },
     });

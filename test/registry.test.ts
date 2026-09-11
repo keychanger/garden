@@ -77,6 +77,8 @@ describe("readRegistry", () => {
       { name: "w", titleGeneratedAt: "recent" },
       { name: "w", blockedQuestion: ["forged"] },
       { name: "w", blockedAt: "recent" },
+      { name: "w", pendingHandoffCallbacks: "forged" },
+      { name: "w", pendingHandoffCallbacks: ["valid", 42] },
     ]) {
       fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [bad] } }));
       expect(readRegistry()).toEqual({ workers: {} });
@@ -95,6 +97,7 @@ describe("readRegistry", () => {
         titleGeneratedAt: 789,
         blockedQuestion: "Which shape?",
         blockedAt: 999,
+        pendingHandoffCallbacks: ["child settled"],
       }] },
     }));
     expect(readRegistry().workers.proj[0]).toMatchObject({
@@ -105,6 +108,7 @@ describe("readRegistry", () => {
       titleGeneratedAt: 789,
       blockedQuestion: "Which shape?",
       blockedAt: 999,
+      pendingHandoffCallbacks: ["child settled"],
     });
   });
 });

@@ -129,6 +129,26 @@ describe("handoff callback delivery", () => {
     expect(await pastedMessages()).toHaveLength(1);
   });
 
+  it("keeps the callback owed when delivery only re-submits an older stuck paste", async () => {
+    await seedParent("idle");
+    const { updateWorkerFields, findWorkerByName } = await import("../src/dashboard/registry.js");
+    const { capturePaneText, pasteAndSubmit, pressEnter } = await import("../src/dashboard/tmux.js");
+    const { notifyHandoffCallback, deliverHandoffCallbacks } = await import("../src/dashboard/continue.js");
+    updateWorkerFields("fox", "calm-bay", { continueSentAt: 123 });
+    vi.mocked(capturePaneText).mockReturnValue("❯ [garden] An older prompt is still unsent");
+
+    notifyHandoffCallback(CHILD);
+
+    expect(pressEnter).toHaveBeenCalledWith("%5");
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    expect(findWorkerByName("fox", "calm-bay")?.pendingHandoffCallbacks).toHaveLength(1);
+
+    vi.mocked(capturePaneText).mockReturnValue("");
+    expect(deliverHandoffCallbacks("fox", "calm-bay")).toBe(true);
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    expect(findWorkerByName("fox", "calm-bay")?.pendingHandoffCallbacks).toBeUndefined();
+  });
+
   it("keeps the callback owed while the parent is mid-turn and delivers it once the parent is idle", async () => {
     await seedParent("working");
     const { notifyHandoffCallback, deliverHandoffCallbacks } = await import("../src/dashboard/continue.js");
