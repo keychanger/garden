@@ -4,7 +4,7 @@ import path from "node:path";
 import yaml from "js-yaml";
 import { atomicWriteFile } from "./dashboard/atomic-write.js";
 import { withFileLock } from "./dashboard/file-lock.js";
-import { CONFIG_PATH, HOME_DIR } from "./paths.js";
+import { CONFIG_PATH, CONTROL_DIR, HOME_DIR } from "./paths.js";
 import {
   ASSIGNABLE_LOG_COLOR_KEYS,
   RESERVED_LOG_COLOR_KEY,
@@ -43,6 +43,13 @@ export interface ProjectConfig {
   // authenticates in a sandboxed worktree carrying this config. Requires Claude
   // Code >= 2.1.187. claude-code workers only (Codex has no per-path read-deny).
   sandboxDenyCredentials?: boolean;
+  // Extra filesystem roots every worker sandbox may write, beyond garden's
+  // defaults and the per-project git/beads roots — Claude Code allowWrite and
+  // Codex writable_roots alike. The motivating case is ~/.config/gcloud, so
+  // gcloud can refresh credentials inside the sandbox. Stored normalized
+  // (normalizeSandboxWriteRoot); applied to newly created or bounced workers.
+  // Absent = no extra roots: garden never grants a credential path by default.
+  sandboxWriteRoots?: string[];
   claudeProfile?: string;
   // Model provider for this project's WORKERS (see docs/MULTI-MODEL.md
   // "Layer 1"). Names an entry in GardenConfig.providers. Reviewer,
@@ -223,7 +230,7 @@ export const DEFAULT_HOLISTIC_REVIEW = "fix";
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials",
-  "claudeProfile", "provider",
+  "sandboxWriteRoots", "claudeProfile", "provider",
   "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
   "beadIntake", "beadIntakeCap", "beadsDir",
@@ -271,6 +278,63 @@ export function beadsStoreError(project: Pick<ProjectConfig, "path" | "beadsDir"
     return `configured beadsDir is not a directory: ${project.beadsDir}`;
   }
   return null;
+}
+
+function realpathOrSelf(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+function pathContains(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
+}
+
+// Why an operator-supplied sandbox write root is too broad to grant, or null.
+// Checked against both the lexical path and, when it exists, its realpath, so a
+// symlink cannot smuggle in a target the lexical check would refuse.
+function sandboxWriteRootRefusal(root: string): string | null {
+  const homes = [HOME_DIR, realpathOrSelf(HOME_DIR)];
+  const controls = [CONTROL_DIR, realpathOrSelf(CONTROL_DIR)];
+  for (const candidate of new Set([root, realpathOrSelf(root)])) {
+    const parent = path.dirname(candidate);
+    if (path.dirname(parent) === parent) return "is the filesystem root or a top-level directory";
+    if (homes.some(home => pathContains(candidate, home))) return "contains the home directory";
+    if (controls.some(control => pathContains(candidate, control) || pathContains(control, candidate))) {
+      return `overlaps garden's control plane (${CONTROL_DIR}), which no worker may write`;
+    }
+  }
+  return null;
+}
+
+// The canonical form of a sandbox write root: `~` expanded against HOME,
+// normalized to an absolute path with no trailing slash or `..` segments.
+// Throws when the path is relative or too broad to grant (the filesystem root,
+// a top-level directory, the home directory or any ancestor of it, or garden's
+// control plane). Only the path is inspected, never file contents.
+export function normalizeSandboxWriteRoot(raw: string): string {
+  const expanded = expandHome(raw.trim());
+  if (!path.isAbsolute(expanded)) {
+    throw new Error(`sandbox write root must be an absolute or ~/ path, got '${raw}'`);
+  }
+  const root = path.resolve(expanded);
+  const refusal = sandboxWriteRootRefusal(root);
+  if (refusal) {
+    throw new Error(`refusing sandbox write root '${raw}' (${root}): it ${refusal}. Grant a narrower directory such as ~/.config/gcloud.`);
+  }
+  return root;
+}
+
+// The extra write roots a project's worker sandbox grants (Claude Code
+// allowWrite and Codex writable_roots alike). Every entry is re-validated at
+// launch, so a hand-edited config.yml cannot widen the sandbox past what
+// `garden config <p> sandboxWriteRoots add` would accept: an invalid entry
+// refuses the launch rather than being granted.
+export function resolveSandboxWriteRoots(project: Pick<ProjectConfig, "sandboxWriteRoots">): string[] {
+  return [...new Set((project.sandboxWriteRoots ?? []).map(normalizeSandboxWriteRoot))];
 }
 
 export interface PlotConfig {

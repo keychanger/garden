@@ -17,7 +17,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveBeadsDir } from "../../config.js";
+import { resolveBeadsDir, resolveSandboxWriteRoots } from "../../config.js";
 import { promptTurn, readTurnsFromTail, summarizeTurn } from "../conversation.js";
 import type { ToolUse, Turn } from "../conversation.js";
 import type { WorkerEntry } from "../registry.js";
@@ -125,7 +125,8 @@ function codexSandboxFlags(
   ];
   if (project.beadIntake) writableRoots.push(resolveBeadsDir(project));
   if (worktreeGitDir) writableRoots.push(worktreeGitDir);
-  const rootsToml = `sandbox_workspace_write.writable_roots=[${writableRoots.map(r => JSON.stringify(r)).join(", ")}]`;
+  writableRoots.push(...resolveSandboxWriteRoots(project));
+  const rootsToml = `sandbox_workspace_write.writable_roots=[${[...new Set(writableRoots)].map(r => JSON.stringify(r)).join(", ")}]`;
   return "-s workspace-write -a never"
     + ` -c ${shellEscape("sandbox_workspace_write.network_access=true")}`
     + ` -c ${shellEscape(rootsToml)}`;

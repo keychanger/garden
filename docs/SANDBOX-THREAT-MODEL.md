@@ -36,8 +36,10 @@ reads or runs.
 
 - **Write confinement.** `buildSandboxConfig` (`src/dashboard/sandbox.ts`) grants a
   worker write access only to its worktree, standard subprocess caches (`~/.npm`,
-  `~/.cache`, `/tmp`), and `~/.garden/sessions`. Everything else is read-only or denied
-  at the kernel.
+  `~/.cache`, `/tmp`), and `~/.garden/sessions`, plus any directories the operator lists
+  in the project's `sandboxWriteRoots` (none by default; `/`, top-level directories, the
+  home directory, and garden's control plane are refused). Everything else is read-only
+  or denied at the kernel.
 - **Egress allowlist.** Network is restricted to Anthropic, GitHub, npm, the project's
   git remote host, and any per-project `sandboxDomains`. A worker cannot POST to an
   arbitrary host. (Codex is the exception — see residuals.)

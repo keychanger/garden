@@ -9,10 +9,12 @@
 // CLI prints them, the menu shows the primary via tmuxDisplay. Validation
 // `throw`s stay here so both surfaces share them. Behavior is byte-identical to
 // the pre-extraction CLI (guarded by a config-output test).
+import fs from "node:fs";
 import path from "node:path";
 import {
   mutateConfig, beadsStoreError, DEFAULT_HOLISTIC_REVIEW, REVIEW_EFFORT_LEVELS,
-  isValidReviewEffort, type GardenConfig, type ResolvedProvider,
+  isValidReviewEffort, expandHome, normalizeSandboxWriteRoot,
+  type GardenConfig, type ResolvedProvider,
 } from "../config.js";
 import { syncProviderTokenToVault } from "./claude-env.js";
 import {
@@ -368,5 +370,49 @@ export function setProjectRoleDim(projectName: string, roleArg: string, roleKey:
       }
     }
     return result(message, notes);
+  });
+}
+
+// Roots compare in normalized form, so `~/x` and its absolute spelling are one
+// root — including a hand-edited entry stored in the `~` form.
+function sameSandboxWriteRoot(stored: string, root: string): boolean {
+  return path.resolve(expandHome(stored.trim())) === root;
+}
+
+export function addSandboxWriteRoot(projectName: string, rawRoot: string): MutateResult {
+  const root = normalizeSandboxWriteRoot(rawRoot);
+  return mutateConfig(cfg => {
+    const project = cfg.projects[projectName];
+    if (!project) throw new Error(`Unknown project: ${projectName}`);
+    const roots = project.sandboxWriteRoots ?? [];
+    if (roots.some(r => sameSandboxWriteRoot(r, root))) {
+      return { message: `${root} is already a sandbox write root for ${projectName}` };
+    }
+    project.sandboxWriteRoots = [...roots, root];
+    const notes = fs.existsSync(root) ? [] : [`  note: ${root} does not exist yet.`];
+    return result(
+      `Added sandbox write root ${root} for ${projectName} (applies to newly created or bounced workers)`,
+      notes,
+    );
+  });
+}
+
+// Removal validates nothing beyond expansion, so an entry the add path would
+// now refuse (a hand edit) can still be removed.
+export function removeSandboxWriteRoot(projectName: string, rawRoot: string): MutateResult {
+  const root = path.resolve(expandHome(rawRoot.trim()));
+  return mutateConfig(cfg => {
+    const project = cfg.projects[projectName];
+    if (!project) throw new Error(`Unknown project: ${projectName}`);
+    const roots = project.sandboxWriteRoots ?? [];
+    const kept = roots.filter(r => !sameSandboxWriteRoot(r, root));
+    if (kept.length === roots.length) {
+      throw new Error(
+        `${root} is not a sandbox write root for ${projectName}. Current: ${roots.length > 0 ? roots.join(", ") : "(none)"}`,
+      );
+    }
+    if (kept.length > 0) project.sandboxWriteRoots = kept;
+    else delete project.sandboxWriteRoots;
+    return { message: `Removed sandbox write root ${root} for ${projectName} (applies to newly created or bounced workers)` };
   });
 }

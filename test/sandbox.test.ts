@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, it, expect } from "vitest";
 import { buildSandboxConfig } from "../src/dashboard/sandbox.js";
 
@@ -58,6 +59,43 @@ describe("buildSandboxConfig", () => {
     });
     expect(shared.filesystem.allowWrite).toContain("/board/.beads");
     expect(shared.filesystem.allowWrite).not.toContain("/repo/.beads");
+  });
+
+  it("grants no extra write roots unless the project configures them", () => {
+    const cfg = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo" },
+      remoteHost: null,
+    });
+    expect(cfg.filesystem.allowWrite.some((p) => p.includes("gcloud"))).toBe(false);
+  });
+
+  it("adds configured sandboxWriteRoots alongside the defaults and project roots", () => {
+    const cfg = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: {
+        path: "/repo",
+        beadIntake: true,
+        sandboxWriteRoots: ["~/.config/gcloud", "/opt/creds/shared/", "/opt/creds/shared"],
+      },
+      remoteHost: null,
+    });
+    const allowWrite = cfg.filesystem.allowWrite;
+    expect(allowWrite).toEqual(expect.arrayContaining([
+      "~/.npm", "~/.cache", "~/.garden/sessions", "/tmp", "/wt/alpha", "/repo/.beads",
+      path.join(process.env.HOME!, ".config", "gcloud"), "/opt/creds/shared",
+    ]));
+    expect(allowWrite.filter((p) => p === "/opt/creds/shared")).toHaveLength(1);
+  });
+
+  // A hand-edited config.yml must not widen the sandbox past what the CLI
+  // accepts: the launch refuses rather than granting the home directory.
+  it("refuses a configured root that is too broad", () => {
+    expect(() => buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo", sandboxWriteRoots: ["~"] },
+      remoteHost: null,
+    })).toThrow(/contains the home directory/);
   });
 
   it("includes Anthropic, github, and npm in default domains", () => {

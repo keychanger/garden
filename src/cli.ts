@@ -91,6 +91,11 @@ Projects:
                                  effort levels for either harness: low|medium|high|xhigh|max
                                  e.g. 'config <p> role reviewer harness codex' for a Codex reviewer
   config <project> crew [<name>] Bind the project to a crew ('none' unbinds). See 'garden crew'.
+  config <project> sandboxWriteRoots [list | add <path> | remove <path>]
+                                 Extra directories every worker sandbox may write (Claude Code
+                                 allowWrite + Codex writable_roots), e.g. ~/.config/gcloud.
+                                 Applies to newly created or bounced workers. None by default;
+                                 /, top-level dirs, and the home directory are refused.
   crew [list|show|add|edit|remove|apply]
                                  Manage crews: who designs, who builds, who reviews, and how strong.
                                  Builtin names are <worker>-<reviewer> (all-X sugar): all-claude,

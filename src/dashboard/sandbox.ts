@@ -1,4 +1,6 @@
-import { tryResolveProvider, resolveBeadsDir, type ProjectConfig } from "../config.js";
+import {
+  tryResolveProvider, resolveBeadsDir, resolveSandboxWriteRoots, type ProjectConfig,
+} from "../config.js";
 
 export interface SandboxConfig {
   enabled: true;
@@ -103,6 +105,8 @@ export function buildSandboxConfig(opts: {
   if (opts.project.beadIntake) {
     allowWrite.add(resolveBeadsDir(opts.project));
   }
+
+  for (const root of resolveSandboxWriteRoots(opts.project)) allowWrite.add(root);
 
   const sandbox: SandboxConfig = {
     enabled: true,

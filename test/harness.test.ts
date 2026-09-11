@@ -437,6 +437,24 @@ describe("codex adapter dialect", () => {
     expect(withoutGit).not.toContain("/.git\"");
   });
 
+  it("adds the project's configured sandboxWriteRoots to fresh and resumed launches", async () => {
+    const { getHarnessCore } = await importCore();
+    const runtimeProject = { path: "/repo", sandboxWriteRoots: ["/opt/creds/gcloud"] };
+    const fresh = getHarnessCore("codex").buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", { runtimeProject }),
+      worktreeGitDir: "/Users/x/proj/.git",
+    });
+    // Appended after the defaults and the git common dir, which stay granted.
+    expect(fresh).toContain('/.garden/sessions", "/Users/x/proj/.git", "/opt/creds/gcloud"]');
+    // A bounce resumes through the same renderer, so the grant survives it.
+    const resumed = getHarnessCore("codex").buildAgentCommand({
+      sessionId: "019f-abc", resume: true, contextFile: "/ignored",
+      launchPlan: workerPlan("codex", { runtimeProject }),
+    });
+    expect(resumed).toContain('"/opt/creds/gcloud"]');
+  });
+
   it("adds the resolved beads store to an intake worker's sandbox", async () => {
     const { getHarnessCore } = await importCore();
     const codex = getHarnessCore("codex");

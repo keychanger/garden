@@ -814,6 +814,98 @@ describe("sandboxDenyCredentials project config key", () => {
   });
 });
 
+describe("sandboxWriteRoots project config subcommand", () => {
+  async function setup() {
+    const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { wolf: { path: "/tmp/wolf" } } });
+    return { config, loadConfig };
+  }
+
+  async function captureLog(fn: () => Promise<void>): Promise<string> {
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m?: unknown) => { lines.push(String(m)); });
+    try {
+      await fn();
+    } finally {
+      spy.mockRestore();
+    }
+    return lines.join("\n");
+  }
+
+  it("grants no extra roots by default", async () => {
+    const { config, loadConfig } = await setup();
+    expect(loadConfig().projects.wolf.sandboxWriteRoots).toBeUndefined();
+    const listed = await captureLog(() => config(["wolf", "sandboxWriteRoots"]));
+    expect(JSON.parse(listed)).toEqual({ sandboxWriteRoots: [] });
+  });
+
+  it("stores a ~/ root expanded and normalized, deduping other spellings of it", async () => {
+    const { config, loadConfig } = await setup();
+    const gcloud = path.join(tmpHome, ".config", "gcloud");
+    await captureLog(async () => {
+      await config(["wolf", "sandboxWriteRoots", "add", "~/.config/gcloud"]);
+      await config(["wolf", "sandboxWriteRoots", "add", `${gcloud}/`]);
+      await config(["wolf", "sandboxWriteRoots", "add", "~/.config/../.config/gcloud"]);
+    });
+    expect(loadConfig().projects.wolf.sandboxWriteRoots).toEqual([gcloud]);
+  });
+
+  it("lists roots, shows them in the project config, and removes them by any spelling", async () => {
+    const { config, loadConfig } = await setup();
+    const gcloud = path.join(tmpHome, ".config", "gcloud");
+    await captureLog(async () => {
+      await config(["wolf", "sandboxWriteRoots", "add", "~/.config/gcloud"]);
+      await config(["wolf", "sandboxWriteRoots", "add", "/opt/shared/cache"]);
+    });
+    const listed = await captureLog(() => config(["wolf", "sandboxWriteRoots", "list"]));
+    expect(JSON.parse(listed)).toEqual({ sandboxWriteRoots: [gcloud, "/opt/shared/cache"] });
+    const shown = await captureLog(() => config(["wolf"]));
+    expect(JSON.parse(shown).sandboxWriteRoots).toBe(`${gcloud}, /opt/shared/cache`);
+
+    await captureLog(() => config(["wolf", "sandboxWriteRoots", "remove", "~/.config/gcloud/"]));
+    expect(loadConfig().projects.wolf.sandboxWriteRoots).toEqual(["/opt/shared/cache"]);
+    await captureLog(() => config(["wolf", "sandboxWriteRoots", "remove", "/opt/shared/cache"]));
+    expect(loadConfig().projects.wolf.sandboxWriteRoots).toBeUndefined();
+  });
+
+  it("refuses to remove a root that is not configured", async () => {
+    const { config } = await setup();
+    await expect(config(["wolf", "sandboxWriteRoots", "remove", "/opt/nothing"]))
+      .rejects.toThrow(/is not a sandbox write root for wolf/);
+  });
+
+  it.each([
+    ["/", /filesystem root or a top-level directory/],
+    ["/usr", /top-level directory/],
+    ["~", /contains the home directory/],
+    ["~/", /contains the home directory/],
+    ["~/..", /contains the home directory/],
+    ["~/.garden", /control plane/],
+    ["~/.garden/control/headless", /control plane/],
+    ["relative/dir", /absolute or ~\/ path/],
+  ])("refuses the too-broad or ambiguous root %s", async (root, reason) => {
+    const { config, loadConfig } = await setup();
+    await expect(config(["wolf", "sandboxWriteRoots", "add", root])).rejects.toThrow(reason);
+    expect(loadConfig().projects.wolf.sandboxWriteRoots).toBeUndefined();
+  });
+
+  it("refuses a symlink whose target is the home directory", async () => {
+    const { config } = await setup();
+    const link = path.join(tmpHome, "looks-narrow");
+    fs.symlinkSync(tmpHome, link);
+    await expect(config(["wolf", "sandboxWriteRoots", "add", link]))
+      .rejects.toThrow(/contains the home directory/);
+  });
+
+  it("rejects an unknown verb or a missing path with usage", async () => {
+    const { config } = await setup();
+    await expect(config(["wolf", "sandboxWriteRoots", "add"])).rejects.toThrow(/Usage: garden config/);
+    await expect(config(["wolf", "sandboxWriteRoots", "grant", "/opt/x"])).rejects.toThrow(/Usage: garden config/);
+  });
+});
+
 describe("bead intake project config keys", () => {
   async function setup() {
     const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();

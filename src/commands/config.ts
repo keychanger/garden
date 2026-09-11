@@ -5,7 +5,7 @@ import { loadConfig, resolveProject, isValidConfigKey, type ProjectConfig } from
 import { resolveReviewRole, type ReviewRole } from "../dashboard/roles.js";
 import { listCrews, getCrew, applyCrew, clearCrew, crewOverridden, deriveCrew } from "../dashboard/crew.js";
 import {
-  setProjectConfigKey, setProjectRoleDim,
+  setProjectConfigKey, setProjectRoleDim, addSandboxWriteRoot, removeSandboxWriteRoot,
   SETTABLE_KEYS, type SettableKey, REVIEW_ROLE_KEYS, ROLE_DIMS, type RoleDim,
 } from "../dashboard/project-config-mutate.js";
 import { output } from "../output.js";
@@ -39,6 +39,13 @@ export async function config(args: string[]): Promise<void> {
   // available when no name is given.
   if (key === "crew") {
     handleCrewCommand(project, args[2]);
+    return;
+  }
+
+  // `garden config <p> sandboxWriteRoots [list | add <path> | remove <path>]`
+  // — a list, so it takes verbs rather than the flat key's single value.
+  if (key === "sandboxWriteRoots") {
+    handleSandboxWriteRootsCommand(project, args.slice(2));
     return;
   }
 
@@ -106,6 +113,9 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
     } else if (project[key]) {
       data[key] = project[key]!;
     }
+  }
+  if (project.sandboxWriteRoots && project.sandboxWriteRoots.length > 0) {
+    data.sandboxWriteRoots = project.sandboxWriteRoots.join(", ");
   }
 
   output(data, (d) => {
@@ -190,6 +200,26 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   } else {
     output({ [key]: null }, () => `(not set)`);
   }
+}
+
+function handleSandboxWriteRootsCommand(
+  project: ProjectConfig & { name: string },
+  rootArgs: string[],
+): void {
+  const [verb, root] = rootArgs;
+  if (verb === undefined || verb === "list") {
+    const roots = project.sandboxWriteRoots ?? [];
+    output({ sandboxWriteRoots: roots }, () => (roots.length > 0 ? roots.join("\n") : "(not set)"));
+    return;
+  }
+  if ((verb !== "add" && verb !== "remove") || !root || rootArgs.length > 2) {
+    throw new Error("Usage: garden config <project> sandboxWriteRoots [list | add <path> | remove <path>]");
+  }
+  const r = verb === "add"
+    ? addSandboxWriteRoot(project.name, root)
+    : removeSandboxWriteRoot(project.name, root);
+  console.log(r.message);
+  r.notes?.forEach((n) => console.log(n));
 }
 
 // Bind a project to a named crew. Shared by `garden config <p> crew <name>`

@@ -47,6 +47,7 @@ vi.mock("../src/config.js", () => {
     // own .beads (beadsEnvExports tests assert the generated exports).
     resolveBeadsDir: vi.fn((p: { path: string; beadsDir?: string }) =>
       p.beadsDir ?? `${p.path}/.beads`),
+    resolveSandboxWriteRoots: vi.fn((p: { sandboxWriteRoots?: string[] }) => p.sandboxWriteRoots ?? []),
     ENV_VAR_NAME_RE: /^[A-Z_][A-Z0-9_]*$/,
     getFocusedProjectNames: vi.fn(() => ["myproject"]),
     SESSIONS_DIR: "/tmp/fake-sessions",
