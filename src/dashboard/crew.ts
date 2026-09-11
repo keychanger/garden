@@ -110,7 +110,7 @@ export function reviewerMembers(config: GardenConfig): CrewMember[] {
 // their model vocabulary is the provider's own modelMap.
 const SEAT_MODELS: Record<string, { strong: string; middle: string }> = {
   "claude-code": { strong: "fable", middle: "opus" },
-  codex: { strong: "gpt-6-astra", middle: "gpt-6-astra" },
+  codex: { strong: DEFAULT_CODEX_MODEL, middle: DEFAULT_CODEX_MODEL },
 };
 
 function seat(member: CrewMember, tier: "strong" | "middle"): CrewMember {

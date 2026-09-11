@@ -137,7 +137,7 @@ function codexSandboxFlags(
 // context reading is the addition, and because the key replaces the list
 // wholesale rather than extending it, the defaults are restated here. Verified
 // against codex 0.152.0, which renders it as
-// `gpt-5.6-sol high · Context 100% left · /private/tmp`.
+// `gpt-6-astra high · Context 100% left · /private/tmp`.
 const CODEX_STATUS_LINE_ITEMS = ["model-with-reasoning", "context-remaining", "current-dir"];
 
 function codexStatusLineFlag(): string {

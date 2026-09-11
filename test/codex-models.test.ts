@@ -28,6 +28,10 @@ afterAll(() => {
 });
 
 describe("codexModels", () => {
+  it("keeps Garden's Codex default first in the fallback catalog", () => {
+    expect(CODEX_FALLBACK_MODELS[0]).toBe("gpt-6-astra");
+  });
+
   it("returns visible slugs in Codex's own priority order", () => {
     writeCatalog({
       models: [
