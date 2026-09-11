@@ -47,9 +47,9 @@ describe("garden crew add/edit", () => {
     // from what the builtin actually runs.
     await crew(["add", "from-builtin", "--from", "all-codex"]);
     expect(loadConfig().crews?.["from-builtin"]).toEqual({
-      designer: { member: "codex", model: "gpt-5.6-sol" },
-      worker: { member: "codex", model: "gpt-5.6-sol" },
-      review: { member: "codex", model: "gpt-5.6-sol" },
+      designer: { member: "codex", model: "gpt-6-astra" },
+      worker: { member: "codex", model: "gpt-6-astra" },
+      review: { member: "codex", model: "gpt-6-astra" },
     });
   });
 
@@ -131,9 +131,9 @@ describe("garden crew add/edit", () => {
     const { crew, loadConfig } = await setup();
     await crew(["edit", "all-codex", "--model", "opus"]);
     expect(loadConfig().crews?.["all-codex"]).toEqual({
-      designer: { member: "codex", model: "gpt-5.6-sol" },
+      designer: { member: "codex", model: "gpt-6-astra" },
       worker: { member: "codex", model: "opus" },
-      review: { member: "codex", model: "gpt-5.6-sol" },
+      review: { member: "codex", model: "gpt-6-astra" },
     });
     const { getCrew } = await import("../src/dashboard/crew.js");
     expect(getCrew("all-codex", loadConfig())!.builtin).toBe(false);

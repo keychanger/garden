@@ -34,7 +34,7 @@ export interface WorkerLaunchPlanInput {
   effort?: string;
 }
 
-export const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
+export const DEFAULT_CODEX_MODEL = "gpt-6-astra";
 export const DEFAULT_CODEX_EFFORT = "high";
 
 function harnessTuning(harness: string, model?: string, effort?: string): {

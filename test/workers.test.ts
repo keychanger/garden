@@ -867,7 +867,7 @@ describe("newWorker", () => {
     newWorker({ workflow: "designer", crew: "codex-claude" });
     const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
     expect(entry.harness).toBe("codex");
-    expect(entry.model).toBe("gpt-5.6-sol");
+    expect(entry.model).toBe("gpt-6-astra");
     expect(entry.effort).toBe("xhigh");
   });
 
@@ -1426,7 +1426,7 @@ describe("newWorker", () => {
     expect(call[7]).toEqual(expect.objectContaining({
       launchPlan: expect.objectContaining({
         harness: "codex",
-        model: "gpt-5.6-sol",
+        model: "gpt-6-astra",
         effort: "high",
       }),
     }));
@@ -1436,7 +1436,7 @@ describe("newWorker", () => {
     // The tuning default is the FLOOR, not an override — it fills the gap only
     // when nothing more specific resolved above it. Guards the direction of the
     // fallback: swapping the operands would leave the default case above green
-    // while silently pinning every codex worker to gpt-5.6-sol/high.
+    // while silently pinning every codex worker to gpt-6-astra/high.
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker({ harness: "codex", model: "gpt-5.1-codex", effort: "low" });
     const call = vi.mocked(buildWorktreeBootstrapScript).mock.calls[0];

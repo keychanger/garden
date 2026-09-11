@@ -190,10 +190,10 @@ describe("sweepWorkerModels", () => {
   });
 
   it("compares an otherwise-unpinned Codex worker against Garden's launch default", () => {
-    workers.wolf = [worker({ transcriptPath: rollout("unpinned", ["gpt-6-astra"]) })];
+    workers.wolf = [worker({ transcriptPath: rollout("unpinned", ["gpt-5.6-sol"]) })];
 
     expect(sweepWorkerModels({ workers } as never)).toBe(1);
-    expect(workers.wolf[0].runningModel).toBe("gpt-6-astra");
+    expect(workers.wolf[0].runningModel).toBe("gpt-5.6-sol");
     expect(hasModelDrift(workers.wolf[0])).toBe(true);
   });
 

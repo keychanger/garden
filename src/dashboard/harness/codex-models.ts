@@ -21,8 +21,8 @@ import path from "node:path";
 import { codexHome } from "./codex-core.js";
 
 // Used when the cache is missing or unreadable. Verified present in the
-// catalog of codex-cli 0.144.5 (2026-07-20).
-export const CODEX_FALLBACK_MODELS = ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"];
+// catalog of codex-cli 0.154.0 (2026-09-11).
+export const CODEX_FALLBACK_MODELS = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"];
 
 // Codex's reasoning rungs (`model_reasoning_effort`). A superset of garden's
 // claude-code ladder — it shares low/medium/high/xhigh and adds "max" and

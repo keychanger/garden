@@ -42,7 +42,7 @@ describe("resolveReviewRole", () => {
     const r = resolveReviewRole(
       project({ roles: { reviewer: { harness: "codex" } } }), "default", "reviewer");
     expect(r.harness).toBe("codex");
-    expect(r.model).toBe("gpt-5.6-sol");
+    expect(r.model).toBe("gpt-6-astra");
     expect(r.effort).toBe("high");
     // Codex authenticates itself; it never gets the Anthropic env prefix.
     expect(r.envPrefix).toBe("");
@@ -89,7 +89,7 @@ describe("resolveReviewRole", () => {
     const r = resolveReviewRole(
       project({ roles: { reviewer: { harness: "codex" } } }), "trellis", "reviewer");
     expect(r.harness).toBe("codex");
-    expect(r.model).toBe("gpt-5.6-sol");
+    expect(r.model).toBe("gpt-6-astra");
     expect(r.effort).toBe("high");
   });
 
@@ -207,7 +207,7 @@ describe("resolveReviewRole", () => {
     const { resolveReviewRole } = await importRoles();
     const unpinned = resolveReviewRole(project({ crew: "c" }), "default", "reviewer",
       withCrews({ c: { worker: { member: "claude" }, review: { member: "codex" } } }));
-    expect(unpinned.model).toBe("gpt-5.6-sol");
+    expect(unpinned.model).toBe("gpt-6-astra");
     const pinned = resolveReviewRole(project({ crew: "c" }), "default", "reviewer",
       withCrews({ c: { worker: { member: "claude" }, review: { member: "codex", model: "gpt-5" } } }));
     expect(pinned.model).toBe("gpt-5");

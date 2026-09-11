@@ -68,7 +68,7 @@ describe("resolveWorkerLaunchPlan", () => {
     expect(plan.backend).toEqual({ kind: "harness-account" });
     expect(plan.credential).toEqual({ kind: "harness-account" });
     expect(plan.envPrefix).toBe("");
-    expect(plan.model).toBe("gpt-5.6-sol");
+    expect(plan.model).toBe("gpt-6-astra");
     expect(plan.effort).toBe("high");
   });
 
@@ -112,7 +112,7 @@ describe("resolveHeadlessLaunchPlan", () => {
   it("defaults every unpinned Codex headless role to Sol at high effort", () => {
     for (const role of ["reviewer", "resolver", "ciFix"] as const) {
       const plan = resolveHeadlessLaunchPlan({ role, harness: "codex", envPrefix: "" });
-      expect(plan.model).toBe("gpt-5.6-sol");
+      expect(plan.model).toBe("gpt-6-astra");
       expect(plan.effort).toBe("high");
     }
   });

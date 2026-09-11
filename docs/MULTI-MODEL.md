@@ -745,7 +745,7 @@ its prompt on stdin, so the AGENTS.md-collision concern below is
 worker-only.
 
 Every unpinned Codex launch uses Garden's harness default of
-`gpt-5.6-sol` with `high` reasoning. The launch-plan boundary applies that
+`gpt-6-astra` with `high` reasoning. The launch-plan boundary applies that
 pair uniformly to interactive workers and all three headless roles, while an
 explicit worker, project, crew, or role value remains higher precedence.
 

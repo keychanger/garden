@@ -224,9 +224,9 @@ describe("editing a builtin materializes an override", () => {
     runCrewEdit("garden", "all-codex");
     expect(readCrewDraft()).toEqual({
       editing: "all-codex",
-      designer: "codex", designerModel: "gpt-5.6-sol",
-      worker: "codex", workerModel: "gpt-5.6-sol",
-      review: "codex", reviewModel: "gpt-5.6-sol",
+      designer: "codex", designerModel: "gpt-6-astra",
+      worker: "codex", workerModel: "gpt-6-astra",
+      review: "codex", reviewModel: "gpt-6-astra",
     });
   });
 
@@ -235,9 +235,9 @@ describe("editing a builtin materializes an override", () => {
     setCrewDimFromPicker("garden", "model", "opus");
     saveCrewFromPicker("garden", "all-codex");
     expect(store.value.crews?.["all-codex"]).toEqual({
-      designer: { member: "codex", model: "gpt-5.6-sol" },
+      designer: { member: "codex", model: "gpt-6-astra" },
       worker: { member: "codex", model: "opus" },
-      review: { member: "codex", model: "gpt-5.6-sol" },
+      review: { member: "codex", model: "gpt-6-astra" },
     });
     const spec = getCrew("all-codex", store.value)!;
     expect(spec.builtin).toBe(false);
@@ -251,7 +251,7 @@ describe("editing a builtin materializes an override", () => {
     expect(store.value.crews).toBeUndefined();
     const spec = getCrew("all-codex", store.value)!;
     expect(spec.builtin).toBe(true);
-    expect(spec.worker.model).toBe("gpt-5.6-sol");
+    expect(spec.worker.model).toBe("gpt-6-astra");
     // The message must distinguish this from deleting a name outright.
     expect(displayed.lines.join()).toMatch(/Override removed: all-codex is the builtin again/);
   });

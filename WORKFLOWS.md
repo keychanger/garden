@@ -2805,16 +2805,15 @@ the publish after the failing debounce.
 
 | Seat | What fills it | How selected |
 |---|---|---|
-| **Designer** | the designer worker itself | the crew's **design seat** (`designerSeat`, `crew.ts`): per-worker `--crew`, else the project's bound crew — harness, provider, model, and effort together; a builtin's seat is its harness ladder's strong model (`claude-codex` → Fable, `codex-claude` → Codex's Sol), a stored crew naming no designer derives the seat from its review half. Beneath that, the workflow default (Opus at `xhigh`, `workflow.workerModel`/`workerEffort`); above it, per-run `--model`/`--effort`/`--harness`. A Codex designer launches (the adapter admits the workflow) |
-| **Builder** | a downstream worker spawned at handoff | default-workflow: spawned by the designer via `garden handoff` on approval, **inheriting the designer's crew** (its build half — `claude-codex` builds on Opus, `codex-claude` on Sol); trellis: the operator-run plant command (see below) |
-| **Reviewer** | the builder's reviewer | the same crew's review half (`claude-codex` → Codex's Sol, `codex-claude` → Fable); strong first-party by default (the shipped crew safety invariant) |
+| **Designer** | the designer worker itself | the crew's **design seat** (`designerSeat`, `crew.ts`): per-worker `--crew`, else the project's bound crew — harness, provider, model, and effort together; a builtin's seat is its harness ladder's strong model (`claude-codex` → Fable, `codex-claude` → Codex's Astra), a stored crew naming no designer derives the seat from its review half. Beneath that, the workflow default (Opus at `xhigh`, `workflow.workerModel`/`workerEffort`); above it, per-run `--model`/`--effort`/`--harness`. A Codex designer launches (the adapter admits the workflow) |
+| **Builder** | a downstream worker spawned at handoff | default-workflow: spawned by the designer via `garden handoff` on approval, **inheriting the designer's crew** (its build half — `claude-codex` builds on Opus, `codex-claude` on Astra); trellis: the operator-run plant command (see below) |
+| **Reviewer** | the builder's reviewer | the same crew's review half (`claude-codex` → Codex's Astra, `codex-claude` → Fable); strong first-party by default (the shipped crew safety invariant) |
 
 So one crew spells the whole shape — a strong model designs, a builder
 implements, a strong one reviews — and binding it to a project (or passing
 `--crew` at plant) is the only configuration the pipeline needs. Whether the
 builder is a *lesser* model is the harness ladder's call: Claude's steps down
-to Opus, Codex's stays on Sol, since its next rung down is too far below Sol
-to be worth the saving.
+to Opus, Codex's stays on Astra, the model every unpinned Codex launch takes.
 
 ### Handoff
 
