@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import type { GardenConfig, ProjectConfig } from "../src/config.js";
 import {
   resolveHeadlessLaunchPlan,
@@ -21,6 +23,22 @@ function project(partial: Partial<ProjectConfig> = {}): ProjectConfig {
 }
 
 describe("resolveWorkerLaunchPlan", () => {
+  it.each(["claude-code", "codex"])("validates sandbox write roots before a %s launch or resume", (harness) => {
+    for (const resume of [false, true]) {
+      const source = project({ sandboxWriteRoots: ["~/.config/gcloud/", "~/.config/gcloud"] });
+      const plan = resolveWorkerLaunchPlan({
+        project: source, harness, workflow: "default", resume,
+      }, config);
+      expect(plan.runtimeProject.sandboxWriteRoots).toEqual([
+        path.join(fs.realpathSync(process.env.HOME!), ".config", "gcloud"),
+      ]);
+      expect(source.sandboxWriteRoots).toEqual(["~/.config/gcloud/", "~/.config/gcloud"]);
+      expect(() => resolveWorkerLaunchPlan({
+        project: project({ sandboxWriteRoots: ["~"] }), harness, workflow: "default", resume,
+      }, config)).toThrow(/contains the home directory/);
+    }
+  });
+
   it("binds backend, credential reference, tuning, policy, and requirements together", () => {
     const plan = resolveWorkerLaunchPlan({
       project: project({ provider: "deepseek" }),

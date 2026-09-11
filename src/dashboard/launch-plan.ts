@@ -1,5 +1,6 @@
 import {
   resolveProvider,
+  resolveSandboxWriteRoots,
   type GardenConfig,
   type ProjectConfig,
 } from "../config.js";
@@ -70,7 +71,10 @@ export function resolveWorkerLaunchPlan(
 ): WorkerLaunchPlan {
   const harness = strictHarness(input.harness);
   const core = getHarnessCore(harness);
-  const runtimeProject = workerProject(input.project, input.provider);
+  const runtimeProject = {
+    ...workerProject(input.project, input.provider),
+    sandboxWriteRoots: resolveSandboxWriteRoots(input.project),
+  };
   // resolveProvider is intentionally strict: a present-but-unknown backend is
   // a configuration error, never permission to change vendor/account.
   const resolvedProvider = resolveProvider(runtimeProject, config);

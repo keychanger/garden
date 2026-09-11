@@ -44,6 +44,7 @@ vi.mock("../src/config.js", () => {
     tryGetProject: vi.fn(() => ({ name: "myproject", path: "/repo/myproject" })),
     tryResolveClaudeProfile: vi.fn(() => null),
     tryResolveProvider,
+    resolveSandboxWriteRoots: vi.fn((p: { sandboxWriteRoots?: string[] }) => p.sandboxWriteRoots ?? []),
     resolveProvider: vi.fn((project: { provider?: string }, config?: { providers?: Record<string, Record<string, unknown>> }) => {
       const provider = tryResolveProvider(project);
       if (provider) return provider;

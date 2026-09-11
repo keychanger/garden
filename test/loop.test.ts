@@ -17,6 +17,7 @@ vi.mock("../src/config.js", () => {
     tryGetProject: vi.fn(),
     tryResolveClaudeProfile: vi.fn(() => null),
     tryResolveProvider,
+    resolveSandboxWriteRoots: vi.fn((p: { sandboxWriteRoots?: string[] }) => p.sandboxWriteRoots ?? []),
     resolveProvider: vi.fn((project: { provider?: string }) => {
       const provider = tryResolveProvider(project);
       if (project.provider && !provider) throw new Error(`Unknown provider '${project.provider}'.`);
