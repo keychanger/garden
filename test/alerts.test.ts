@@ -498,15 +498,30 @@ describe("formatRightBar", () => {
 });
 
 describe("statusBarStyle", () => {
+  const UNFOCUSED = "bg=colour236#,fg=colour244";
+
   it("is yellow only when the build actually trails its branch", () => {
-    expect(statusBarStyle(4)).toBe("bg=yellow,fg=black");
-    expect(statusBarStyle(0)).toBe("bg=green,fg=black");
+    expect(statusBarStyle(4)).toBe(`#{?client_focused,bg=yellow#,fg=black,${UNFOCUSED}}`);
+    expect(statusBarStyle(0)).toBe(`#{?client_focused,bg=green#,fg=black,${UNFOCUSED}}`);
   });
 
   it("stays green when staleness is unknown, rather than inventing a warning", () => {
     // A dev build or an install outside a checkout cannot be measured; the bar
     // must not imply drift it never established.
-    expect(statusBarStyle(null)).toBe("bg=green,fg=black");
-    expect(statusBarStyle(undefined)).toBe("bg=green,fg=black");
+    expect(statusBarStyle(null)).toBe(`#{?client_focused,bg=green#,fg=black,${UNFOCUSED}}`);
+    expect(statusBarStyle(undefined)).toBe(`#{?client_focused,bg=green#,fg=black,${UNFOCUSED}}`);
+  });
+
+  it("dims to grey for a client whose terminal window is not focused", () => {
+    for (const behind of [4, 0, null]) {
+      expect(statusBarStyle(behind)).toMatch(new RegExp(`,${UNFOCUSED}}$`));
+    }
+  });
+
+  it("escapes every comma inside the conditional's branches", () => {
+    // An unescaped comma is read as the #{?...} branch separator, which would
+    // hand tmux a truncated style for one branch and garbage for the other.
+    const inner = statusBarStyle(4).slice("#{?client_focused,".length, -1);
+    expect(inner.replace(/#,/g, "").split(",")).toHaveLength(2);
   });
 });

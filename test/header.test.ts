@@ -349,6 +349,12 @@ describe("setupStatusBar", () => {
     expect(calls).toContainEqual(expect.arrayContaining(["set-option", "-t", "garden-dashboard:main", "pane-border-status", "top"]));
   });
 
+  it("turns on focus-events so the bar can dim when the terminal window loses focus", () => {
+    setupStatusBar("garden");
+    const calls = vi.mocked(tmux).mock.calls;
+    expect(calls).toContainEqual(["set-option", "-s", "focus-events", "on"]);
+  });
+
   it("sets status-interval to 30 seconds", () => {
     setupStatusBar("garden");
     const calls = vi.mocked(tmux).mock.calls;

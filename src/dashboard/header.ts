@@ -50,6 +50,9 @@ export function setupStatusBar(_gardenRunner: string): void {
   const target = DASHBOARD_SESSION;
   const mainWindow = `${DASHBOARD_SESSION}:main`;
   const opts: Array<[string[], string]> = [
+    // Server option: without it tmux never hears the terminal's focus in/out,
+    // so statusBarStyle's client_focused branch could not dim the bar.
+    [["-s", "focus-events", "on"], "focus-events"],
     // Session options
     [["-t", target, "mouse", "on"], "mouse"],
     [["-t", target, "status-left-length", "80"], "status-left-length"],
@@ -306,7 +309,7 @@ function setBarVars(left: string, right: string, style: string): void {
       ["set-option", "-t", t, "status-right", "#{@garden_right}"],
       ["set-option", "-t", t, "@garden_left", left],
       ["set-option", "-t", t, "@garden_right", right],
-      // Whole-bar color carries the build-staleness signal (statusBarStyle).
+      // Whole-bar color carries window focus and build staleness (statusBarStyle).
       // Batched with the rest so it costs no extra client connect.
       ["set-option", "-t", t, "status-style", style],
       ["refresh-client", "-S"],

@@ -285,8 +285,19 @@ export function formatRightBar(unread: number, behind?: number | null): string {
 // the count next to the version is the detail. Deliberately not a third state
 // for "unknown" — a dev build or an install outside a checkout simply keeps the
 // normal bar rather than nagging about something it cannot measure.
+//
+// Those colors are the focused client's. tmux resolves the conditional per
+// client, so a client whose terminal window has lost focus draws a dim grey bar
+// instead — the garden window reads as inactive while you type elsewhere. tmux
+// only learns focus when focus-events is on (setupStatusBar); without it every
+// client stays flagged focused. Commas inside the branches must be escaped as
+// `#,` or tmux reads them as the branch separator.
+const UNFOCUSED_BAR_STYLE = "bg=colour236,fg=colour244";
+
 export function statusBarStyle(behind?: number | null): string {
-  return behind && behind > 0 ? "bg=yellow,fg=black" : "bg=green,fg=black";
+  const focused = behind && behind > 0 ? "bg=yellow,fg=black" : "bg=green,fg=black";
+  const escape = (style: string) => style.split(",").join("#,");
+  return `#{?client_focused,${escape(focused)},${escape(UNFOCUSED_BAR_STYLE)}}`;
 }
 
 // Set @garden_right and kick the status client so the badge appears/clears
