@@ -4,6 +4,16 @@ A minimal CLI orchestrator for managing Claude Code sessions across multiple pro
 
 Garden is a personal tool — opinionated toward a single developer managing many projects from one place. It is not a team tool, not a CI system, and not a framework. It's a thin, extensible layer over Claude Code.
 
+## Installation
+
+Fresh-machine installation is documented in `README.md`: clone, install locked
+build dependencies with `npm ci --include=dev`, build, link, and run `garden init`.
+The supported Node range is `^22.12.0 || >=24.0.0`, matching the locked tooling.
+`garden doctor` runs before initialization and checks Git availability as well as
+the dashboard and agent tools. Its diagnostics do not establish Claude login or
+remote push permissions. Installing Garden needs only repository read access;
+managed projects require push access to worker branches and the chosen base.
+
 ## Core Concepts
 
 ### Project
@@ -677,7 +687,7 @@ garden stats [--by <axis>] [--since Nd|Nh|Nm] [-p <project>]
                                    # --by config|model|provider|harness|workflow|crew|rules|version
 garden alerts                      # View dashboard alerts (unread/read split, level glyphs, relative age)
 garden alerts clear                # Dismiss all alerts
-garden doctor                      # Environment preflight (tmux / claude / gh / node / config / agent docs / Option-key)
+garden doctor                      # Environment preflight (git / tmux / claude / gh / node / config / agent docs / Option-key)
 garden logs [options]              # View dashboard logs (pretty-printed)
 garden logs filter [<expr>]        # Show / set the sticky filter (also via ⌥/ in dashboard)
 garden logs filter --clear         # Remove the sticky filter

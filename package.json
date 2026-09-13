@@ -14,7 +14,7 @@
     "garden": "./dist/cli.js"
   },
   "engines": {
-    "node": ">=22.1"
+    "node": "^22.12.0 || >=24.0.0"
   },
   "scripts": {
     "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --minify --keep-names --outfile=dist/cli.js --banner:js='#!/usr/bin/env node' --define:__GARDEN_VERSION__='\"'$(git rev-parse --short HEAD)'\"' && esbuild src/hook-entry.ts --bundle --platform=node --format=esm --minify --keep-names --outfile=dist/hook.js --banner:js='#!/usr/bin/env node' --define:__GARDEN_VERSION__='\"'$(git rev-parse --short HEAD)'\"'",

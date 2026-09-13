@@ -33,13 +33,14 @@ const ok = (stdout: string) => ({ status: 0, stdout });
 beforeEach(() => {
   h.isTTY = true;
   h.configExists = true;
-  h.responses = {};
+  h.responses = { "git --version": ok("git version 2.49.0") };
   vi.clearAllMocks();
 });
 
 describe("garden doctor", () => {
   it("reports ok for tmux/claude when present and gh authenticated", async () => {
     h.responses = {
+      "git --version": ok("git version 2.49.0"),
       "tmux -V": ok("tmux 3.4"),
       "claude --version": ok("2.1.0 (Claude Code)"),
       "gh --version": ok("gh version 2.86.0"),
@@ -52,6 +53,21 @@ describe("garden doctor", () => {
     expect(text).toContain(process.version); // node check
   });
 
+  it("reports Git as required before worktree operations", async () => {
+    h.isTTY = false;
+    await doctor();
+    expect(output).toHaveBeenLastCalledWith(expect.objectContaining({
+      checks: expect.arrayContaining([expect.objectContaining({ name: "git", status: "ok" })]),
+    }));
+    delete h.responses["git --version"];
+    await doctor();
+    expect(output).toHaveBeenLastCalledWith(expect.objectContaining({
+      checks: expect.arrayContaining([expect.objectContaining({
+        name: "git", status: "fail", detail: expect.stringContaining("xcode-select --install"),
+      })]),
+    }));
+  });
+
   it("fails when tmux is missing", async () => {
     h.responses = { "claude --version": ok("2.1.0"), "gh --version": ok("gh version 2"), "gh auth": ok("") };
     const text = (await captureConsoleLog(() => doctor())).map(strip).join("\n");
@@ -61,6 +77,7 @@ describe("garden doctor", () => {
 
   it("warns when gh is present but not authenticated", async () => {
     h.responses = {
+      "git --version": ok("git version 2.49.0"),
       "tmux -V": ok("tmux 3.4"),
       "claude --version": ok("2.1.0"),
       "gh --version": ok("gh version 2.86.0"),
@@ -71,7 +88,7 @@ describe("garden doctor", () => {
   });
 
   it("warns (not fails) when gh is absent — it is optional", async () => {
-    h.responses = { "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0") };
+    h.responses = { "git --version": ok("git version 2.49.0"), "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0") };
     const lines = (await captureConsoleLog(() => doctor())).map(strip);
     // Match the gh check row specifically (glyph then "gh"), not the header —
     // "preflight" also contains the substring "gh".
@@ -82,7 +99,7 @@ describe("garden doctor", () => {
 
   it("warns when garden is not initialized", async () => {
     h.configExists = false;
-    h.responses = { "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0") };
+    h.responses = { "git --version": ok("git version 2.49.0"), "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0") };
     const lines = (await captureConsoleLog(() => doctor())).map(strip);
     const configLine = lines.find(l => /^\s*[⚠✔✖]\s+config\b/.test(l));
     expect(configLine).toMatch(/⚠/);
@@ -93,15 +110,18 @@ describe("garden doctor", () => {
 
   it("shows config ok when initialized", async () => {
     h.configExists = true;
-    h.responses = { "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0") };
+    h.responses = { "git --version": ok("git version 2.49.0"), "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0") };
     const lines = (await captureConsoleLog(() => doctor())).map(strip);
     const configLine = lines.find(l => /^\s*[⚠✔✖]\s+config\b/.test(l));
     expect(configLine).toMatch(/✔/);
   });
 
-  it("node floor accepts 22.1 and above, rejects below", () => {
-    // Boundary: 22.1 is the floor (NODE_COMPILE_CACHE landed there).
-    expect(nodeMeetsFloor("v22.1.0")).toBe(true);
+  it("node floor matches the supported versions of the locked tooling", () => {
+    expect(nodeMeetsFloor("v22.1.0")).toBe(false);
+    expect(nodeMeetsFloor("v22.11.0")).toBe(false);
+    expect(nodeMeetsFloor("v22.12.0")).toBe(true);
+    expect(nodeMeetsFloor("v23.0.0")).toBe(false);
+    expect(nodeMeetsFloor("v25.0.0")).toBe(true);
     expect(nodeMeetsFloor("v22.14.0")).toBe(true);
     expect(nodeMeetsFloor("v24.0.0")).toBe(true);
     expect(nodeMeetsFloor("v22.0.0")).toBe(false);
@@ -112,7 +132,7 @@ describe("garden doctor", () => {
 
   it("emits JSON when not a TTY", async () => {
     h.isTTY = false;
-    h.responses = { "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0"), "gh --version": ok("gh v2"), "gh auth": ok("") };
+    h.responses = { "git --version": ok("git version 2.49.0"), "tmux -V": ok("tmux 3.4"), "claude --version": ok("2.1.0"), "gh --version": ok("gh v2"), "gh auth": ok("") };
     await doctor();
     expect(output).toHaveBeenCalledWith(expect.objectContaining({
       checks: expect.arrayContaining([

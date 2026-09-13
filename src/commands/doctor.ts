@@ -1,5 +1,5 @@
 // Command: garden doctor — environment preflight. Checks the external tools
-// garden depends on (tmux, claude, gh), the node version floor, whether garden
+// garden depends on (git, tmux, claude, gh), the node version floor, whether garden
 // is initialized, whether each registered project serves one instruction file
 // to both harnesses, and surfaces the one prerequisite it can't verify
 // programmatically (the Option-as-Meta terminal setting). A first-run operator
@@ -10,12 +10,6 @@ import { existsSync, lstatSync, readFileSync, readlinkSync } from "node:fs";
 import path from "node:path";
 import { output, isTTY } from "../output.js";
 import { CONFIG_PATH, loadConfig, beadsStoreError } from "../config.js";
-
-// Node 22.1 is the floor: the worker hook commands set NODE_COMPILE_CACHE
-// (added in 22.1) to reuse cached V8 bytecode across cold starts. Older node
-// still runs but silently loses that optimization.
-const MIN_NODE_MAJOR = 22;
-const MIN_NODE_MINOR = 1;
 
 type CheckStatus = "ok" | "warn" | "fail";
 
@@ -35,6 +29,13 @@ function tryRun(bin: string, args: string[]): string | null {
   } catch {
     return null;
   }
+}
+
+function checkGit(): Check {
+  const v = tryRun("git", ["--version"]);
+  return v
+    ? { name: "git", status: "ok", detail: v }
+    : { name: "git", status: "fail", detail: "not available — workers need Git; on macOS run 'xcode-select --install' or 'brew install git'" };
 }
 
 function checkTmux(): Check {
@@ -73,7 +74,7 @@ export function nodeMeetsFloor(version: string): boolean {
   const m = version.match(/^v(\d+)\.(\d+)/);
   const major = m ? Number(m[1]) : 0;
   const minor = m ? Number(m[2]) : 0;
-  return major > MIN_NODE_MAJOR || (major === MIN_NODE_MAJOR && minor >= MIN_NODE_MINOR);
+  return major >= 24 || (major === 22 && minor >= 12);
 }
 
 function checkNode(): Check {
@@ -82,7 +83,7 @@ function checkNode(): Check {
     : {
         name: "node",
         status: "warn",
-        detail: `${process.version} — garden needs Node >= ${MIN_NODE_MAJOR}.${MIN_NODE_MINOR} for the worker hook compile-cache; upgrade node`,
+        detail: `${process.version} — install Node 22.12+ (22.x) or 24+ to match garden's build and test dependencies`,
       };
 }
 
@@ -208,6 +209,7 @@ function checkOptionKey(): Check {
 
 export async function doctor(): Promise<void> {
   const checks: Check[] = [
+    checkGit(),
     checkTmux(),
     checkClaude(),
     checkGh(),
