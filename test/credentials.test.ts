@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import {
   readFileCredential,
+  readKeychainCredential,
   isAccessTokenExpired,
   REFRESH_SKEW_MS,
   refreshOAuthToken,
@@ -33,6 +34,48 @@ const validPayload = JSON.stringify({
     expiresAt: Date.now() + 3_600_000,
     subscriptionType: "max_5x",
   },
+});
+
+// The macOS Keychain can hold several `Claude Code-credentials` items that
+// differ only by account: Claude Code keys its own by the OS username, and an
+// older item (a previous username, another machine's migrated login) can sort
+// ahead of it. A read by service alone returns whichever comes first, so the
+// meter refreshed a long-revoked token and reported "login expired" while the
+// operator was logged in.
+const securityCalls: string[][] = [];
+let securityOutput = "";
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: (file: string, args: string[], opts: unknown) => {
+      if (file !== "security") return actual.execFileSync(file, args, opts as never);
+      securityCalls.push(args);
+      return securityOutput;
+    },
+  };
+});
+
+describe("readKeychainCredential", () => {
+  let platform: PropertyDescriptor;
+  beforeEach(() => {
+    platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    securityCalls.length = 0;
+    securityOutput = validPayload;
+  });
+  afterEach(() => {
+    Object.defineProperty(process, "platform", platform);
+  });
+
+  it("selects the item Claude Code writes: the one keyed by the OS username", () => {
+    const slot = readKeychainCredential();
+    expect(slot?.source).toBe("keychain");
+    expect(securityCalls).toHaveLength(1);
+    const args = securityCalls[0];
+    expect(args.slice(0, 3)).toEqual(["find-generic-password", "-s", "Claude Code-credentials"]);
+    expect(args[args.indexOf("-a") + 1]).toBe(os.userInfo().username);
+  });
 });
 
 describe("readFileCredential", () => {

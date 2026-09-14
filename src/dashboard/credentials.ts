@@ -31,19 +31,30 @@ export interface CredentialSlot {
   oauth: ClaudeOAuth;
 }
 
-export function readKeychainCredential(): CredentialSlot | null {
+const KEYCHAIN_SERVICE = "Claude Code-credentials";
+
+// Claude Code keys its Keychain item by the OS username, and the Keychain can
+// hold other items under the same service (an earlier username, a migrated
+// login). Reading by service alone returns whichever sorts first, so every
+// read names the account the writer below uses.
+function readKeychainRaw(): string | null {
   if (process.platform !== "darwin") return null;
   try {
-    const raw = execFileSync(
+    return execFileSync(
       "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", os.userInfo().username, "-w"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     ).trim();
-    const oauth = parseOAuth(raw);
-    return oauth ? { source: "keychain", oauth } : null;
   } catch {
     return null;
   }
+}
+
+export function readKeychainCredential(): CredentialSlot | null {
+  const raw = readKeychainRaw();
+  if (raw === null) return null;
+  const oauth = parseOAuth(raw);
+  return oauth ? { source: "keychain", oauth } : null;
 }
 
 export function readFileCredential(filePath: string): CredentialSlot | null {
@@ -183,7 +194,7 @@ export function persistCredential(source: "keychain" | "file", oauth: ClaudeOAut
         [
           "add-generic-password",
           "-U", "-a", user,
-          "-s", "Claude Code-credentials",
+          "-s", KEYCHAIN_SERVICE,
           "-w", merged,
         ],
         { stdio: ["ignore", "ignore", "pipe"] },
@@ -207,14 +218,9 @@ export function persistCredential(source: "keychain" | "file", oauth: ClaudeOAut
 function mergeCredentialPayload(source: "keychain" | "file", oauth: ClaudeOAuth): string | null {
   let raw: string;
   if (source === "keychain") {
-    if (process.platform !== "darwin") return null;
-    try {
-      raw = execFileSync(
-        "security",
-        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
-    } catch { return null; }
+    const fromKeychain = readKeychainRaw();
+    if (fromKeychain === null) return null;
+    raw = fromKeychain;
   } else {
     const file = path.join(os.homedir(), ".claude", ".credentials.json");
     try { raw = fs.readFileSync(file, "utf8"); } catch { return null; }
@@ -236,14 +242,9 @@ function mergeCredentialPayload(source: "keychain" | "file", oauth: ClaudeOAuth)
 }
 
 export function captureKeychainTo(credFile: string): boolean {
-  if (process.platform !== "darwin") return false;
+  const raw = readKeychainRaw();
+  if (!raw) return false;
   try {
-    const raw = execFileSync(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
-    if (!raw) return false;
     atomicWriteFile(credFile, raw, { mode: 0o600 });
     return true;
   } catch {
@@ -253,17 +254,7 @@ export function captureKeychainTo(credFile: string): boolean {
 
 // Detects /login writes. macOS: shared Keychain (ignores CLAUDE_CONFIG_DIR); Linux: per-config-dir file.
 function credentialFingerprint(configDir?: string): string {
-  if (process.platform === "darwin") {
-    try {
-      return execFileSync(
-        "security",
-        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
-    } catch {
-      return "";
-    }
-  }
+  if (process.platform === "darwin") return readKeychainRaw() ?? "";
   const dir = configDir ?? path.join(os.homedir(), ".claude");
   const file = path.join(dir, ".credentials.json");
   try {
