@@ -177,6 +177,24 @@ describe("setupKeybindings", () => {
     }
   });
 
+  it("passes wheel-up through to an app holding both the alternate screen and the mouse", () => {
+    // Claude Code 2.1.x runs in the alternate screen and scrolls its own
+    // history on wheel events. tmux keeps no scrollback for an alternate-screen
+    // pane, so forcing copy-mode there gave the operator nothing to scroll: the
+    // wheel must reach the app instead. Every other pane keeps the copy-mode
+    // intercept, so an app that tracks the mouse without owning the screen can't
+    // swallow the scroll.
+    setupKeybindings("/path/to/garden");
+    const bind = execFileSyncMock.mock.calls.find((call) => {
+      const argv = call[1] as string[];
+      return Array.isArray(argv) && argv[0] === "bind-key" && argv[1] === "-n" && argv[2] === "WheelUpPane";
+    });
+    expect(bind).toBeDefined();
+    const body = (bind![1] as string[])[9];
+    expect(body).toContain('#{||:#{pane_in_mode},#{&&:#{alternate_on},#{mouse_any_flag}}}');
+    expect(body).toContain('"send-keys -M" "copy-mode -e; send-keys -M"');
+  });
+
   it("clears the selection on a plain click so the lingering highlight can be dismissed", () => {
     // copy-pipe-no-clear leaves the selection highlighted after a drag. Without
     // clearing it on a plain click, the highlight lingers with no way to dismiss
