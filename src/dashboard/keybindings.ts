@@ -45,7 +45,7 @@ export const DASHBOARD_HOTKEYS: DashboardHotkey[] = [
   { key: "o", command: "_cycle-plot prev", category: "Projects", label: "Cycle to previous focused plot (alias of ⌥⇧P)" },
   { key: "C", command: "_crew-picker", category: "Projects", label: "Crew picker (set the focused project's crew: who builds / reviews)" },
   { key: ",", command: "_project-menu", category: "Projects", label: "Project config menu (base / crew / model / effort / CI gate / holistic / log color)" },
-  { key: ";", command: "_garden-menu", category: "Projects", label: "Garden settings menu (machine-wide limits: checks slots / max reviews)" },
+  { key: ";", command: "_garden-menu", category: "Projects", label: "Garden settings menu (machine-wide limits: checks slots / max reviews / build branch)" },
 
   // Workers
   { key: "n", command: "_new-worker", category: "Workers", label: "New worker (Claude session)" },

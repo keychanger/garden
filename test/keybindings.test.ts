@@ -26,6 +26,16 @@ describe("dashboard keybindings table", () => {
     }
   });
 
+  it("docs/KEYBINDINGS.md lists every bound hotkey", () => {
+    const doc = fs.readFileSync(
+      path.resolve(__dirname, "../docs/KEYBINDINGS.md"), "utf8",
+    );
+    for (const b of DASHBOARD_HOTKEYS) {
+      expect(doc, `docs/KEYBINDINGS.md missing ${hotkeyDisplay(b.key)}`)
+        .toContain(`\`${hotkeyDisplay(b.key)}\``);
+    }
+  });
+
   it("every dashboard-command binding maps to a real dispatch handler", () => {
     const indexSrc = fs.readFileSync(
       path.resolve(__dirname, "../src/dashboard/index.ts"), "utf8",
