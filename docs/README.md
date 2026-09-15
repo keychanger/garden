@@ -33,6 +33,7 @@ and the original may be deleted or kept as historical record. When a
 
 | Doc | Kind | Subject |
 |---|---|---|
+| [KEYBINDINGS.md](KEYBINDINGS.md) | reference | Dashboard Option-key hotkeys, grouped by navigation / projects / workers / general — the same list `garden keys` prints |
 | [STATUS.md](STATUS.md) | spec | Worker status state machine — display states, detection machinery, transition invariants |
 | [SANDBOX-THREAT-MODEL.md](SANDBOX-THREAT-MODEL.md) | reference | Worker-sandbox security posture — trust boundaries, what the sandbox enforces (write confinement, egress allowlist, git-hook isolation, opt-in credential read-deny, registry guard), and the residual risks (Codex confinement, credential-deny verification, registry writability) |
 | [MULTI-MODEL.md](MULTI-MODEL.md) | design | Multi-model / multi-harness architecture. Phase 1 (provider layer: `garden provider`, worker env swap, reviewer pinning) shipped; harness adapters (Phases 2-5) are design targets. |
