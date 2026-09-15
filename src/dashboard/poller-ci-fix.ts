@@ -11,7 +11,7 @@
 //
 // See poller-resolve.ts for the analogous merge-conflict resolution flow.
 import fs from "node:fs";
-import { tryGetProject } from "../config.js";
+import { type ProjectConfig, tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { resolveReviewRole } from "./roles.js";
 import { codexStderrSidecar } from "./harness/codex-core.js";
@@ -170,12 +170,14 @@ export function launchCiFix(
   // Ci-fix role resolution (independent of reviewer/resolver) — same strong
   // first-party Anthropic + Opus default, overridable via `garden config <p>
   // role ci-fix ...`. See docs/MULTI-MODEL.md "Phase 4".
+  const project: ProjectConfig = tryGetProject(projectName) ?? { path: projectPath };
   const ciFix = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "ciFix", undefined, entry,
+    project, entry.workflow ?? "default", "ciFix", undefined, entry,
   );
   const cfWindow = ciFixWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
+    project,
     windowName: cfWindow,
     prompt,
     promptFile: ciFixPromptPath(projectName, entry.name),

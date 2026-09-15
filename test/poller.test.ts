@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { execSync, execFileSync, spawn } from "node:child_process";
+import { claudeCodeAdapter } from "../src/dashboard/harness/claude-code.js";
+
+vi.mock("../src/dashboard/harness/claude-code.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../src/dashboard/harness/claude-code.js")>();
+  return {
+    ...actual,
+    claudeCodeAdapter: { ...actual.claudeCodeAdapter, installRuntimeConfig: vi.fn() },
+  };
+});
 
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => ""),
@@ -380,6 +389,24 @@ beforeEach(() => {
 // sets pendingReviewAt. Idle workers without pendingReviewAt are NOT
 // candidates for review even if they have stale commits ahead of base.
 describe("poll — working state", () => {
+  it("restores missing reviewer settings using the Codex worker's project sandbox policy", () => {
+    const project = { path: "/repo/myproject", sandboxDomains: ["packages.example.org"] };
+    vi.mocked(tryGetProject).mockReturnValue({ ...project, name: "myproject" });
+    registryMock._setEntries("myproject", [
+      makeWorker({ harness: "codex", prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    expect(claudeCodeAdapter.installRuntimeConfig).toHaveBeenCalledWith(
+      "/tmp/wt/myproject/bold-ash", expect.objectContaining(project),
+    );
+    expect(newDashboardWindow).toHaveBeenCalledWith(
+      "_myproject-review-bold-ash",
+      "-c", "/tmp/wt/myproject/bold-ash", "bash", "-c", expect.any(String),
+    );
+  });
+
   it("launches review when pendingReviewAt is set and commits exist", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),

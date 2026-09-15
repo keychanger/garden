@@ -6,7 +6,7 @@
 // hooks so they don't get treated as worker hooks.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { tryGetProject, getMaxConcurrentReviews } from "../config.js";
+import { type ProjectConfig, tryGetProject, getMaxConcurrentReviews } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { resolveReviewRole, SAFE_REVIEW_MODEL } from "./roles.js";
@@ -1908,7 +1908,7 @@ function launchReview(
   // model is SAFE_REVIEW_MODEL for every workflow (trellis's reviewerModel is
   // also "opus"). Cleared on the next fresh cycle, so the configured reviewer
   // resumes automatically (see handleQuotaFallbackReview).
-  const projectCfg = tryGetProject(projectName) ?? {};
+  const projectCfg: ProjectConfig = tryGetProject(projectName) ?? { path: projectPath };
   const reviewer = entry.reviewFallbackHarness
     ? resolveHeadlessLaunchPlan({
         role: "reviewer",
@@ -1920,6 +1920,7 @@ function launchReview(
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
+    project: projectCfg,
     windowName: revWindow,
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),

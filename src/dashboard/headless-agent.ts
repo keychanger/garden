@@ -9,14 +9,18 @@
 // (preReviewSha, transitionState, alerts), schedule timeout wake-ups via
 // `onLaunched`, and pass the result file's contents to `parseLastLineVerdict`.
 import fs from "node:fs";
+import path from "node:path";
+import type { ProjectConfig } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { newDashboardWindow, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
 import { getHarnessCore } from "./harness/core.js";
+import { claudeCodeAdapter } from "./harness/claude-code.js";
 import type { HeadlessLaunchPlan } from "./harness/types.js";
 
 export interface HeadlessAgentLaunchOptions {
   /** Working directory for the claude process (typically the worktree). */
   cwd: string;
+  project: ProjectConfig;
   /** Hidden tmux window name. Killed first if it already exists. */
   windowName: string;
   /** Prompt content. Written to promptFile atomically. */
@@ -50,6 +54,11 @@ export interface HeadlessAgentLaunchResult {
 export function launchHeadlessAgent(
   opts: HeadlessAgentLaunchOptions,
 ): HeadlessAgentLaunchResult {
+  if (opts.launchPlan.harness === "claude-code"
+    && !fs.existsSync(path.join(opts.cwd, ".claude", "settings.json"))) {
+    claudeCodeAdapter.installRuntimeConfig(opts.cwd, opts.project);
+  }
+
   atomicWriteFile(opts.promptFile, opts.prompt);
 
   try { fs.unlinkSync(opts.resultFile); } catch { /* ignore */ }

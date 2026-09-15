@@ -4,7 +4,7 @@
 // the resolver is advisory; the worktree state is the ground truth (see
 // STATUS.md invariant 7).
 import fs from "node:fs";
-import { tryGetProject } from "../config.js";
+import { type ProjectConfig, tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
 import { resolveReviewRole } from "./roles.js";
 import { getHarnessCore } from "./harness/core.js";
@@ -103,12 +103,14 @@ export function launchResolver(
   // Resolver role resolution (independent of the reviewer's) — defaults to the
   // same strong first-party Anthropic + Opus safety net, overridable via
   // `garden config <p> role resolver ...`. See docs/MULTI-MODEL.md "Phase 4".
+  const project: ProjectConfig = tryGetProject(projectName) ?? { path: projectPath };
   const resolver = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "resolver", undefined, entry,
+    project, entry.workflow ?? "default", "resolver", undefined, entry,
   );
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
+    project,
     windowName: revWindow,
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),

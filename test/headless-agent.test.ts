@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("node:fs", () => ({
   default: {
-    existsSync: vi.fn(() => false),
+    existsSync: vi.fn(() => true),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     renameSync: vi.fn(),
@@ -45,6 +45,7 @@ const DEFAULT_HEADLESS_PLAN = {
 function baseOpts(overrides: Partial<Parameters<typeof launchHeadlessAgent>[0]> = {}) {
   return {
     cwd: "/tmp/wt/myproject/bold-ash",
+    project: { path: "/tmp/myproject" },
     windowName: "_myproject-review-bold-ash",
     prompt: "Review this branch.",
     promptFile: "/tmp/sessions/myproject-bold-ash-review-prompt.txt",

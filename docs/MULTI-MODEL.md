@@ -829,7 +829,11 @@ byte-identical, full gate green):
   (no env), and it omits `--dangerously-bypass-hook-trust` (fires no relay).
   Worker bootstrap retains the Claude runtime beside Codex's config, so a
   default Claude reviewer in a Codex worktree keeps its sandbox and the shared
-  excludes contain both dialects.
+  excludes contain both dialects. Before any Claude review-family launch,
+  `launchHeadlessAgent` restores missing Claude runtime settings from the project
+  config. This also covers resurrected Codex worktrees, whose resume path installs
+  only Codex configuration. Existing Claude settings are preserved; a failed
+  installation aborts launch.
 
 **Worker path. SHIPPED.** Interactive `buildAgentCommand`, Codex's per-turn
 event relay, session-id capture, `--harness` selection with capability gates,

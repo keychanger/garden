@@ -117,6 +117,8 @@ have hidden coupling — each can be unit-tested in isolation.
 export interface HeadlessAgentLaunchOptions {
   /** Working directory for the claude process (typically the worktree). */
   cwd: string;
+  /** Project sandbox policy used to restore missing Claude runtime settings. */
+  project: ProjectConfig;
   /** Hidden tmux window name. Killed first if it already exists. */
   windowName: string;
   /** Prompt content. Written to promptFile. */
@@ -125,8 +127,8 @@ export interface HeadlessAgentLaunchOptions {
   promptFile: string;
   /** Where claude writes stdout+stderr. Cleaned before launch. */
   resultFile: string;
-  /** Output of claudeEnvPrefix(project) — e.g. `CLAUDE_CONFIG_DIR=... `. */
-  envPrefix: string;
+  /** Validated review-role harness, model, environment, and execution policy. */
+  launchPlan: HeadlessLaunchPlan;
   /** Additional env vars set inline before the claude invocation. */
   envVars?: Record<string, string>;
   /** FIFO poked when the agent exits. Caller owns its lifecycle. */
@@ -150,13 +152,19 @@ export function launchHeadlessAgent(
 
 **Contract**:
 
+Before the launch sequence, Claude headless agents restore a missing
+`.claude/settings.json` with the Claude runtime installer and the supplied project
+config. This gives resurrected Codex worktrees the sandbox needed for autonomous
+review commands. Existing settings are preserved; installation failure aborts
+launch. Codex headless agents keep their own launch-time permission policy.
+
 1. Writes `prompt` to `promptFile` atomically.
 2. Removes `resultFile` if present (stale result from a previous run).
 3. Kills `windowName` if it exists.
 4. Creates a hidden tmux window in the dashboard session, working directory
    `cwd`, running:
    ```
-   <inline-env-vars> <envPrefix>claude -p < <promptFile> > <resultFile> 2>&1; \
+   <inline-env-vars> <launchPlan.envPrefix>claude -p --permission-mode acceptEdits < <promptFile> > <resultFile> 2>&1; \
      [ -p <signalFifo> ] && (echo > <signalFifo>) 2>/dev/null
    ```
 5. Calls `onLaunched()` if provided.

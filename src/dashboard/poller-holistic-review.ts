@@ -20,7 +20,7 @@
 // completion is found eligible — even in mode "off" — so the decision fires
 // exactly once per done-arrival on both trigger sites, and re-arms if a
 // re-opened worker adds more phases later.
-import { tryGetProject, DEFAULT_HOLISTIC_REVIEW } from "../config.js";
+import { type ProjectConfig, tryGetProject, DEFAULT_HOLISTIC_REVIEW } from "../config.js";
 import { log } from "./log.js";
 import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
@@ -236,12 +236,14 @@ function launchHolisticFinalReview(
   // Reviewer role (harness/model/env) — honors project.roles + crew, so a Codex
   // reviewer runs the aggregated pass exactly like a per-phase review. Resolved
   // independently of the worker's own harness (docs/MULTI-MODEL.md "Mixed fleets").
+  const project: ProjectConfig = tryGetProject(projectName) ?? { path: projectPath };
   const reviewer = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, staged.workflow ?? "default", "reviewer", undefined, staged,
+    project, staged.workflow ?? "default", "reviewer", undefined, staged,
   );
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
+    project,
     windowName: revWindow,
     prompt,
     promptFile: reviewPromptPath(projectName, entry.name),
