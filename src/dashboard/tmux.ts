@@ -85,7 +85,7 @@ export function tmuxWithHiddenEnvironment(variable: string, ...args: string[]): 
     try {
       tmux(...hide);
     } catch (cleanupErr) {
-      log.error("tmux", "failed to re-hide scoped environment after tmux command failure", {
+      log.error("tmux", "failed to re-hide scoped env after tmux error", {
         data: { variable, error: String(cleanupErr) },
       });
     }

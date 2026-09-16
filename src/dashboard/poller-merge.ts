@@ -127,7 +127,7 @@ function armCiRecheck(projectName: string): void {
     // so skip the fsync (see AtomicWriteOpts.durable).
     atomicWriteFile(marker, "", { durable: false });
   } catch (err) {
-    log.warn("poller", "ci gate: could not write recheck marker, poke may duplicate", {
+    log.warn("poller", "ci gate: recheck marker unwritten; may re-poke", {
       data: { project: projectName, error: String(err) },
     });
   }
@@ -200,7 +200,7 @@ export function handleMergePending(
   // re-pokes on turn end, and the watchdog backstops a lost poke since
   // merge-pending is a watched state.
   if (isWorkerClaudeWorking(projectName, entry.name)) {
-    log.debug("poller", "merge deferred: worker Claude is active in the shared worktree", {
+    log.debug("poller", "merge deferred: worker active in worktree", {
       worker: entry.name,
       data: { project: projectName },
     });
@@ -387,14 +387,14 @@ function gateCiStatus(
         }
         const waited = Date.now() - since;
         if (waited < CI_NO_RUNS_GRACE_MS) {
-          log.info("poller", "ci gate: check-runs not yet materialized on a CI project, deferring", {
+          log.info("poller", "ci gate: no check-runs yet, deferring", {
             worker: entry.name,
             data: { project: projectName, sha: sha.slice(0, 7), waitedMs: waited },
           });
           armCiRecheck(projectName);
           return false;
         }
-        log.warn("poller", "ci gate: still no check-runs after grace on a CI project, passing through", {
+        log.warn("poller", "ci gate: no check-runs after grace, passing", {
           worker: entry.name,
           data: { project: projectName, sha: sha.slice(0, 7), waitedMs: waited },
         });

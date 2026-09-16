@@ -978,7 +978,7 @@ export function killPane(target?: WorkerRemovalTarget): void {
           data: { project: state.activeProject, killed: killedWindowName, replacement: targetWindow },
         });
       } else {
-        log.warn("workers", "kill: replacement window has no pane; right slot left as-is", {
+        log.warn("workers", "kill: replacement has no pane; slot unchanged", {
           data: { project: state.activeProject, replacement: targetWindow },
         });
       }

@@ -177,14 +177,14 @@ export function handleWorking(
     // result is treated as dirty).
     const staleDirty = isWorktreeDirty(wtPath);
     if (staleDirty !== false) {
-      log.debug("poller", "stale-working review deferred: worktree not provably clean", {
+      log.debug("poller", "stale-working review deferred: tree not clean", {
         worker: entry.name,
         data: { project: projectName },
       });
       setReviewBlockedReason(projectName, entry, staleDirty === null ? "indeterminate" : "dirty");
       return false;
     }
-    log.warn("poller", "agentStatus=working is stale; proceeding with review launch", {
+    log.warn("poller", "stale agentStatus=working; launching review", {
       worker: entry.name,
       data: {
         project: projectName,
@@ -294,7 +294,7 @@ function handleSkipReviewMerge(
     const shown = offending.slice(0, 5).join(", ");
     const more = offending.length > 5 ? ` (+${offending.length - 5} more)` : "";
     const headSha = getBranchHeadSha(wtPath) ?? undefined;
-    log.warn("poller", "designer committed files outside docs/; parking in failing", {
+    log.warn("poller", "designer committed outside docs/; failing", {
       worker: entry.name, data: { project: projectName, offending },
     });
     addAlert({
@@ -512,7 +512,7 @@ export function handleReviewing(
         projectName, projectPath, baseBranch, entry, recovered, false, wtPath,
       );
     }
-    log.info("poller", "haiku extraction did not recover a verdict; falling through to re-review", {
+    log.info("poller", "haiku found no verdict; re-reviewing", {
       worker: entry.name,
       data: { project: projectName },
     });
@@ -628,7 +628,7 @@ function handleHolisticFinalReview(
     try {
       forcePushBranch(wtPath, branchName);
     } catch (err) {
-      log.error("poller", "holistic fix force-push failed; finalizing done without the fix", {
+      log.error("poller", "holistic fix push failed; done without fix", {
         worker: entry.name, data: { project: projectName, error: String(err) },
       });
       addAlert({
@@ -660,7 +660,7 @@ function handleHolisticFinalReview(
   // CLEAN, FIXED-without-commits, or a best-effort skip (unparseable / transient
   // with no commit): nothing to merge — the whole-task review is complete.
   if (review === null) {
-    log.warn("poller", "holistic review verdict unparseable; finalizing done (best-effort pass)", {
+    log.warn("poller", "holistic verdict unparseable; finalizing done", {
       worker: entry.name, data: { project: projectName },
     });
   } else {
@@ -765,7 +765,7 @@ function handleTransientReviewFailure(
   const tail = rawOutput.split("\n").reverse().find(l => l.trim())?.trim() ?? "";
 
   if (next > MAX_TRANSIENT_REVIEW_RETRIES) {
-    log.warn("poller", "transient review retries exhausted, transitioning to failing", {
+    log.warn("poller", "transient review retries exhausted; failing", {
       worker: entry.name,
       data: { project: projectName, attempts: prior, lastLine: tail },
     });
@@ -1043,7 +1043,7 @@ function handleUnparseableReview(
       refreshDashboard();
       return true;
     }
-    log.info("poller", "unparseable verdict with reviewer commits; re-queueing review", {
+    log.info("poller", "unparseable verdict with commits; re-queueing", {
       worker: entry.name,
       data: { project: projectName },
     });
@@ -1084,7 +1084,7 @@ function handleUnparseableReview(
     const next = prior + 1;
     if (next <= MAX_UNPARSEABLE_REVIEW_RETRIES) {
       const nextAt = Date.now() + UNPARSEABLE_REVIEW_BACKOFF_MS;
-      log.info("poller", "unparseable verdict with no reviewer commits; scheduling retry", {
+      log.info("poller", "unparseable verdict, no commits; retrying", {
         worker: entry.name,
         data: {
           project: projectName,

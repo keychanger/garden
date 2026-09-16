@@ -47,7 +47,7 @@ export function workerEnvPrefix(
   // Best-effort callers retain the historical loud fallback. Launch callers
   // never reach it: resolveWorkerLaunchPlan rejects the invalid identity.
   if (project.provider) {
-    log.warn("provider", "provider failed to resolve; worker falling back to the first-party Anthropic path", {
+    log.warn("provider", "provider unresolved; falling back to Anthropic", {
       data: { provider: project.provider },
     });
   }

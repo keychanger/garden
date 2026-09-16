@@ -809,7 +809,7 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       // retry absorbs a transient store-lock loss; a second failure is
       // non-fatal — the worker's own seeded claim completes the join.
       if (!deps.claim(bead.id, name) && !deps.claim(bead.id, name)) {
-        log.warn("intake", "post-spawn claim failed twice; worker's own claim will retry", {
+        log.warn("intake", "post-spawn claim failed twice; worker will retry", {
           data: { project: deps.projectName, bead: bead.id, worker: name },
         });
       }

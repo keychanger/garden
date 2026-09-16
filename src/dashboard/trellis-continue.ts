@@ -102,7 +102,7 @@ export function trellisAutoContinueAfterMerge(
   // iteration fires when Sonnet resets or operator runs `garden auto on`.
   const resolvedModel = resolveAndApplyVineModel(projectName, entry, getWorkflow("trellis"));
   if (resolvedModel === null) {
-    log.warn("workers", "trellis continue skipped, vine paused on Sonnet exhaustion", {
+    log.warn("workers", "trellis continue skipped: Sonnet exhausted", {
       worker: workerName, data: { project: projectName },
     });
     return;

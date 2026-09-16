@@ -508,7 +508,7 @@ export function deliverHandoffCallbacks(projectName: string, workerName: string)
   // garden paste whose Enter was eaten. In that case it leaves continueSentAt
   // unchanged, and this callback was not pasted at all, so it must stay owed.
   if (findWorkerByName(projectName, workerName)?.continueSentAt === entry?.continueSentAt) {
-    log.info("workers", "handoff callback still owed after re-submitting prior paste", {
+    log.info("workers", "handoff callback still owed after resubmit", {
       worker: workerName,
       data: { project: projectName, owed: owed.length },
     });

@@ -434,7 +434,7 @@ export function normalizeUsage(raw: unknown): UsageData {
   const isAllNullKnown = anyExpectedKey; // legit empty-bucket account — quiet
   if (Object.keys(r).length > 0 && !isAllNullKnown) {
     const previewSource = hasQuotaObject ? quota : r;
-    log.warn("usage", "no recognized buckets in response — possible schema change", {
+    log.warn("usage", "no recognized buckets in usage response", {
       data: { shape: shapePreview(previewSource) },
     });
   }
@@ -1250,7 +1250,7 @@ async function fetchScopedIfDue(
       }
     }
     if (res.status === 429) {
-      log.debug("usage", "scoped (Fable) fetch rate-limited — scoped bar keeps last value", { data: { retryAfterMs: res.retryAfterMs, active } });
+      log.debug("usage", "Fable fetch rate-limited; keeping last value", { data: { retryAfterMs: res.retryAfterMs, active } });
       return { fetched: true, error: surface("rate-limited") };
     }
     log.debug("usage", "scoped (Fable) fetch: unexpected status", { data: { status: res.status } });

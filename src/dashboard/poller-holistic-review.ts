@@ -193,7 +193,7 @@ function launchHolisticFinalReview(
 
   const prompt = buildHolisticFinalReviewPrompt(projectName, projectPath, baseBranch, staged);
   if (prompt === null) {
-    log.warn("poller", "holistic-review could not build prompt; leaving worker done", {
+    log.warn("poller", "holistic prompt build failed; leaving done", {
       worker: entry.name, data: { project: projectName },
     });
     return; // guard already set — the worker stays `done`
@@ -222,7 +222,7 @@ function launchHolisticFinalReview(
         + `The per-phase reviews all passed; only the cross-phase check was skipped.`,
       dedupKey: `oversized-holistic:${projectName}:${entry.name}`,
     });
-    log.warn("poller", "holistic-review prompt exceeds context ceiling; leaving worker done", {
+    log.warn("poller", "holistic prompt over ceiling; leaving done", {
       worker: entry.name,
       data: {
         project: projectName,

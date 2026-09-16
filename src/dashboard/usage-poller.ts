@@ -52,7 +52,7 @@ export function pokeOnGateReset(): void {
   if (cfg.enabled || !cfg.resumeAfterReset || !cfg.pausedUntil) return;
   const resetMs = Date.parse(cfg.pausedUntil);
   if (!Number.isFinite(resetMs) || Date.now() < resetMs) return;
-  log.info("usage-poller", "usage window reset, poking pollers to resume auto-continue", {
+  log.info("usage-poller", "usage window reset; poking pollers", {
     data: { pausedUntil: cfg.pausedUntil },
   });
   for (const projectName of Object.keys(loadConfig().projects)) {
@@ -73,7 +73,7 @@ export function startUsagePoller(gardenRunner: string): void {
   // failure keeps the meter on rather than killing the caller.
   try {
     if (!anyAnthropicMeteredProject()) {
-      log.info("usage-poller", "skipped: every project uses a provider; no Anthropic meter to poll");
+      log.info("usage-poller", "skipped: every project uses a provider");
       return;
     }
   } catch { /* config unavailable: keep the poller */ }

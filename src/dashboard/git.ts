@@ -590,7 +590,7 @@ export function fastForwardBase(
         // Clean tree carrying real local-only content: genuine divergence.
         // origin holds the merged work; the operator reconciles by hand.
         const { ahead, behind } = aheadBehind(repoPath, baseBranch, `origin/${baseBranch}`);
-        log.debug("git", "local base checkout diverged from origin (postMerge skipped)", {
+        log.debug("git", "base diverged from origin; postMerge skipped", {
           worker,
           data: { ...baseData, ahead, behind },
         });
@@ -599,7 +599,7 @@ export function fastForwardBase(
       // Dirty (or status unknowable): uncommitted local changes collide with the
       // merge. Leave the checkout untouched rather than clobber operator edits.
       const { behind } = aheadBehind(repoPath, baseBranch, `origin/${baseBranch}`);
-      log.debug("git", "local base checkout dirty, not fast-forwarded (postMerge skipped)", {
+      log.debug("git", "base checkout dirty; no fast-forward or postMerge", {
         worker,
         data: { ...baseData, error, behind },
       });
