@@ -246,9 +246,7 @@ describe("codex usage meter", () => {
     const nowS = Math.floor(now / 1000);
     seedCodex({ windows: [{ windowMinutes: 43200, usedPercent: 17, resetsAt: nowS + 1_000_000 }] }, now);
     const { renderUsagePane } = await import("../src/dashboard/usage.js");
-    // 60 cols: the Claude meter alone consumes nearly the whole width, so the
-    // remaining space is below CODEX_MIN_WIDTH and the second column drops.
-    const out = renderUsagePane(now, 60);
+    const out = renderUsagePane(now, 50);
     expect(out).not.toContain("codex"); // no two-column header
     expect(out).not.toContain("30d");   // codex column not rendered
     expect(out).toContain("28%");       // Claude meter still renders
@@ -320,6 +318,51 @@ describe("codex usage meter", () => {
       seedClaude(now);
       seedCodex({ windows: [{ windowMinutes: 10080, usedPercent: 0, resetsAt: Math.floor(now / 1000) + 600_000 }] }, now);
     }
+
+    it("keeps provider columns and all bars equal while resizing with an aged scoped reading", async () => {
+      const now = Date.now();
+      seedBoth(now);
+      const snapshotPath = path.join(sessions, "claude-usage.json");
+      const snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+      snapshot.scopedAt = new Date(now - 4 * 60 * 60_000).toISOString();
+      snapshot.data.scoped = [{ label: "Fable", pct: 29, resetsAt: new Date(now + 400_000_000).toISOString() }];
+      fs.writeFileSync(snapshotPath, JSON.stringify(snapshot));
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+
+      for (let width = 51; width <= 240; width++) {
+        const lines = renderUsagePane(now, width).split("\n");
+        const runs = [...lines[1].matchAll(/\x1b\[(?:1;)?90;4m([^\x1b]*)\x1b\[0m/g)].map((m) => m[1]);
+        expect(runs, `headers at ${width}`).toHaveLength(4);
+        expect(runs[0].length + runs[1].length, `columns at ${width}`).toBe(runs[2].length + runs[3].length);
+        const bars = strip(lines.join("\n")).match(/[█░│]+/g)!;
+        expect(bars, `bars at ${width}`).toHaveLength(4);
+        expect(new Set(bars.map((bar) => bar.length)).size, `bar widths at ${width}`).toBe(1);
+        expect(Math.max(...lines.map((line) => strip(line).length))).toBeLessThanOrEqual(width - 4);
+      }
+      expect(strip(renderUsagePane(now, 90))).not.toContain("4h old");
+      expect(strip(renderUsagePane(now, 140))).toContain("4h old");
+    });
+
+    it.each(["loading", "error", "stale"])("keeps Codex in its column with Claude %s text", async (state) => {
+      const now = Date.now();
+      seedBoth(now);
+      const snapshotPath = path.join(sessions, "claude-usage.json");
+      if (state === "loading") {
+        fs.unlinkSync(snapshotPath);
+      } else {
+        const snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
+        snapshot.error = "refresh failed: network: " + "unreachable ".repeat(20);
+        if (state === "error") delete snapshot.data;
+        fs.writeFileSync(snapshotPath, JSON.stringify(snapshot));
+      }
+      const { renderUsagePane } = await import("../src/dashboard/usage.js");
+      for (const width of [51, 90, 112, 200]) {
+        const lines = renderUsagePane(now, width).split("\n").map(strip);
+        const codexStart = lines[1].indexOf("codex");
+        expect(lines[3].indexOf("week", codexStart)).toBe(codexStart);
+        expect(Math.max(...lines.map((line) => line.length))).toBe(width - 4);
+      }
+    });
 
     it("opens with a blank line so the column headers clear the pane border", async () => {
       const now = Date.now();
@@ -431,20 +474,18 @@ describe("codex usage meter", () => {
       // reaches its own column's right edge instead of stopping at the word.
       const header = strip(lines[1]);
       const meterRows = lines.slice(2).map(strip).filter((l) => l.trim());
-      expect(header.length).toBe(Math.max(...meterRows.map((l) => l.length)));
+      expect(header.length).toBeGreaterThanOrEqual(Math.max(...meterRows.map((l) => l.length)));
       const gap = header.length - 4 - claudeRule - codexRule;
       expect(gap).toBeGreaterThanOrEqual(3); // COLUMN_GAP floor
     });
 
-    it("spreads the columns into the right-hand slack instead of bunching them left", async () => {
+    it("positions Codex at the start of the second half", async () => {
       const now = Date.now();
       seedBoth(now);
       const { renderUsagePane } = await import("../src/dashboard/usage.js");
       const out = renderUsagePane(now, 112);
       const header = out.split("\n").map(strip).find((l) => l.includes("codex"))!;
-      // The old fixed 3-col gap put "codex" immediately after the Claude column;
-      // widening pushes it right, consuming the dead space that was on the right.
-      expect(header.indexOf("codex")).toBeGreaterThan(55);
+      expect(header.indexOf("codex")).toBe(58);
     });
 
     it("never overflows the pane, and holds a right margin", async () => {
@@ -460,13 +501,14 @@ describe("codex usage meter", () => {
       expect(Math.max(...widths(renderUsagePane(now, 112)))).toBe(108);
     });
 
-    it("caps the gap so a very wide pane does not strand the columns at opposite edges", async () => {
+    it("distributes both columns across very wide panes", async () => {
       const now = Date.now();
       seedBoth(now);
       const { renderUsagePane } = await import("../src/dashboard/usage.js");
       const at140 = Math.max(...widths(renderUsagePane(now, 140)));
       const at200 = Math.max(...widths(renderUsagePane(now, 200)));
-      expect(at200).toBe(at140); // gap capped; extra slack stays on the right
+      expect(at140).toBe(136);
+      expect(at200).toBe(196);
     });
   });
 

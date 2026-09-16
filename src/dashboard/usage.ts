@@ -1333,29 +1333,26 @@ function computeMeterFit(paneWidth: number | undefined): { barWidth: number; sho
 // pane auto-resizes by one row when it appears) keeps transient errors from
 // dominating the visual top of the pane.
 export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number): string {
-  const claudeLines = buildClaudeLines(nowMs, paneWidth);
-
-  // A second meter for Codex, in the empty space to the right. It appears once
-  // any Codex process has reported rate_limits (read role-agnostically from the
-  // newest rollout on the watchdog tick — codex-usage.ts), so a fleet that has
-  // never run Codex leaves the pane unchanged. Claude keeps its full-width fit;
-  // Codex fills the remainder.
   const codexSnap = readCodexUsage();
   if (!codexSnap || codexSnap.data.windows.length === 0) {
-    return finalizePane(["", ...claudeLines]);
+    return finalizePane(["", ...buildClaudeLines(nowMs, paneWidth)]);
   }
 
-  const leftWidth = Math.max(0, ...claudeLines.map(visibleWidth));
-  const rightAvail = paneWidth !== undefined ? paneWidth - leftWidth - COLUMN_GAP : undefined;
-  // Too narrow for a second column — stay single-column (data still captured,
-  // shows once the terminal is wide enough).
-  if (rightAvail !== undefined && rightAvail < CODEX_MIN_WIDTH) {
-    return finalizePane(["", ...claudeLines]);
+  const columnWidth = paneWidth === undefined
+    ? FIXED_LINE_WIDTH - INDENT.length + BAR_WIDTH + 2 + RESET_TEXT_WIDTH
+    : Math.floor((paneWidth - INDENT.length - RIGHT_MARGIN - COLUMN_GAP) / 2);
+  if (columnWidth < MIN_BAR_WIDTH + FIXED_LINE_WIDTH - INDENT.length) {
+    return finalizePane(["", ...buildClaudeLines(nowMs, paneWidth)]);
   }
 
-  const codexLines = renderCodexColumn(codexSnap.data, nowMs, computeMeterFit(rightAvail));
-  const codexWidth = Math.max(0, ...codexLines.map(visibleWidth));
-  const gap = " ".repeat(computeColumnGap(paneWidth, leftWidth, codexWidth));
+  const leftWidth = INDENT.length + columnWidth;
+  const fit = computeMeterFit(leftWidth);
+  const claudeLines = buildClaudeLines(nowMs, leftWidth, fit);
+  const codexLines = renderCodexColumn(codexSnap.data, nowMs, fit);
+  const codexWidth = columnWidth;
+  const gap = " ".repeat(paneWidth === undefined
+    ? COLUMN_GAP
+    : paneWidth - leftWidth - codexWidth - RIGHT_MARGIN);
   // Keep the leading blank line: the two-column path used to spend it on the
   // header row, which put the column labels hard against the pane border and
   // read as cramped. The pane auto-sizes to its content, so the extra row costs
@@ -1390,20 +1387,24 @@ export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number):
 // The Claude column: the meter rows (5h / week / model-scoped) or a status message,
 // without the leading blank/header line. Extracted so the two-column path can
 // place it beside the Codex column.
-function buildClaudeLines(nowMs: number, paneWidth: number | undefined): string[] {
+function buildClaudeLines(
+  nowMs: number,
+  paneWidth: number | undefined,
+  sharedFit?: { barWidth: number; showReset: boolean },
+): string[] {
   // Provider-only fleet: the poller is gated off (startUsagePoller), so the
   // snapshot would sit stale forever. Say why the meter is off.
   let metered = true;
   try { metered = anyAnthropicMeteredProject(); } catch { /* config unavailable: keep meter */ }
-  if (!metered) return [`${INDENT}${dim("claude usage  off — every project uses a provider")}`];
+  if (!metered) return [dimFooterLine("claude usage  off — every project uses a provider", paneWidth)];
 
   const snap = readUsageSnapshot();
-  if (!snap) return [`${INDENT}${dim("claude usage  loading…")}`];
-  if (!snap.data) return [`${INDENT}${dim(`claude usage  ${snap.error ?? "loading…"}`)}`];
+  if (!snap) return [dimFooterLine("claude usage  loading…", paneWidth)];
+  if (!snap.data) return [dimFooterLine(`claude usage  ${snap.error ?? "loading…"}`, paneWidth)];
 
   const tag = formatHealthTag(snap, nowMs);
   const d = snap.data;
-  const fit = computeMeterFit(paneWidth);
+  const fit = sharedFit ?? computeMeterFit(paneWidth);
   const lines: string[] = [];
   lines.push(renderMeterLine("5h",   d.fiveHour, nowMs, FIVE_HOUR_MS, fit));
   lines.push(renderMeterLine("week", d.weekly,   nowMs, SEVEN_DAY_MS, fit));
@@ -1411,11 +1412,14 @@ function buildClaudeLines(nowMs: number, paneWidth: number | undefined): string[
   // No scoped meters → no extra row; a rolled-over window renders "—" per entry.
   // All scoped meters come from one fetch, so they share its age.
   const scopedAge = formatScopedAge(snap.scopedAt, nowMs);
-  const scopedFit = scopedAge && paneWidth !== undefined
+  const scopedFit = sharedFit ?? (scopedAge && paneWidth !== undefined
     ? computeMeterFit(paneWidth - `  · ${scopedAge}`.length)
-    : fit;
+    : fit);
   for (const s of d.scoped ?? []) {
-    lines.push(renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, scopedFit, scopedAge));
+    const row = renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, scopedFit, scopedAge);
+    lines.push(paneWidth !== undefined && visibleWidth(row) > paneWidth
+      ? renderMeterLine(s.label.toLowerCase(), s, nowMs, SEVEN_DAY_MS, scopedFit)
+      : row);
   }
   // Extra usage (pay-as-you-go credits) sits below the meters as a dim footnote
   // and above the health tag — real data first, freshness annotation last.
@@ -1470,32 +1474,8 @@ function codexWindowLabel(minutes: number): string {
   return `${minutes}m`;
 }
 
-// Minimum separation between the two columns — also what the fit check budgets
-// for, so the Codex column is always measured against its tightest layout.
 const COLUMN_GAP = 3;
-// Ceiling on the widened gap. Past this the columns stop reading as a pair and
-// start reading as two unrelated things at opposite edges, so extra slack is
-// left on the right instead of being poured into the gap.
-const MAX_COLUMN_GAP = 16;
-// Right margin held back when widening, mirroring INDENT on the left so the
-// content sits inside symmetric margins rather than running to the pane edge.
 const RIGHT_MARGIN = INDENT.length;
-const CODEX_MIN_WIDTH = MIN_BAR_WIDTH + LABEL_WIDTH + 8; // label + bar + "  NN%"
-
-// Spread the two columns into the dead space on the right rather than leaving
-// them bunched at the left with a ragged empty margin. The Codex column is
-// rendered first at the minimum gap (so it is measured with the most room it
-// could have), then pushed right by whatever slack is left over — which is why
-// this can only ever consume existing emptiness, never overflow the pane.
-function computeColumnGap(
-  paneWidth: number | undefined,
-  leftWidth: number,
-  codexWidth: number,
-): number {
-  if (paneWidth === undefined) return COLUMN_GAP;
-  const slack = paneWidth - leftWidth - codexWidth - RIGHT_MARGIN;
-  return Math.max(COLUMN_GAP, Math.min(MAX_COLUMN_GAP, slack));
-}
 
 // Visible width ignoring the SGR color codes garden applies (the only escapes
 // present in these lines), for aligning the two columns.
