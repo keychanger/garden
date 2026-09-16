@@ -5,8 +5,8 @@
 // short rolling phrase and garden reads the pane. Codex writes nothing of the
 // kind — verified across live rollouts on 2026-08-25: no title record of any
 // shape, `Reasoning.summary_text` empty with the reasoning itself encrypted,
-// and current gpt-5.6-sol workers emitting no `update_plan` at all, so even the
-// plan-step path (codex-core readActivity) never fires. What is left is
+// and the `update_plan` steps some models emit name a step rather than the
+// thread. What is left is
 // firstPromptLine: the operator's seed, first line only, capped at 120 chars —
 // and because that fallback runs only while the task is unset, it then freezes
 // there for the worker's whole life. Rows read as a truncated paragraph of the

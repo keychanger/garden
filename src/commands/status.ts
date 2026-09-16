@@ -322,7 +322,7 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
   const badges = [baseBadge, crewBadge, memberBadge, workflowBadge].filter(b => b !== "");
   // The interposed whole-task final review reuses the `reviewing` state; tag it
   // in the detail column so it reads as the final coherence pass, not a normal
-  // per-phase review. Takes the elastic slot ahead of the workflow decor/activity.
+  // per-phase review. Trails the topic in the elastic detail slot.
   const holisticDetail = worker.holisticFinal && worker.status === "reviewing"
     ? "holistic review"
     : undefined;

@@ -1214,6 +1214,30 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "garden")).not.toContain("⚠");
   });
 
+  it.each([
+    ["Watchdog overview", "Watchdog overview · holistic review"],
+    ["", "holistic review"],
+  ])("shows the holistic annotation after topic %j", (task, detail) => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task, agentStatus: "idle",
+      prState: "reviewing", holisticFinalActive: true,
+    }]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).toContain("reviewing");
+    expect(line).toContain(detail);
+    if (!task) expect(line).not.toContain("·");
+  });
+
+  it("removes the holistic annotation after review while keeping the topic", () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "Watchdog overview", agentStatus: "idle",
+      prState: "merge-pending", holisticFinalActive: true,
+    }]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line).toContain("Watchdog overview");
+    expect(line).not.toContain("holistic review");
+  });
+
   it("truncates detail first and keeps the flags (gate closed) on a narrow pane", () => {
     vi.mocked(getAutoContinueConfig).mockReturnValue({ enabled: false, usageThreshold: 95, resumeAfterReset: false });
     vi.mocked(getWorkers).mockReturnValue([
@@ -1485,13 +1509,14 @@ describe("blocked-on-operator row", () => {
     vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
   });
 
-  it("shows the question as the row's description", async () => {
+  it("shows the question alone when the topic is empty", async () => {
     vi.mocked(getWorkers).mockReturnValue([{
-      name: "bold-ash", sessionId: "a", task: "reworking the evening", agentStatus: "idle",
+      name: "bold-ash", sessionId: "a", task: "", agentStatus: "idle",
       blockedQuestion: "Commit binary ledgers?",
     }]);
-    expect(stripAnsi(lineFor(renderQuickStatus(state), "bold-ash")))
-      .toContain("Commit binary ledgers?");
+    const line = stripAnsi(lineFor(renderQuickStatus(state), "bold-ash"));
+    expect(line).toContain("Commit binary ledgers?");
+    expect(line).not.toContain("·");
   });
 
   it("strips terminal controls and folds line breaks from a forged registry value", async () => {
@@ -1513,6 +1538,20 @@ describe("blocked-on-operator row", () => {
     }]);
     expect(stripAnsi(lineFor(renderQuickStatus(state), "bold-ash")))
       .toContain("Watchdog overview \u00b7 Commit binary ledgers?");
+  });
+
+  it("keeps the topic and asking signal when a narrow pane clips the question", () => {
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "Watchdog overview", agentStatus: "idle",
+      blockedQuestion: "Commit binary ledgers?",
+    }]);
+    const line = stripAnsi(lineFor(renderQuickStatus(state, undefined, undefined, undefined, 60), "bold-ash"));
+    expect(line).toContain("Watchdog overview ·");
+    expect(line).toContain("asking");
+    expect(line).toContain("\u2691");
+    expect(line).toContain("…");
+    expect(line).not.toContain("Commit binary ledgers?");
+    expect(visibleWidth(line)).toBeLessThanOrEqual(58);
   });
 
   // The icon lives in the row core, which never truncates, so a narrow pane still
