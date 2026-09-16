@@ -386,22 +386,20 @@ export const codexCore: HarnessCore = {
     });
   },
 
+  // The row names what the thread is about, and that does not change as the
+  // worker moves through it: the opening prompt's first line until
+  // task-title.ts replaces it once with a model-written topic, then that topic
+  // for life. Plan steps are deliberately not read — a step overwrote the topic
+  // mid-thread and the row kept showing whichever step came last.
   readActivity(entry: WorkerEntry): string | null {
-    const transcript = codexCore.resolveTranscriptPath(entry);
-    if (!transcript || !isReadable(transcript)) return null;
-    let tail: string;
-    try {
-      tail = readTail(transcript, ACTIVITY_TAIL_BYTES);
-    } catch {
-      return null;
-    }
-    const step = latestPlanStep(tail);
-    if (step) return step;
     // A task equal to the worker name is the pre-fix symptom, not a summary —
     // Codex's default title is `project-name`, which falls back to the worktree
     // basename. Treat it as unset so an existing worker heals without a bounce.
     const unset = !entry.task || entry.task === entry.name || entry.task === CODEX_AWAITING_TASK;
-    return unset ? firstPromptLine(transcript) : null;
+    if (!unset) return null;
+    const transcript = codexCore.resolveTranscriptPath(entry);
+    if (!transcript || !isReadable(transcript)) return null;
+    return firstPromptLine(transcript);
   },
 
   readRunningModel(entry: WorkerEntry): string | null {
@@ -843,8 +841,8 @@ export function initialCodexActivity(seed?: string): string {
   return condense(line) || CODEX_AWAITING_TASK;
 }
 
-// Bounds for readActivity's reads. A plan record is ~1KB, so the tail holds
-// many of them. The head has to clear the rollout's preamble before the
+// Bounds for the rollout reads on the status and hook paths. The tail serves
+// the latest-prompt and running-model reads. The head has to clear the preamble before the
 // opening prompt, which is NOT small: Codex records the composed instructions
 // (garden's rules ride the worktree AGENTS.md) up front, measured at 70-90KB
 // for real garden workers — so the head bound has a wide margin over that, and
@@ -854,73 +852,6 @@ export function initialCodexActivity(seed?: string): string {
 const ACTIVITY_TAIL_BYTES = 256 * 1024;
 const ACTIVITY_HEAD_BYTES = 512 * 1024;
 const ACTIVITY_MAX_CHARS = 120;
-
-// The step the newest update_plan call is on: the first in-progress entry, or
-// the last completed one when the plan has finished. Scans backwards and stops
-// at the first plan found, so cost is a few lines in the common case. The
-// tail's leading line may be clipped mid-record; unparseable lines are skipped,
-// which covers it.
-function latestPlanStep(tail: string): string | null {
-  const lines = tail.split("\n");
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i].trim();
-    if (!line || !line.includes("update_plan")) continue;
-    let rec: CodexLine;
-    try {
-      rec = JSON.parse(line) as CodexLine;
-    } catch {
-      continue;
-    }
-    const p = rec.payload;
-    if (!p || (p.type !== "function_call" && p.type !== "custom_tool_call")) continue;
-    const steps = planSteps(p);
-    const current = steps.find(s => s.status === "in_progress")
-      ?? [...steps].reverse().find(s => s.status === "completed");
-    if (current) return condense(current.step);
-  }
-  return null;
-}
-
-interface PlanStep {
-  step: string;
-  status?: string;
-}
-
-// The plan carried by an update_plan call, in either shape Codex emits it.
-// Direct call (`name: "update_plan"`, arguments a JSON *string*) is the older
-// tool protocol; codex 0.146.0 running a gpt-5-codex model instead routes it
-// through the generic `exec` tool, whose `input` is JS SOURCE
-// (`await tools.update_plan({plan:[{step:"…",status:"…"}]})`). Reading only the
-// direct shape left the summary frozen at the opening prompt for every current
-// Codex worker — verified against three live rollouts, 2026-08-05.
-function planSteps(p: CodexPayload): PlanStep[] {
-  if (p.name === "update_plan") {
-    let plan: unknown;
-    try {
-      plan = (JSON.parse(typeof p.arguments === "string" ? p.arguments : "{}") as { plan?: unknown }).plan;
-    } catch {
-      return [];
-    }
-    if (!Array.isArray(plan)) return [];
-    return plan.filter((s): s is PlanStep =>
-      Boolean(s) && typeof s === "object" && typeof (s as { step?: unknown }).step === "string");
-  }
-  if (typeof p.input === "string" && p.input.includes("update_plan")) return stepsFromSource(p.input);
-  return [];
-}
-
-// The exec shape's object literal has unquoted keys, so it is not JSON and
-// cannot be re-parsed. Scan the source for step/status pairs instead of
-// evaluating model-authored code.
-const PLAN_STEP_RE = /["']?step["']?\s*:\s*"((?:[^"\\]|\\.)*)"\s*,\s*["']?status["']?\s*:\s*"([a-z_]+)"/g;
-
-function stepsFromSource(src: string): PlanStep[] {
-  const steps: PlanStep[] = [];
-  for (const m of src.matchAll(PLAN_STEP_RE)) {
-    steps.push({ step: m[1].replace(/\\(["'\\])/g, "$1"), status: m[2] });
-  }
-  return steps;
-}
 
 // The opening operator prompt, condensed — Codex extracts the same message as
 // the thread title, so this is its own naming of the thread.

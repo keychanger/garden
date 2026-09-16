@@ -16,14 +16,15 @@
 // and stamp its answer as the worker's task. Same tool and precedent as
 // verdict-extract.ts — a small model reading a conclusion someone else already
 // reached, not forming one. One call per worker, ever: the topic of a thread
-// does not change, and the plan-step path still overwrites it with live
-// activity for a worker that does emit a plan.
+// does not change, and nothing else writes over it once it lands (codex-core
+// readActivity reports only the opening prompt, and only while the task is
+// unset).
 import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { tryGetProject } from "../config.js";
 import { reviewerEnvObject } from "./claude-env.js";
 import {
-  CODEX_AWAITING_TASK, initialCodexActivity, readCodexOpeningPrompt,
+  CODEX_AWAITING_TASK, readCodexOpeningPrompt,
 } from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
 import { log } from "./log.js";
@@ -143,8 +144,7 @@ export function generateTaskTitle(
 // Workers whose row might still read as a truncated prompt: a harness that
 // writes no title of its own, no title attempt recorded yet, and a non-placeholder
 // task. The detached route confirms from the transcript that the prompt really
-// landed and that this task is still its opening-prompt fallback before claiming
-// the attempt. Pure over a registry snapshot so the cheap sweep is testable.
+// landed before claiming the attempt. Pure over a registry snapshot so the cheap sweep is testable.
 export function titleCandidates(
   registry: WorkerRegistry,
 ): Array<{ project: string; worker: string }> {
@@ -212,20 +212,18 @@ export function runWorkerTitle(
     return;
   }
 
-  // A creation-time seed can set entry.task before verified delivery. Wait
-  // until Codex's rollout contains the real opening prompt, then require the
-  // task to still be the fallback derived from that prompt. If a plan step has
-  // already replaced it, live activity already gives the row a better answer
-  // and must never be overwritten by a seed-derived topic.
+  // A creation-time seed can set entry.task before verified delivery, so wait
+  // until Codex's rollout contains the real opening prompt. The task is NOT
+  // required to still equal that prompt's first line: a worker whose row an
+  // earlier build let a plan step overwrite is exactly one that needs a topic.
   const snapshot = readRegistry().workers[project]?.find(e => e.name === worker);
   if (!snapshot || !needsTaskTitle(snapshot)) return;
   const transcript = getHarnessCore(snapshot.harness).resolveTranscriptPath(snapshot);
   const opening = transcript ? readCodexOpeningPrompt(transcript) : null;
   if (!opening) return;
-  const openingTask = initialCodexActivity(opening);
 
   const claimed = updateWorkerFieldsIf(project, worker, entry =>
-    needsTaskTitle(entry) && entry.task === openingTask
+    needsTaskTitle(entry)
       ? { fields: { titleGeneratedAt: (opts.now ?? Date.now)() }, result: entry.task }
       : { fields: null, result: null });
   if (!claimed) return;
@@ -235,9 +233,8 @@ export function runWorkerTitle(
   });
   if (!title) return;
 
-  // Guarded on the task we titled from: a plan step or a fresh prompt landing
-  // during the call is live activity and outranks a topic derived from the
-  // opening prompt.
+  // Guarded on the task we claimed from, so a writer that moved the row during
+  // the call is not silently overwritten.
   const applied = updateWorkerFieldsIf(project, worker, current =>
     current.task === claimed
       ? { fields: { task: title }, result: true }

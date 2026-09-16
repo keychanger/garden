@@ -1504,14 +1504,15 @@ describe("blocked-on-operator row", () => {
     expect(stripAnsi(line)).toContain("Which shape? Decide now.");
   });
 
-  // The question outranks the activity summary because the activity describes
-  // work that is finished, and the question describes the only thing left.
-  it("displaces the activity summary rather than sitting beside it", async () => {
+  // The topic says what the worker is about in every state; the question
+  // trails it, so a narrow pane truncates the question before the topic.
+  it("leads with the topic and trails the question", async () => {
     vi.mocked(getWorkers).mockReturnValue([{
-      name: "bold-ash", sessionId: "a", task: "reworking the evening", agentStatus: "idle",
+      name: "bold-ash", sessionId: "a", task: "Watchdog overview", agentStatus: "idle",
       blockedQuestion: "Commit binary ledgers?",
     }]);
-    expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain("reworking the evening");
+    expect(stripAnsi(lineFor(renderQuickStatus(state), "bold-ash")))
+      .toContain("Watchdog overview \u00b7 Commit binary ledgers?");
   });
 
   // The icon lives in the row core, which never truncates, so a narrow pane still

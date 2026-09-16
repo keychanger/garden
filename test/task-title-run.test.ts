@@ -63,7 +63,9 @@ describe("runWorkerTitle", () => {
     expect(getWorkers(PROJECT)[0].titleGeneratedAt).toBeUndefined();
   });
 
-  it("does not replace live activity that already superseded the prompt fallback", async () => {
+  // An earlier build let a plan step overwrite the prompt fallback before the
+  // first sweep, which blocked the title forever and left the row on a step.
+  it("titles a worker whose row a plan step already overwrote", async () => {
     const transcript = writeRollout();
     await addCandidate("Implement the current plan step", transcript);
     const { runWorkerTitle } = await import("../src/dashboard/task-title.js");
@@ -72,9 +74,8 @@ describe("runWorkerTitle", () => {
 
     runWorkerTitle(PROJECT, WORKER, { generateTitle, now: () => 123 });
 
-    expect(generateTitle).not.toHaveBeenCalled();
-    expect(getWorkers(PROJECT)[0]).toMatchObject({ task: "Implement the current plan step" });
-    expect(getWorkers(PROJECT)[0].titleGeneratedAt).toBeUndefined();
+    expect(generateTitle).toHaveBeenCalledWith(OPENING, expect.any(Object));
+    expect(getWorkers(PROJECT)[0]).toMatchObject({ task: "Erica composer autosize" });
   });
 
   it("keeps activity that changes while title generation is running", async () => {

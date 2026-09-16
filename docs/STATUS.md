@@ -141,7 +141,7 @@ can go further runs `garden blocked "<question>"`, which stamps
 `resolveWorkerStatus` then reports that worker as **`asking`** — the state garden
 already uses for "the agent needs you" — so it inherits that display treatment
 whole: the bold yellow row, the `⚑` icon, the top blocked-on-you band with the
-question as the row's description, the plot strip's yellow flag, and `whoami`.
+question trailing the row's topic, the plot strip's yellow flag, and `whoami`.
 One derivation rather than parallel special cases. It outranks the lifecycle
 states, which describe where the worker's *code* is rather than what it needs
 from a person; `failing` is the exception, because red means something is broken

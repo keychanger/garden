@@ -724,30 +724,21 @@ describe("codex readActivity (status-pane summary)", () => {
     task: "", ...over,
   }) as never;
 
-  it("reports the step the newest plan is on", async () => {
+  // The row names the thread's topic, which a plan step is not: reading steps
+  // overwrote the topic mid-thread and left the row on whichever came last.
+  it("names the worker from its opening prompt even once a plan exists", async () => {
     const { getHarnessCore } = await importCore();
-    // Two update_plan calls in the file; the newer one is in progress on step 2.
     expect(getHarnessCore("codex").readActivity!(entryFor("rollout-plan.jsonl")))
-      .toBe("Add the .gitignore");
+      .toBe("Add a LICENSE, a .gitignore, and a CONTRIBUTING.md to this repo.");
   });
 
-  it("falls back to the last completed step once the plan is finished", async () => {
+  it("keeps a generated topic when a plan step lands", async () => {
     const { getHarnessCore } = await importCore();
-    expect(getHarnessCore("codex").readActivity!(entryFor("rollout-plan-done.jsonl")))
-      .toBe("Add the .gitignore");
+    const entry = entryFor("rollout-plan.jsonl", { task: "Repo hygiene files" });
+    expect(getHarnessCore("codex").readActivity!(entry)).toBeNull();
   });
 
-  // codex 0.146.0 (gpt-5-codex) routes update_plan through its generic `exec`
-  // tool, whose input is JS source rather than JSON arguments. Reading only
-  // the direct-call shape left every current Codex worker's summary frozen at
-  // its opening prompt.
-  it("reads the plan when update_plan is called through the exec tool", async () => {
-    const { getHarnessCore } = await importCore();
-    expect(getHarnessCore("codex").readActivity!(entryFor("rollout-plan-exec.jsonl")))
-      .toBe("Design the module boundaries");
-  });
-
-  it("names the worker from its opening prompt until a plan exists", async () => {
+  it("names the worker from its opening prompt", async () => {
     const { getHarnessCore } = await importCore();
     // First line only — the seed briefing is a paragraph, the detail column a row.
     expect(getHarnessCore("codex").readActivity!(entryFor("rollout-sample.jsonl")))

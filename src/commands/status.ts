@@ -332,10 +332,7 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
     name: worker.name,
     state: stateCell(worker, ctx.now),
     badges,
-    // A pending question outranks every other detail: the worker is stopped
-    // until the operator answers, so its last activity summary describes work
-    // that is over, and the question describes the only thing left to do.
-    detail: worker.blockedQuestion ?? holisticDetail ?? decor.detail ?? (worker.activity ?? ""),
+    detail: composeDetail(worker.activity ?? "", worker.blockedQuestion ?? holisticDetail, decor.detail),
     // The model is grey identity like the badges above; renderWorkerRow trails
     // the whole cluster after the detail (see there for why).
     model: formatModelTag(worker.model, worker.runningModel, ctx.projectModel),
@@ -873,6 +870,15 @@ export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
   const iterStr = colorizeIteration(t.iteration, t.maxIterations);
   const driftSeg = t.driftCount > 0 ? ` | ${t.driftCount} drift` : "";
   return `[trellis: ${t.name} | ${iterStr}${driftSeg}]`;
+}
+
+// The detail column leads with the thread's topic in every lifecycle state, so
+// a glance always says what a worker is about. A pending question or the
+// holistic pass trails it rather than replacing it; truncation eats the end of
+// the row, so a narrow pane loses the annotation before the topic.
+function composeDetail(topic: string, annotation?: string, workflowDetail?: string): string {
+  if (annotation) return topic ? `${topic} · ${annotation}` : annotation;
+  return workflowDetail ?? topic;
 }
 
 // Per-workflow row decoration, keyed on entry.workflow — the leaf-function form
