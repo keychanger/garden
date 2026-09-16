@@ -1,5 +1,5 @@
 // Codex usage meter: rate_limits parsing from a rollout tail and the
-// two-column title-pane render (Claude left, Codex in the empty space right).
+// two-column title-pane render (Claude left, Codex right, equal-width columns).
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
