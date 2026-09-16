@@ -204,6 +204,8 @@ const PLOT_ICONS: Record<Exclude<PlotState, "idle">, string> = {
   // Same red failure signal, spinning: a failing worker being worked on.
   "failing-working": PLOT_SPINNER_SENTINEL,
   asking:  "⚑",  // flag
+  // A question is waiting, and other workers in the plot are still busy.
+  "asking-working": `⚑ ${PLOT_SPINNER_SENTINEL}`,
   done:    "✓",  // check — terminal cleanup signal
   working: PLOT_SPINNER_SENTINEL,
 };
@@ -211,6 +213,7 @@ const PLOT_COLORS: Record<Exclude<PlotState, "idle" | "working">, string> = {
   failing: "red",
   "failing-working": "red",
   asking:  "yellow",
+  "asking-working": "yellow",
   done:    "green",
 };
 

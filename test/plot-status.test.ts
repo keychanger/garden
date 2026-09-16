@@ -32,10 +32,30 @@ describe("resolvePlotStatus", () => {
   // it aggregates across every project in the plot, so one glance at the top bar
   // shows that a worker somewhere is waiting on the operator. This is the reason
   // the blocked exit needs no alert.
-  it("flags a plot whose worker recorded a question, over busy siblings", () => {
+  it("flags a plot whose worker recorded a question, over idle siblings", () => {
+    expect(resolvePlotStatus(plot, reg({
+      alpha: [{ agentStatus: "idle" }],
+      beta: [{ agentStatus: "idle", prState: "merged", blockedQuestion: "Which shape?" }],
+    }))).toBe("asking");
+  });
+
+  // A question parks one worker, not the plot: the flag stays, and the strip
+  // still says other work is moving.
+  it("keeps the flag and adds the spinner while siblings are still working", () => {
     expect(resolvePlotStatus(plot, reg({
       alpha: [{ agentStatus: "working" }],
       beta: [{ agentStatus: "idle", prState: "merged", blockedQuestion: "Which shape?" }],
+    }))).toBe("asking-working");
+    expect(resolvePlotStatus(plot, reg({
+      alpha: [{ agentStatus: "idle", prState: "reviewing" }],
+      beta: [{ agentStatus: "asking" }],
+    }))).toBe("asking-working");
+  });
+
+  it("does not count a done sibling as ongoing work beside a question", () => {
+    expect(resolvePlotStatus(plot, reg({
+      alpha: [{ agentStatus: "idle", prState: "done" }],
+      beta: [{ agentStatus: "asking" }],
     }))).toBe("asking");
   });
 

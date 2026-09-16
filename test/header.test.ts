@@ -632,6 +632,23 @@ describe("updateHeaderVar", () => {
     expect(strip).toContain("#[fg=yellow,bold]● ⚑ imp#[default]");
   });
 
+  it("renders the yellow ⚑ beside a yellow spinner when a question waits while siblings work", () => {
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [
+        { name: "w1", sessionId: "s", task: "", agentStatus: "asking" },
+        { name: "w2", sessionId: "s", task: "", agentStatus: "working" },
+      ]},
+    } as never);
+    vi.mocked(resolveWorkerStatus).mockImplementation((e: { agentStatus?: string } | undefined) => {
+      return (e?.agentStatus ?? "idle") as never;
+    });
+
+    updateHeaderVar({ state: makeState({ statusPaneId: "%0", activePlot: "imp" }) });
+    const strip = vi.mocked(setPaneVar).mock.calls.find(c => c[1] === "garden_name")?.[2] ?? "";
+    expect(strip).toMatch(/#\[fg=yellow,bold\]● ⚑ [⠀-⣿] imp#\[default\]/);
+    expect(strip).toMatch(/#\[fg=yellow\]○ ⚑ [⠀-⣿] all#\[default\]/);
+  });
+
   it("renders a green ✓ icon only when a worker is done (not for merged or merge-pending)", () => {
     vi.mocked(readRegistry).mockReturnValue({
       workers: { garden: [{ name: "w1", sessionId: "s", task: "", prState: "done" }] },

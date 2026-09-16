@@ -1,6 +1,12 @@
 // Aggregated status for a plot — the highest-priority worker state across
 // all projects in the plot. Drives the icon/color beside each plot name in
-// the top bar. Priority: failing-working > failing > asking > working > done > idle.
+// the top bar. Priority: failing-working > failing > asking(-working) > working > done > idle.
+//
+// `asking-working` is `asking` with other work still running in the plot: the
+// same yellow flag, plus the spinner. A question parks one worker, not the
+// plot, so the strip keeps saying whether anything else is still moving. It
+// is derived after the scan rather than ranked, because it is not a state any
+// single worker has.
 //
 // `failing-working` is the same red failure signal as `failing`, animated: a
 // failed worker the operator has prompted back into work. It outranks plain
@@ -20,9 +26,11 @@ import type { PlotConfig } from "../config.js";
 import { readRegistry, type WorkerRegistry } from "./registry.js";
 import { resolveWorkerStatus } from "../commands/status.js";
 
-export type PlotState = "failing-working" | "failing" | "asking" | "done" | "working" | "idle";
+export type PlotState = "failing-working" | "failing" | "asking-working" | "asking" | "done" | "working" | "idle";
 
-const PRIORITY: Record<PlotState, number> = {
+type WorkerPlotState = Exclude<PlotState, "asking-working">;
+
+const PRIORITY: Record<WorkerPlotState, number> = {
   "failing-working": 5,
   failing: 4,
   asking: 3,
@@ -33,13 +41,14 @@ const PRIORITY: Record<PlotState, number> = {
 
 export function resolvePlotStatus(plot: PlotConfig, registry?: WorkerRegistry): PlotState {
   const reg = registry ?? readRegistry();
-  let best: PlotState = "idle";
+  let best: WorkerPlotState = "idle";
+  let anyWorking = false;
   for (const project of plot.projects) {
     const entries = reg.workers[project];
     if (!entries) continue;
     for (const entry of entries) {
       const ws = resolveWorkerStatus(entry);
-      let state: PlotState;
+      let state: WorkerPlotState;
       switch (ws) {
         // agentStatus is read directly rather than through resolveWorkerStatus,
         // which gives prState priority and so hides the live agent state.
@@ -57,11 +66,12 @@ export function resolvePlotStatus(plot: PlotConfig, registry?: WorkerRegistry): 
         default:
           state = "idle"; break;
       }
+      if (state === "working") anyWorking = true;
       if (PRIORITY[state] > PRIORITY[best]) best = state;
       // Only the top state short-circuits: a plain `failing` must keep scanning
       // in case a later worker is failing AND working, which outranks it.
       if (best === "failing-working") return best;
     }
   }
-  return best;
+  return best === "asking" && anyWorking ? "asking-working" : best;
 }
