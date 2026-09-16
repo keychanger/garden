@@ -141,7 +141,7 @@ Plots (named, ordered subsets of projects — drive the dashboard view):
 Auth:
   login [profile]                Re-authenticate Claude (personal, or a profile)
   auth status                    Show which Claude credentials are present and where
-  usage [refresh]                Show or force-refresh the Claude usage meter
+  usage [refresh]                Show or force-refresh the Claude and Codex usage meters
 
 Development:
   test [project] [-- args]       Run project tests (npm test)

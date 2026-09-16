@@ -623,6 +623,49 @@ describe("codex usage meter", () => {
     });
   });
 
+  describe("probeCodexUsage", () => {
+    let origPath: string | undefined;
+    beforeEach(() => { origPath = process.env.PATH; });
+    afterEach(() => { process.env.PATH = origPath; });
+
+    // A stand-in `codex` on PATH that exits with the given status. The reading
+    // itself comes from a rollout already on disk, identical to the snapshot,
+    // so the probe observes an unchanged reading either way.
+    function setup(exitCode: number): string {
+      const bin = path.join(home, "bin");
+      fs.mkdirSync(bin, { recursive: true });
+      fs.writeFileSync(path.join(bin, "codex"), `#!/bin/sh\nexit ${exitCode}\n`, { mode: 0o755 });
+      process.env.PATH = `${bin}:${origPath}`;
+      const dir = path.join(home, ".codex", "sessions", "2026", "09", "16");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "rollout-2026-09-16T10-00-00-a.jsonl"), JSON.stringify({
+        type: "event_msg",
+        payload: { rate_limits: { primary: { used_percent: 91, window_minutes: 10080, resets_at: 9_999_999_999 } } },
+      }) + "\n");
+      const file = path.join(sessions, "codex-usage.json");
+      fs.writeFileSync(file, JSON.stringify({
+        capturedAt: 1_000,
+        data: { windows: [{ windowMinutes: 10080, usedPercent: 91, resetsAt: 9_999_999_999 }] },
+      }));
+      return file;
+    }
+
+    it("re-stamps an unchanged reading after a successful probe, so its age reads as just confirmed", async () => {
+      setup(0);
+      const mod = await import("../src/dashboard/codex-usage.js");
+      const before = Date.now();
+      expect(mod.probeCodexUsage()).toBe(false);
+      expect(mod.readCodexUsage()!.capturedAt).toBeGreaterThanOrEqual(before);
+    });
+
+    it("keeps the old stamp when the probe fails, since nothing confirmed the reading", async () => {
+      setup(1);
+      const mod = await import("../src/dashboard/codex-usage.js");
+      expect(mod.probeCodexUsage()).toBe(false);
+      expect(mod.readCodexUsage()!.capturedAt).toBe(1_000);
+    });
+  });
+
   it("coerces a string credit balance (Codex reports it as \"0\", not 0)", async () => {
     const { parseCodexRateLimits } = await import("../src/dashboard/codex-usage.js");
     const roll = path.join(home, "credits.jsonl");

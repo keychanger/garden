@@ -293,15 +293,28 @@ const PROBE_TIMEOUT_MS = 30_000;
 // offline, codex-not-installed, and out-of-quota all land here, and the
 // out-of-quota case still writes a rollout on its way down — so capture
 // whatever landed rather than discarding the run.
+//
+// A successful probe re-stamps capturedAt even when the reading is unchanged:
+// Codex just confirmed it, so the snapshot is fresh. Without that, a steady
+// reading keeps the time it first appeared, and both the age `garden usage`
+// prints and the ambient staleness gate would describe it as older than it is.
+// A failed probe does not re-stamp — whatever capture found predates it.
 export function probeCodexUsage(): boolean {
+  let probed = false;
   try {
     execFileSync(
       "codex",
       ["exec", "-s", "read-only", "--skip-git-repo-check", "Reply with the single word: ok"],
       { cwd: os.tmpdir(), stdio: "ignore", timeout: PROBE_TIMEOUT_MS },
     );
+    probed = true;
   } catch { /* see above — capture anything the attempt wrote */ }
-  return captureCodexUsageLatest();
+  const moved = captureCodexUsageLatest();
+  if (probed && !moved) {
+    const snap = readCodexUsage();
+    if (snap) writeCodexUsage(snap.data);
+  }
+  return moved;
 }
 
 // How stale the cached reading may get before a probe is worth its quota. The

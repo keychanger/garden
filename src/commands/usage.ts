@@ -1,5 +1,7 @@
-// Manual usage-meter inspection and force-refresh.
+// Manual usage-meter inspection and force-refresh, for both quota pools: the
+// Claude account and, when Codex has ever reported usage, the Codex account.
 import {
+  codexWindowLabel,
   formatDuration,
   formatExtraUsageCredits,
   readUsageSnapshot,
@@ -7,6 +9,12 @@ import {
   type UsageSnapshot,
 } from "../dashboard/usage.js";
 import { refreshDashboard } from "../dashboard/header.js";
+import {
+  codexInFleet,
+  probeCodexUsage,
+  readCodexUsage,
+  type CodexUsageSnapshot,
+} from "../dashboard/codex-usage.js";
 import { anyAnthropicMeteredProject } from "../config.js";
 import { output } from "../output.js";
 
@@ -20,41 +28,40 @@ export async function usage(args: string[]): Promise<void> {
 // Same gate as the dashboard pane and the background poller: a
 // provider-only fleet has no Anthropic meter, so showing a stale snapshot
 // or fetching with the personal OAuth credential would mislead.
-function meteredOrExplain(): boolean {
-  let metered = true;
-  try { metered = anyAnthropicMeteredProject(); } catch { /* config unavailable: keep meter */ }
-  if (!metered) {
-    output({ metered: false }, () => "usage meter off — every project uses a provider");
-  }
-  return metered;
+function anthropicMetered(): boolean {
+  try { return anyAnthropicMeteredProject(); } catch { return true; /* config unavailable: keep meter */ }
+}
+
+// The Codex pool rides as an additive `codex` key beside the Claude snapshot's
+// own fields, so a piped consumer of those fields sees the shape it always did.
+function emit(claude: UsageSnapshot | null | "unmetered", codex: CodexUsageSnapshot | null): void {
+  const claudeJson = claude === "unmetered" ? { metered: false } : claude;
+  const json = codex ? { ...(claudeJson ?? {}), codex } : claudeJson;
+  const claudeText = claude === "unmetered"
+    ? "usage meter off — every project uses a provider"
+    : renderPretty(claude);
+  output(json, () => codex
+    ? [`claude`, claudeText, ``, `codex`, renderCodex(codex)].join("\n")
+    : claudeText);
 }
 
 function showUsage(): void {
-  if (!meteredOrExplain()) return;
-  const snap = readUsageSnapshot();
-  output(snap, renderPretty);
+  emit(anthropicMetered() ? readUsageSnapshot() : "unmetered", readCodexUsage());
 }
 
 async function refreshAndShow(): Promise<void> {
-  // Codex first, and OUTSIDE meteredOrExplain: the Codex meter is a separate
-  // quota pool, so a provider-only fleet (no Anthropic meter) still has one to
-  // refresh. Ungated by staleness — unlike the ambient watchdog/hook callers,
-  // this is the operator explicitly asking, which is worth one probe. Without
-  // it `garden usage refresh` left the Codex column showing whatever the last
-  // Codex run happened to report, with no way to move it.
+  // Codex first, and outside the Anthropic gate: the Codex meter is a separate
+  // quota pool, so a provider-only fleet still has one to refresh. Ungated by
+  // staleness — unlike the ambient watchdog/hook callers, this is the operator
+  // explicitly asking, which is worth one probe.
   try {
-    const { codexInFleet, probeCodexUsage } = await import("../dashboard/codex-usage.js");
     if (codexInFleet()) probeCodexUsage();
   } catch { /* best effort — never block the Claude half */ }
-  if (!meteredOrExplain()) {
-    try { refreshDashboard(); } catch { /* no dashboard running or pane gone */ }
-    return;
-  }
   // Explicit operator command: force past the auth/error backoff so a refresh
   // right after `garden login` re-hits the API instead of echoing a stale error.
-  const snap = await refreshUsage(true);
+  const claude = anthropicMetered() ? await refreshUsage(true) : "unmetered";
   try { refreshDashboard(); } catch { /* no dashboard running or pane gone */ }
-  output(snap, renderPretty);
+  emit(claude, readCodexUsage());
 }
 
 function renderPretty(data: unknown): string {
@@ -92,6 +99,30 @@ function renderPretty(data: unknown): string {
     rows.push(`  ⚠ ${label} meter ${snap.scopedError} — bar holds last value`);
   }
   rows.push(``, ageText);
+  return rows.join("\n");
+}
+
+// Mirrors the dashboard's Codex column: one row per window, "—" once a window
+// has rolled over since capture (the percentage describes the previous one),
+// and a credits row only when there is a balance worth watching.
+function renderCodex(snap: CodexUsageSnapshot): string {
+  const rows: string[] = [];
+  for (const w of snap.data.windows) {
+    const label = codexWindowLabel(w.windowMinutes).padEnd(6);
+    const resetsAtMs = w.resetsAt * 1000;
+    if (resetsAtMs <= Date.now()) {
+      rows.push(`${label}  —`);
+      continue;
+    }
+    const pct = `${String(Math.round(w.usedPercent)).padStart(3)}%`;
+    rows.push(`${label}  ${pct}   resets ${formatDuration(resetsAtMs - Date.now())}`);
+  }
+  if (typeof snap.data.creditBalance === "number" && snap.data.creditBalance > 0) {
+    rows.push(`credits $${snap.data.creditBalance.toFixed(2)}`);
+  } else if (snap.data.creditsUnlimited) {
+    rows.push(`credits unlimited`);
+  }
+  rows.push(``, `fetched ${formatAge(Date.now() - snap.capturedAt)}`);
   return rows.join("\n");
 }
 
