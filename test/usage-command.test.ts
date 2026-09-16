@@ -14,11 +14,14 @@ describe("garden usage", () => {
 
   beforeEach(() => {
     vi.resetModules();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-16T12:00:00Z"));
     logs = [];
     vi.spyOn(console, "log").mockImplementation((line: string) => { logs.push(line); });
     origPretty = process.env.GARDEN_PRETTY;
   });
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     if (origPretty === undefined) delete process.env.GARDEN_PRETTY;
     else process.env.GARDEN_PRETTY = origPretty;
@@ -39,11 +42,11 @@ describe("garden usage", () => {
     }));
   }
 
-  async function run(pretty: boolean): Promise<string> {
+  async function run(pretty: boolean, args: string[] = []): Promise<string> {
     if (pretty) process.env.GARDEN_PRETTY = "1";
     else delete process.env.GARDEN_PRETTY;
     const { usage } = await import("../src/commands/usage.js");
-    await usage([]);
+    await usage(args);
     return logs.join("\n");
   }
 
@@ -51,7 +54,7 @@ describe("garden usage", () => {
     writeClaude();
     writeCodex([{ windowMinutes: 10080, usedPercent: 91, resetsAt: Math.floor((Date.now() + 2 * DAY_MS) / 1000) + 60 }]);
     const text = await run(true);
-    expect(text).toMatch(/^claude\n5h\s+—\nweek\s+27%\s+resets in 2d 23h\n\nfetched just now\n/);
+    expect(text).toMatch(/^claude\n5h\s+—\nweek\s+27%\s+resets in 3d 0h\n\nfetched just now\n/);
     expect(text).toMatch(/\n\ncodex\nweek\s+91%\s+resets in 2d 0h\n\nfetched 5m ago$/);
   });
 
@@ -88,6 +91,74 @@ describe("garden usage", () => {
     writeCodex([{ windowMinutes: 10080, usedPercent: 40, resetsAt: 9_999_999_999 }]);
     const text = await run(true);
     expect(text).toContain("usage meter off — every project uses a provider");
+    expect(text).toMatch(/codex\nweek\s+40%/);
+  });
+
+  it.each([
+    { creditBalance: 12.5, creditsUnlimited: false, expected: "credits $12.50" },
+    { creditBalance: 0, creditsUnlimited: true, expected: "credits unlimited" },
+    { creditBalance: 0, creditsUnlimited: false, expected: null },
+  ])("renders the credit footer for $creditBalance / unlimited=$creditsUnlimited", async ({ expected, ...credits }) => {
+    writeCodex([]);
+    const file = path.join(tmp.sessionsDir, "codex-usage.json");
+    const snap = JSON.parse(fs.readFileSync(file, "utf8"));
+    Object.assign(snap.data, credits);
+    fs.writeFileSync(file, JSON.stringify(snap));
+    const text = await run(true);
+    if (expected) expect(text).toContain(expected);
+    else expect(text).not.toContain("credits");
+  });
+
+  async function mockRefresh(anthropic: boolean, codex: boolean) {
+    process.env.GARDEN_PRETTY = "1";
+    const config = await import("../src/config.js");
+    const claudeUsage = await import("../src/dashboard/usage.js");
+    const codexUsage = await import("../src/dashboard/codex-usage.js");
+    const header = await import("../src/dashboard/header.js");
+    vi.spyOn(config, "anyAnthropicMeteredProject").mockReturnValue(anthropic);
+    vi.spyOn(codexUsage, "codexInFleet").mockReturnValue(codex);
+    const probe = vi.spyOn(codexUsage, "probeCodexUsage").mockImplementation(() => {
+      writeCodex([{ windowMinutes: 10080, usedPercent: 42, resetsAt: 9_999_999_999 }]);
+      return true;
+    });
+    const refresh = vi.spyOn(claudeUsage, "refreshUsage").mockResolvedValue({
+      fetchedAt: new Date().toISOString(), data: { weekly: { pct: 28 } },
+    });
+    vi.spyOn(header, "refreshDashboard").mockImplementation(() => {});
+    return { probe, refresh };
+  }
+
+  it("prints both newly refreshed readings", async () => {
+    const { probe, refresh } = await mockRefresh(true, true);
+    const text = await run(true, ["refresh"]);
+    expect(probe).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledWith(true);
+    expect(text).toMatch(/week\s+28%/);
+    expect(text).toMatch(/codex\nweek\s+42%/);
+  });
+
+  it("refreshes Codex when the Claude pool is unmetered", async () => {
+    const { probe, refresh } = await mockRefresh(false, true);
+    const text = await run(true, ["refresh"]);
+    expect(probe).toHaveBeenCalledOnce();
+    expect(refresh).not.toHaveBeenCalled();
+    expect(text).toMatch(/codex\nweek\s+42%/);
+  });
+
+  it("does not spend Codex quota on an all-Claude fleet", async () => {
+    const { probe, refresh } = await mockRefresh(true, false);
+    await run(true, ["refresh"]);
+    expect(probe).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledWith(true);
+  });
+
+  it("still prints Claude and the cached Codex reading when the probe throws", async () => {
+    writeCodex([{ windowMinutes: 10080, usedPercent: 40, resetsAt: 9_999_999_999 }]);
+    const { probe, refresh } = await mockRefresh(true, true);
+    probe.mockImplementation(() => { throw new Error("probe unavailable"); });
+    const text = await run(true, ["refresh"]);
+    expect(refresh).toHaveBeenCalledWith(true);
+    expect(text).toMatch(/week\s+28%/);
     expect(text).toMatch(/codex\nweek\s+40%/);
   });
 });

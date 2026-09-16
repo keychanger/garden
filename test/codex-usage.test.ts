@@ -628,17 +628,25 @@ describe("codex usage meter", () => {
     beforeEach(() => { origPath = process.env.PATH; });
     afterEach(() => { process.env.PATH = origPath; });
 
-    // A stand-in `codex` on PATH that exits with the given status. The reading
-    // itself comes from a rollout already on disk, identical to the snapshot,
-    // so the probe observes an unchanged reading either way.
-    function setup(exitCode: number): string {
+    function setup(exitCode: number, report?: "fresh" | "empty" | "changed"): void {
       const bin = path.join(home, "bin");
       fs.mkdirSync(bin, { recursive: true });
-      fs.writeFileSync(path.join(bin, "codex"), `#!/bin/sh\nexit ${exitCode}\n`, { mode: 0o755 });
+      const script = report ? `#!/usr/bin/env node
+const fs = require("node:fs");
+fs.writeFileSync(process.env.HOME + "/.codex/sessions/2026/09/16/rollout-probe.jsonl", JSON.stringify({
+  timestamp: new Date().toISOString(), type: "event_msg",
+  payload: { rate_limits: ${JSON.stringify(report === "empty" ? EMPTY_RATE_LIMITS : {
+    primary: { used_percent: report === "changed" ? 92 : 91, window_minutes: 10080, resets_at: 9_999_999_999 },
+  })} }
+}) + "\\n");
+process.exit(${exitCode});
+` : `#!/bin/sh\nexit ${exitCode}\n`;
+      fs.writeFileSync(path.join(bin, "codex"), script, { mode: 0o755 });
       process.env.PATH = `${bin}:${origPath}`;
       const dir = path.join(home, ".codex", "sessions", "2026", "09", "16");
       fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(path.join(dir, "rollout-2026-09-16T10-00-00-a.jsonl"), JSON.stringify({
+        timestamp: new Date(1_000).toISOString(),
         type: "event_msg",
         payload: { rate_limits: { primary: { used_percent: 91, window_minutes: 10080, resets_at: 9_999_999_999 } } },
       }) + "\n");
@@ -647,15 +655,36 @@ describe("codex usage meter", () => {
         capturedAt: 1_000,
         data: { windows: [{ windowMinutes: 10080, usedPercent: 91, resetsAt: 9_999_999_999 }] },
       }));
-      return file;
     }
 
     it("re-stamps an unchanged reading after a successful probe, so its age reads as just confirmed", async () => {
-      setup(0);
+      setup(0, "fresh");
       const mod = await import("../src/dashboard/codex-usage.js");
       const before = Date.now();
       expect(mod.probeCodexUsage()).toBe(false);
       expect(mod.readCodexUsage()!.capturedAt).toBeGreaterThanOrEqual(before);
+    });
+
+    it.each([undefined, "empty"] as const)("keeps the old stamp when a successful probe reports no quota (%s)", async (report) => {
+      setup(0, report);
+      const mod = await import("../src/dashboard/codex-usage.js");
+      expect(mod.probeCodexUsage()).toBe(false);
+      expect(mod.readCodexUsage()!.capturedAt).toBe(1_000);
+    });
+
+    it("keeps the old stamp when a successful probe cannot read any rollout", async () => {
+      setup(0);
+      fs.rmSync(path.join(home, ".codex", "sessions"), { recursive: true });
+      const mod = await import("../src/dashboard/codex-usage.js");
+      expect(mod.probeCodexUsage()).toBe(false);
+      expect(mod.readCodexUsage()!.capturedAt).toBe(1_000);
+    });
+
+    it.each([0, 1])("captures a changed reading even when the probe exits with %s", async (exitCode) => {
+      setup(exitCode, "changed");
+      const mod = await import("../src/dashboard/codex-usage.js");
+      expect(mod.probeCodexUsage()).toBe(true);
+      expect(mod.readCodexUsage()!.data.windows[0].usedPercent).toBe(92);
     });
 
     it("keeps the old stamp when the probe fails, since nothing confirmed the reading", async () => {

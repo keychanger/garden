@@ -78,6 +78,10 @@ function toWindow(w: unknown): CodexUsageWindow | null {
 // Parse the LAST rate_limits object from a rollout's tail into CodexUsageData.
 // Returns null when the rollout has none (older codex, or no response yet).
 export function parseCodexRateLimits(rolloutPath: string): CodexUsageData | null {
+  return readCodexRateLimits(rolloutPath)?.data ?? null;
+}
+
+function readCodexRateLimits(rolloutPath: string): { data: CodexUsageData; reportedAt: number } | null {
   let text: string;
   try {
     const stat = fs.statSync(rolloutPath);
@@ -107,7 +111,10 @@ export function parseCodexRateLimits(rolloutPath: string): CodexUsageData | null
     const rl = (obj as { payload?: { rate_limits?: unknown } })?.payload?.rate_limits;
     if (!rl || typeof rl !== "object") continue;
     const data = fromRateLimits(rl as Record<string, unknown>);
-    if (data) return data;
+    if (data) {
+      const timestamp = (obj as { timestamp?: unknown }).timestamp;
+      return { data, reportedAt: typeof timestamp === "string" ? Date.parse(timestamp) : NaN };
+    }
   }
   return null;
 }
@@ -230,13 +237,18 @@ function findNewestRollouts(limit: number): string[] {
 // any role. Returns true when the snapshot actually changed, so the caller can
 // repaint the title pane only on a real move. No-ops on a fleet that has never
 // run Codex (the sessions dir is absent) and skips the write when the reading
-// is identical, so an idle fleet never churns the file.
-export function captureCodexUsageLatest(): boolean {
+// is identical, so an idle fleet never churns the file. A successful probe can
+// supply its start time to confirm an unchanged reading from a fresh event.
+export function captureCodexUsageLatest(confirmedSince?: number): boolean {
   for (const rollout of findNewestRollouts(MAX_ROLLOUTS_TRIED)) {
-    const data = parseCodexRateLimits(rollout);
-    if (!data) continue; // no populated reading in this one — try the next newest
+    const reading = readCodexRateLimits(rollout);
+    if (!reading) continue; // no populated reading in this one — try the next newest
+    const { data, reportedAt } = reading;
     const prior = readCodexUsage();
-    if (prior && JSON.stringify(prior.data) === JSON.stringify(data)) return false;
+    if (prior && JSON.stringify(prior.data) === JSON.stringify(data)) {
+      if (confirmedSince !== undefined && reportedAt >= confirmedSince) writeCodexUsage(data);
+      return false;
+    }
     writeCodexUsage(data);
     return true;
   }
@@ -294,12 +306,10 @@ const PROBE_TIMEOUT_MS = 30_000;
 // out-of-quota case still writes a rollout on its way down — so capture
 // whatever landed rather than discarding the run.
 //
-// A successful probe re-stamps capturedAt even when the reading is unchanged:
-// Codex just confirmed it, so the snapshot is fresh. Without that, a steady
-// reading keeps the time it first appeared, and both the age `garden usage`
-// prints and the ambient staleness gate would describe it as older than it is.
-// A failed probe does not re-stamp — whatever capture found predates it.
+// An unchanged reading is confirmed only by a populated quota event during a
+// successful probe. A zero exit alone can leave capture reading an old rollout.
 export function probeCodexUsage(): boolean {
+  const startedAt = Date.now();
   let probed = false;
   try {
     execFileSync(
@@ -309,12 +319,7 @@ export function probeCodexUsage(): boolean {
     );
     probed = true;
   } catch { /* see above — capture anything the attempt wrote */ }
-  const moved = captureCodexUsageLatest();
-  if (probed && !moved) {
-    const snap = readCodexUsage();
-    if (snap) writeCodexUsage(snap.data);
-  }
-  return moved;
+  return captureCodexUsageLatest(probed ? startedAt : undefined);
 }
 
 // How stale the cached reading may get before a probe is worth its quota. The
