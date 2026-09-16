@@ -1365,6 +1365,23 @@ describe("repinUsagePaneHeight", () => {
 });
 
 describe("rebakePanesOnResize", () => {
+  it("restores the equal column split before rendering at the new width", () => {
+    vi.mocked(getPaneSize).mockReturnValue({ width: 80, height: 10 });
+    vi.mocked(tmux).mockImplementation((...args) => {
+      if (args[0] === "resize-pane" && args[2] === "%9" && args[3] === "-x" && args[4] === "50%") {
+        vi.mocked(getPaneSize).mockReturnValue({ width: 100, height: 10 });
+      }
+    });
+
+    try {
+      rebakePanesOnResize(makeState({ activePaneId: "%9", statusPaneId: "%0" }), 5);
+      expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%9", "-x", "50%");
+      expect(vi.mocked(renderQuickStatus).mock.calls.at(-1)?.[4]).toBe(100);
+    } finally {
+      vi.mocked(tmux).mockReset();
+    }
+  });
+
   // The pre-baked pane content is width-shaped, so the resize handler must
   // re-render it at the fresh widths — not just re-pin heights. Before this
   // existed, resized panes stayed baked for the old width until the next

@@ -1166,6 +1166,9 @@ export function repinUsagePaneHeight(state: DashboardState, fallbackHeight: numb
 // CLI-bundle only (like refreshStatusElapsed): not reachable from hook.js, so
 // the alerts renderer stays tree-shaken out of the hook bundle.
 export function rebakePanesOnResize(state: DashboardState, usageFallbackHeight: number): void {
+  if (state.activePaneId) {
+    try { tmux("resize-pane", "-t", state.activePaneId, "-x", "50%"); } catch { /* pane may be gone */ }
+  }
   // The resize event is precisely the moment the TTL'd width cache goes stale;
   // bust it so writeQuickStatus re-reads the pane width unconditionally.
   cachedStatusWidth = null;

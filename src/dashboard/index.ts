@@ -504,7 +504,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     try {
       const state = readDashState();
       rebakePanesOnResize(state, USAGE_PANE_HEIGHT);
-      // The right slot is 60% of the terminal, so resizing the terminal changes
+      // The right slot is 50% of the terminal, so resizing the terminal changes
       // its width. Hidden worker windows are window-size=manual (resize-window
       // sets that), so they stay frozen at the old width and a worker that keeps
       // working while parked paints scrollback that wraps early when later

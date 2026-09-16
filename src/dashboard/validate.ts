@@ -337,7 +337,7 @@ function recreateRightSlot(state: DashboardState): string | null {
   const projectPath = state.activeProject
     ? loadConfig().projects[state.activeProject]?.path
     : undefined;
-  const args = ["-f", "-h", "-t", `${DASHBOARD_SESSION}:${MAIN_WINDOW}`, "-l", "60%"];
+  const args = ["-f", "-h", "-t", `${DASHBOARD_SESSION}:${MAIN_WINDOW}`, "-l", "50%"];
   if (projectPath) args.push("-c", projectPath);
   try {
     return tmuxSplit(...args) || null;

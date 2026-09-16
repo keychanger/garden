@@ -279,7 +279,7 @@ describe("validateAndHeal", () => {
     const healed = validateAndHeal(makeState());
 
     expect(tmuxSplit).toHaveBeenCalledWith(
-      "-f", "-h", "-t", expect.stringContaining(":main"), "-l", "60%", "-c", "/tmp/garden",
+      "-f", "-h", "-t", expect.stringContaining(":main"), "-l", "50%", "-c", "/tmp/garden",
     );
     expect(healed.activePaneId).toBe("%50");
   });

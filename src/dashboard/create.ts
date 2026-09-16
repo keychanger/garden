@@ -87,6 +87,9 @@ export function ensureDashboard(): void {
     // Heal sessions from older builds that left history-limit at tmux's 2000-line default.
     try { tmux("set-option", "-t", DASHBOARD_SESSION, "history-limit", "1000000"); } catch { /* ignore */ }
 
+    if (healed.activePaneId) {
+      try { tmux("resize-pane", "-t", healed.activePaneId, "-x", "50%"); } catch { /* pane may be gone */ }
+    }
     respawnStatusPane(healed);
     respawnUsagePane(healed);
 
@@ -248,7 +251,7 @@ export function ensureDashboard(): void {
   const gardenShellId = tmuxOutput(
     "display-message", "-t", `${DASHBOARD_SESSION}:main.0`, "-p", "#{pane_id}");
 
-  const rightPaneId = tmuxSplit("-h", "-t", `${DASHBOARD_SESSION}:main.0`, "-c", firstPath, "-l", "60%");
+  const rightPaneId = tmuxSplit("-h", "-t", `${DASHBOARD_SESSION}:main.0`, "-c", firstPath, "-l", "50%");
 
   const statusId = tmuxSplit("-v", "-b", "-t", gardenShellId, "-l", String(statusHeight),
     "sh", "-c", statusCmd);
