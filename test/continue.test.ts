@@ -168,6 +168,30 @@ const STUCK_VERBATIM_BOX = [
   "  ⏵⏵ auto mode on (shift+tab to cycle)",
 ].join("\n");
 
+// Codex's composer, as captured from a live codex 0.154 pane: no rules around
+// it, the "›" glyph, and the dimmed "Ask Codex to do anything" placeholder when
+// empty (caret at column 2), with the model/context footer below.
+const CODEX_EMPTY_BOX = [
+  "• Pushed the branch.",
+  "",
+  "› Ask Codex to do anything",
+  "",
+  "  gpt-6-astra high · Context 74% left · ~/.garden/worktrees/wolf/glib-close-foam",
+].join("\n");
+const CODEX_DRAFT_BOX = [
+  "• Pushed the branch.",
+  "",
+  "› wait, before you merge" + " ".repeat(20),
+  "",
+  "  gpt-6-astra high · Context 74% left · ~/.garden/worktrees/wolf/glib-close-foam",
+].join("\n");
+const CODEX_STUCK_PLACEHOLDER_BOX = [
+  "",
+  "› [Pasted Content 1843 chars]",
+  "",
+  "  gpt-6-astra high · Context 74% left · ~/.garden/worktrees/wolf/glib-close-foam",
+].join("\n");
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(paneExists).mockReturnValue(true);
@@ -361,6 +385,54 @@ describe("continueWorker", () => {
     // Unlike the active-worker gate, the draft skip must NOT clear the flag —
     // the backoff re-arm still owes this worker a prompt once the box clears.
     expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("skips the send when the operator has an unsent draft in a Codex composer", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", harness: "codex",
+      agentStatus: "idle", interruptedWhileWorking: true,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(CODEX_DRAFT_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue({ x: 24, y: 2 });
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(false);
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+  });
+
+  it("delivers to an empty Codex composer despite its placeholder text", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", harness: "codex", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(CODEX_EMPTY_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue({ x: 2, y: 2 });
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(true);
+    expect(pasteAndSubmit).toHaveBeenCalledWith("%9", expect.any(String));
+  });
+
+  it("re-submits garden's own stuck paste in Codex's collapsed rendering", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s", task: "", harness: "codex",
+      agentStatus: "idle", continueSentAt: 1_700_000_000_000,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(CODEX_STUCK_PLACEHOLDER_BOX);
+
+    expect(continueWorker("myproject", "bold-ash")).toBe(true);
+    expect(pressEnter).toHaveBeenCalledWith("%9");
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 
   it("delivers when the pane resolves but the box is empty (no false-positive)", () => {
@@ -1389,6 +1461,7 @@ describe("seedWorker", () => {
     // The TUI paints its composer; agentStatus is still "loading" and stays so
     // until the seed itself prompts the worker.
     vi.mocked(capturePaneText).mockReturnValue("\u203a Ask Codex to do anything");
+    vi.mocked(capturePaneCursor).mockReturnValue({ x: 2, y: 0 });
     vi.advanceTimersByTime(2000);
     expect(vi.mocked(pasteAndSubmit)).toHaveBeenCalledTimes(1);
   });
@@ -1398,6 +1471,7 @@ describe("seedWorker", () => {
     // A pane that would satisfy Codex's probe must not shortcut claude-code's
     // wait — its SessionStart fires at boot, so agentStatus is the real signal.
     vi.mocked(capturePaneText).mockReturnValue("\u203a Ask Codex to do anything");
+    vi.mocked(capturePaneCursor).mockReturnValue({ x: 2, y: 0 });
 
     seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
     vi.advanceTimersByTime(60_000);

@@ -243,14 +243,17 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
   return null;
 }
 
-// Claude Code's TUI input prompt glyph (U+276F). The operator's typed text
-// appears right after the marker — but the box is NOT blank when empty: Claude
-// Code renders dimmed ghost/placeholder/autosuggest text into an empty box, and
-// capture-pane strips the dimming, so the bare remainder after the marker can't
-// distinguish a real draft from a suggestion. The caret can: it sits at the end
-// of typed text, with any suggestion rendered to its right. So the draft is the
-// span between the marker and the cursor column (see extractOperatorDraft).
-const PROMPT_MARKER = "❯";
+// The input prompt glyphs: Claude Code's "❯" (U+276F) and Codex's "›"
+// (U+203A). The operator's typed text appears right after the marker — but the
+// box is NOT blank when empty: both TUIs render dimmed ghost/placeholder text
+// into an empty box (Codex: "Ask Codex to do anything"), and capture-pane strips
+// the dimming, so the bare remainder after the marker can't distinguish a real
+// draft from a suggestion. The caret can: it sits at the end of typed text, with
+// any suggestion rendered to its right. So the draft is the span between the
+// marker and the cursor column (see extractOperatorDraft). Neither glyph opens
+// a line below the other harness's input row, so both are matched regardless
+// of harness.
+const PROMPT_MARKERS = ["❯", "›"];
 
 // Backoff for re-arming an auto-continue prompt that was deferred because the
 // operator had an unsent draft in the box. 12s spacing × 15 attempts ≈ 3min of
@@ -287,18 +290,18 @@ export interface DraftInfo {
 export function extractDraftInfo(captured: string, cursor: PaneCursor | null): DraftInfo {
   const lines = captured.split("\n");
   let markerRow = -1;
-  let markerCol = -1;
+  let inputStart = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
-    const col = lines[i].indexOf(PROMPT_MARKER);
-    if (col !== -1 && lines[i].slice(0, col).trim() === "") {
+    const body = lines[i].trimStart();
+    const marker = PROMPT_MARKERS.find((m) => body.startsWith(m));
+    if (marker) {
       markerRow = i;
-      markerCol = col;
+      inputStart = lines[i].length - body.length + marker.length;
       break;
     }
   }
   if (markerRow === -1) return { text: "", wrapped: false };
 
-  const inputStart = markerCol + PROMPT_MARKER.length;
   if (!cursor) return { text: lines[markerRow].slice(inputStart).trim(), wrapped: false };
   if (cursor.y < markerRow) return { text: "", wrapped: false };
   if (cursor.y > markerRow) return { text: lines[markerRow].slice(inputStart).trim(), wrapped: true };
@@ -316,11 +319,11 @@ export function paneHasOperatorDraft(paneId: string): boolean {
 // Visible heads a garden-initiated paste can render as in the input box.
 // Every continuation prompt leads with a literal "[garden]" line and handoff
 // seed briefings with "[handoff from …]"; Claude Code collapses a multi-line
-// paste to the "[Pasted text #N +L lines]" placeholder, so that is the common
-// stuck rendering. These cover every prompt garden composes itself; an
+// paste to the "[Pasted text #N +L lines]" placeholder and Codex a large one to
+// "[Pasted Content N chars]", so those are the common stuck renderings. These cover every prompt garden composes itself; an
 // operator-authored single-line seed carries no such head, which is why
 // isOwnStuckPaste also compares against the pending text directly.
-const GARDEN_PASTE_SIGNATURES = ["[garden]", "[handoff", "[Pasted text"];
+const GARDEN_PASTE_SIGNATURES = ["[garden]", "[handoff", "[Pasted text", "[Pasted Content"];
 
 // True when the draft in the box is garden's own earlier paste whose Enter
 // taps were eaten, rather than an operator's compose. Two conditions, both

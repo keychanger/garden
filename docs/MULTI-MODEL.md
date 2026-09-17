@@ -839,8 +839,7 @@ byte-identical, full gate green):
 event relay, session-id capture, `--harness` selection with capability gates,
 bootstrap/runtime install, prompt/transcript/activity routing, managed
 `AGENTS.md` composition, and Codex sandbox/network translation all ship. The
-remaining worker gaps are live verification of `codex resume` and
-Codex-aware unsent-draft detection.
+remaining worker gap is live verification of `codex resume`.
 
 Resolved decisions: Codex-reviewer is primary and *not* Claude-locked;
 all three review roles default to explicit Opus; worker-provider stays
@@ -890,5 +889,5 @@ concrete need appears.
   whether hooks fire identically under `-p` on the pinned CLI version
   (the headless path's event needs are minimal — the FIFO poke comes
   from the shell wrapper, not hooks, so exposure is low); live `codex resume`
-  behavior; Codex's unsent-draft prompt glyph; and whether Codex's PostToolUse
+  behavior; and whether Codex's PostToolUse
   coverage gaps matter in practice for stale detection.
