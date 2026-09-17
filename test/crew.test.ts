@@ -128,6 +128,15 @@ describe("worker member name (status-pane identity badge source)", () => {
     // A dangling binding leaves no baseline, rather than crashing.
     expect(projectWorkerModel({ path: "/p", crew: "gone" }, c)).toBeUndefined();
   });
+
+  it("skips a crew model when the project's effective builder differs from its seat", () => {
+    const c = withDeepseek();
+    expect(projectWorkerModel({ crew: "all-codex", harness: "claude" }, c)).toBeUndefined();
+    expect(projectWorkerModel({ crew: "all-claude", harness: "codex" }, c)).toBe("gpt-6-astra");
+    expect(projectWorkerModel({ crew: "all-claude", provider: "deepseek" }, c)).toBeUndefined();
+    expect(projectWorkerModel({ crew: "all-claude", harness: "claude" }, c)).toBe("opus");
+    expect(projectWorkerModel({ crew: "all-codex", harness: "claude", model: "sonnet" }, c)).toBe("sonnet");
+  });
 });
 
 describe("applyCrew", () => {

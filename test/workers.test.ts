@@ -1383,6 +1383,59 @@ describe("newWorker", () => {
     expect(entry.model).toBeUndefined();
   });
 
+  it.each(["project", "worker"])("crew model/effort: skips both dims across a provider change on a %s crew", (layer) => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {},
+      providers: { deepseek: { baseUrl: "https://api.deepseek.example/anthropic", authTokenEnv: "GARDEN_TEST_PROVIDER_KEY" } },
+      crews: { remote: { worker: { member: "deepseek", model: "provider-only-model", effort: "ultra" }, review: { member: "claude" } } },
+    } as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject",
+      ...(layer === "project" ? { crew: "remote" } : {}),
+    });
+
+    expect(newWorker({ harness: "claude", ...(layer === "worker" ? { crew: "remote" } : {}) })).toBe("bold-ash");
+
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.provider).toBe("");
+    expect(entry.model).toBeUndefined();
+    expect(entry.effort).toBeUndefined();
+    expect(entry.ultracode).toBeUndefined();
+    const bootstrap = vi.mocked(buildWorktreeBootstrapScript).mock.calls.at(-1)!;
+    expect(bootstrap[7]?.launchPlan).toMatchObject({
+      harness: "claude-code", model: undefined, effort: undefined, resolvedProvider: null,
+    });
+  });
+
+  it("crew model/effort: retains explicit project defaults after skipping a foreign seat", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", crew: "all-codex", model: "sonnet", effort: "low",
+    });
+
+    expect(newWorker({ harness: "claude" })).toBe("bold-ash");
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith("myproject", expect.objectContaining({
+      harness: "claude-code", model: "sonnet", effort: "low",
+    }));
+  });
+
+  it("designer: a different harness drops the design seat's model and effort without explicit tuning", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {},
+      crews: { studio: {
+        designer: { member: "codex", model: "gpt-6-astra", effort: "low" },
+        worker: { member: "claude" }, review: { member: "claude" },
+      } },
+    } as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+
+    expect(newWorker({ workflow: "designer", crew: "studio", harness: "claude" })).toBe("bold-ash");
+    expect(vi.mocked(addWorker)).toHaveBeenCalledWith("myproject", expect.objectContaining({
+      crew: "studio", harness: "claude-code", model: "opus", effort: "xhigh",
+    }));
+  });
+
   it("crew effort 'ultra' promotes to the ultracode preset, as at the CLI", () => {
     vi.mocked(loadConfig).mockReturnValue({
       projects: {}, plots: {},

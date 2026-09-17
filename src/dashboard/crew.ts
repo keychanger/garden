@@ -35,7 +35,7 @@ import {
   type ProjectConfig,
   type StoredCrew,
 } from "../config.js";
-import { harnessNames } from "./harness/core.js";
+import { canonicalHarnessName, harnessNames } from "./harness/core.js";
 import { DEFAULT_CODEX_MODEL } from "./launch-plan.js";
 
 const DEFAULT_HARNESS = "claude-code";
@@ -257,13 +257,17 @@ export function projectWorkerMemberName(
 // against (see formatModelTag, status.ts). Codex is the exception because its
 // fallback is the explicit DEFAULT_CODEX_MODEL launch pin.
 export function projectWorkerModel(
-  project: Pick<ProjectConfig, "harness" | "model" | "crew">,
+  project: Pick<ProjectConfig, "harness" | "provider" | "model" | "crew">,
   config?: GardenConfig,
 ): string | undefined {
   const crew = config ? resolveProjectCrew(project, config) : null;
-  const model = project.model ?? crew?.worker.model;
+  const harness = canonicalHarnessName(project.harness ?? crew?.worker.harness ?? DEFAULT_HARNESS);
+  const provider = project.provider ?? crew?.worker.provider;
+  const matchingSeat = crew?.worker
+    && canonicalHarnessName(crew.worker.harness) === harness
+    && (crew.worker.provider ?? null) === (provider || null);
+  const model = project.model ?? (matchingSeat ? crew.worker.model : undefined);
   if (model) return model;
-  const harness = project.harness ?? crew?.worker.harness ?? DEFAULT_HARNESS;
   return harness === "codex" ? DEFAULT_CODEX_MODEL : undefined;
 }
 
