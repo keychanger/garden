@@ -850,7 +850,7 @@ descriptor that cannot describe a Codex backend); review-family knobs are
 project-config-only (no per-worker reviewer flag).
 
 **Phase 5 — Codex completion + opencode + fleet polish (on demand).** Close
-the two remaining Codex worker gaps above, then add opencode (Tier A via its
+the remaining Codex worker gap above, then add opencode (Tier A via its
 event bus) for open-source breadth beyond Ollama-behind-Claude, plus
 mixed-fleet `health`/`validate` and per-provider meters. Build when a
 concrete need appears.
