@@ -196,7 +196,7 @@ export function applyBuildBranch(branch: string): void {
 // `presizeHiddenWindows` carries the new width to parked worker windows) —
 // changing the ratio moves the same widths a resize does, so it must repair
 // the same things.
-export function applyLeftColumnFromMenu(value: string): void {
+export async function applyLeftColumnFromMenu(value: string): Promise<void> {
   const clearing = value === "unset" || value === "";
   let applied: number;
   try {
@@ -209,16 +209,14 @@ export function applyLeftColumnFromMenu(value: string): void {
   log.info("garden-menu", "column split set", { data: { leftPercent: applied } });
   // Local import for the same reason as applyBuildBranch: header/create pull
   // the dashboard graph, and this path is only reached from a menu selection.
-  void (async () => {
-    try {
-      const { readDashState } = await import("./state.js");
-      const { USAGE_PANE_HEIGHT, presizeHiddenWindows } = await import("./create.js");
-      const { rebakePanesOnResize } = await import("./header.js");
-      const state = readDashState();
-      rebakePanesOnResize(state, USAGE_PANE_HEIGHT);
-      presizeHiddenWindows(state);
-    } catch { /* no live dashboard, or a pane went away — config write stands */ }
-  })();
+  try {
+    const { readDashState } = await import("./state.js");
+    const { USAGE_PANE_HEIGHT, presizeHiddenWindows } = await import("./create.js");
+    const { rebakePanesOnResize } = await import("./header.js");
+    const state = readDashState();
+    rebakePanesOnResize(state, USAGE_PANE_HEIGHT);
+    presizeHiddenWindows(state);
+  } catch { /* no live dashboard, or a pane went away — config write stands */ }
   tmuxDisplay(`column split: ${formatColumnSplit(applied)}`);
   runGardenMenu();
 }

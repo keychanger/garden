@@ -356,7 +356,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_garden-layout-set") {
     // _garden-layout-set <left-percent|unset>.
-    if (args[1]) applyLeftColumnFromMenu(args[1].trim());
+    if (args[1]) await applyLeftColumnFromMenu(args[1].trim());
     return;
   }
   if (sub === "_garden-limit-set") {
