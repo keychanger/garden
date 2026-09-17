@@ -122,6 +122,18 @@ describe("garden awake on/off", () => {
     expect(fs.existsSync(AWAKE_STATE_PATH)).toBe(false);
   });
 
+  it("reverts when pmset does not report the switch it just set", async () => {
+    const { awake, AWAKE_STATE_PATH } = await load();
+    const exec = vi.mocked(execFileSync).getMockImplementation()!;
+    vi.mocked(execFileSync).mockImplementation(((file: string, args: string[]) =>
+      file === "/usr/bin/pmset" && args.join(" ") === "-g"
+        ? "System-wide power settings:\nCurrently in use:\n"
+        : exec(file, args as never, undefined as never)) as never);
+    await expect(awake(["on"])).rejects.toThrow(/does not report SleepDisabled 1/);
+    expect(machine.sleepDisabled).toBe(false);
+    expect(fs.existsSync(AWAKE_STATE_PATH)).toBe(false);
+  });
+
   it("refuses off macOS", async () => {
     const { awake } = await load();
     Object.defineProperty(process, "platform", { value: "linux" });

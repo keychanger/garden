@@ -65,6 +65,12 @@ function turnOn(rest: string[]): void {
   }
 
   setSleepDisabled(true);
+  // The watchdog reads this same flag to decide the switch is still garden's;
+  // if it cannot see it, it would forget the state and never release.
+  if (readPowerState()?.sleepDisabled !== true) {
+    setSleepDisabled(false);
+    throw new Error(`${PMSET} -a disablesleep 1 ran, but ${PMSET} -g does not report SleepDisabled 1. Reverted; awake stays off.`);
+  }
   const now = Date.now();
   const state = forMs === undefined
     ? { since: new Date(now).toISOString() }
