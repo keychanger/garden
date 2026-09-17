@@ -129,6 +129,27 @@ describe("runWorkerCleanup (real git)", () => {
     expect(fs.existsSync(file)).toBe(false);
   });
 
+  it("removes a husk whose admin entry is already gone", async () => {
+    // The mirror of the case above, and the one that could never finish: the
+    // directory survives while .git/worktrees/<name> does not. It is what a
+    // half-completed removal leaves behind — the sandboxed fast path deletes
+    // the admin entry, then is denied the directory — and `worktree remove`
+    // refuses such a path ("is not a working tree") on every retry, so the
+    // attempt budget burned out and the husk became a standing orphan.
+    const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+    const file = await seed();
+    fs.rmSync(
+      path.join(env.repoPath, ".git", "worktrees", "numb-clear-vow"),
+      { recursive: true, force: true },
+    );
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(wtPath)).toBe(false);
+    expect(branches(env.repoPath)).not.toContain("numb-clear-vow");
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
   it("gives up with an alert once the attempt budget is spent", async () => {
     const { runWorkerCleanup, CLEANUP_MAX_ATTEMPTS } =
       await import("../../src/dashboard/worker-cleanup.js");
