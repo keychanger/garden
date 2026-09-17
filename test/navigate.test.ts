@@ -164,6 +164,7 @@ beforeEach(() => {
   vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
   vi.mocked(swapDirect).mockReturnValue(true);
   vi.mocked(findWorkerByName).mockReturnValue(null);
+  vi.mocked(getPaneVar).mockReturnValue(null);
 });
 
 // =============================================================================
@@ -171,6 +172,19 @@ beforeEach(() => {
 // =============================================================================
 
 describe("switchProject", () => {
+  it("parks a worker under its recovered identity when state lost its window name", () => {
+    const state = makeState({ activeWindowName: null, activePaneType: null });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(getPaneVar).mockReturnValue("bold-ash");
+    vi.mocked(findWorkerByName).mockReturnValue({ name: "bold-ash", sessionId: "s", task: "" });
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-shell"]);
+
+    switchProject("2");
+
+    expect(swapDirect).toHaveBeenCalledWith("_garden-worker-bold-ash", "_other-shell", state);
+    expect(state.activeProject).toBe("other");
+  });
+
   it("displays message for out-of-bounds index (too high)", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     switchProject("99");
@@ -313,9 +327,9 @@ describe("switchProject", () => {
   it("restores worker pane vars when switching to a worker pane", () => {
     const state = makeState({ activeProject: "garden", activePaneId: "%2" });
     vi.mocked(readDashState).mockReturnValue(state);
-    vi.mocked(listAllWindowNames).mockReturnValue(["_other-active"]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_other-worker-calm-bay"]);
     vi.mocked(findWorkerByName).mockReturnValue({
-      name: "active",
+      name: "calm-bay",
       sessionId: "s1",
       task: "fix bug",
       agentStatus: "working",
@@ -323,11 +337,10 @@ describe("switchProject", () => {
 
     switchProject("2");
 
-    // After restoring from parking, activePaneType is "worker",
-    // so restoreWorkerPaneVars should run. The window name "_other-active"
-    // does not match worker pattern, so parseWorkerSuffix returns null.
-    // This verifies the code path runs without error.
     expect(state.activeProject).toBe("other");
+    expect(state.activePaneType).toBe("worker");
+    expect(setPaneLabel).toHaveBeenCalledWith("%2", "calm-bay");
+    expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_task", "fix bug");
   });
 });
 

@@ -203,6 +203,17 @@ describe("healActivePane", () => {
 });
 
 describe("healStatusPane", () => {
+  it("preserves passive pane ids when tmux is unreachable", () => {
+    vi.mocked(dashboardExists).mockReturnValue(false);
+    vi.mocked(paneExists).mockReturnValue(false);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+
+    healStatusPane();
+
+    expect(writeDashState).not.toHaveBeenCalled();
+    expect(tmuxSplit).not.toHaveBeenCalled();
+  });
+
   it("no-ops without taking the state lock when both panes exist", () => {
     vi.mocked(paneExists).mockReturnValue(true);
     healStatusPane();
@@ -232,6 +243,24 @@ describe("healStatusPane", () => {
 });
 
 describe("validateAndHeal", () => {
+  it("preserves all pane identities and registry entries when tmux is unreachable", () => {
+    vi.mocked(dashboardExists).mockReturnValue(false);
+    vi.mocked(paneExists).mockReturnValue(false);
+    vi.mocked(windowExists).mockReturnValue(false);
+    vi.mocked(readRegistry).mockReturnValue({ workers: { garden: [
+      { name: "hidden-worker", sessionId: "s", task: "working", agentStatus: "working" },
+    ] } });
+    const state = makeState({ lastActiveWorker: { other: "_other-worker-hidden" } });
+    const before = structuredClone(state);
+
+    const healed = validateAndHeal(state);
+
+    expect(healed).toEqual(before);
+    expect(state).toEqual(before);
+    expect(mutateRegistry).not.toHaveBeenCalled();
+    expect(tmuxSplit).not.toHaveBeenCalled();
+  });
+
   it("passes through healthy state unchanged", () => {
     const state = makeState();
     const healed = validateAndHeal(state);
@@ -334,6 +363,20 @@ describe("validateAndHeal", () => {
     expect(healed.activePaneId).toBe("%60");
     expect(healed.activePaneType).toBe("worker");
     expect(healed.activeWindowName).toBe("_garden-worker-bold-ash");
+  });
+
+  it("keeps a refill from the generic parking window unidentified", () => {
+    vi.mocked(paneExists).mockImplementation((id: string) => id !== "%2");
+    vi.mocked(restoreFromHidden).mockImplementation((_win: string, st: DashboardState) => {
+      st.activePaneId = "%60";
+    });
+
+    const healed = validateAndHeal(makeState());
+
+    expect(restoreFromHidden).toHaveBeenCalledWith("_garden-active", expect.anything());
+    expect(healed.activePaneId).toBe("%60");
+    expect(healed.activeWindowName).toBe("_garden-active");
+    expect(healed.activePaneType).toBeNull();
   });
 
   it("nulls the slot out when even the split fails", () => {

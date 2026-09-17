@@ -958,6 +958,11 @@ export function killPane(target?: WorkerRemovalTarget): void {
       return;
     }
 
+    if (state.activePaneType !== "worker") {
+      tmuxDisplay("No focused worker to kill.");
+      return;
+    }
+
     if (!state.activeProject) {
       writeDashState(state);
       return;

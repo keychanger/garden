@@ -39,6 +39,7 @@ export function healStatusPane(): void {
   const statusOk = !!probe.statusPaneId && paneExists(probe.statusPaneId);
   const usageOk = !!probe.usagePaneId && paneExists(probe.usagePaneId);
   if (statusOk && usageOk) return;
+  if (!dashboardExists()) return;
 
   try {
     withStateLock(() => {
@@ -442,6 +443,11 @@ export function healActivePane(): void {
  * Returns the healed state (may be identical if everything is consistent).
  */
 export function validateAndHeal(state: DashboardState): DashboardState {
+  if (!dashboardExists()) {
+    log.warn("validate", "skipped heal: tmux session unreachable");
+    return state;
+  }
+
   if (windowExists("_garden-console") && !windowExists("_garden-growhouse")) {
     renameWindow("_garden-console", "_garden-growhouse");
     log.info("validate", "renamed _garden-console to _garden-growhouse");

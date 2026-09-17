@@ -123,6 +123,8 @@ Worker prompt is `rules.md` (global) + `<project>/.garden/rules.md` (project) + 
 
 Permanent tmux layout — content is moved between visible slots and **hidden underscore-prefixed windows** (`_<project>-worker-N`, `_<project>-shell`, `_<project>-poller`, `_garden-{growhouse,root,logs,history,diary,alerts}`, `_garden-usage-poller`, `_garden-watchdog`) via `tmux swap-pane`. Normal navigation never destroys pane slots; `healActivePaneInState` is the single repair exception, recreating a right slot only after its pane has already died.
 
+Repair must establish tmux session reachability before treating failed pane/window probes as absence. `validateAndHeal`, the passive-pane healer, and the right-slot healer preserve state when the session is unreachable, including from an agent sandbox. Navigation and foreground spawns use `parkNameFor` (`navigate.ts`): keep the recorded window name, recover a missing name from the pane's `@garden_name` and project registry, then fall back to `_<project>-active`. That fallback identifies no worker; restoring it leaves `activePaneType` null, and worker-targeted hotkeys, including kill, refuse the unidentified pane.
+
 The title and status panes are passive: keyboard input, mouse selection, and wheel scrolling are disabled. The lower growhouse slot retains normal interaction for its active view.
 
 - **Column widths**: the left status column and right active pane each use half the terminal width, within one cell for the divider and rounding. Creation, repair, reattach, and terminal resize preserve the equal split.

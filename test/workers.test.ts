@@ -1624,6 +1624,21 @@ describe("newWorker", () => {
 // =============================================================================
 
 describe("killPane", () => {
+  it("refuses to kill an unidentified pane restored from the parking window", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activePaneType: null,
+      activeWindowName: "_myproject-active",
+    }));
+
+    killPane();
+
+    expect(tmux).not.toHaveBeenCalled();
+    expect(killWindowSafe).not.toHaveBeenCalled();
+    expect(removeWorker).not.toHaveBeenCalled();
+    expect(writeDashState).not.toHaveBeenCalled();
+    expect(tmuxDisplay).toHaveBeenCalledWith("No focused worker to kill.");
+  });
+
   it("shows error when trying to kill shell pane", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activePaneType: "shell" }));
     killPane();
