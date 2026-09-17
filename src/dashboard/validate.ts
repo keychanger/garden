@@ -15,7 +15,7 @@ import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden, restoreFromHidden } from "./layout.js";
 import { addAlert } from "./alerts.js";
 import { HEADLESS_RUNS_DIR } from "../paths.js";
-import { DASHBOARD_SESSION } from "../session.js";
+import { DASHBOARD_SESSION, dashboardExists } from "../session.js";
 import {
   headlessArtifactNames,
   isHeadlessArtifactName,
@@ -266,6 +266,21 @@ const MAIN_WINDOW = "main";
 export function healActivePaneInState(state: DashboardState): DashboardState {
   if (state.activePaneId && paneExists(state.activePaneId)) return state;
 
+  // Every probe below asks tmux, so none of them can tell a dead pane from a
+  // tmux this process cannot reach: a garden run inside an agent sandbox is
+  // denied the server socket, and paneExists, findRightSlotPane and the split
+  // all fail alike. Read that as "the slot was destroyed" and the repair nulls
+  // activePaneType/activeWindowName on a perfectly healthy dashboard — after
+  // which the park fallback labels a live worker's pane `_<project>-active`
+  // and the status pane loses that worker entirely (observed 2026-09-17).
+  // Absence is only evidence when the session itself answers.
+  if (!dashboardExists()) {
+    log.warn("validate", "skipped right-slot repair: tmux session unreachable", {
+      data: { staleId: state.activePaneId },
+    });
+    return state;
+  }
+
   const healed: DashboardState = { ...state };
 
   const occupant = findRightSlotPane(healed);
@@ -375,9 +390,11 @@ function refillRightSlot(state: DashboardState): void {
 function pickRefillTarget(
   project: string,
   state: DashboardState,
-): { window: string; type: "worker" | "shell" } | null {
+): { window: string; type: "worker" | "shell" | null } | null {
   const parked = parkingWindowName(project);
-  if (windowExists(parked)) return { window: parked, type: "worker" };
+  // The parking name carries no worker name, so its type is genuinely unknown
+  // — same reasoning as the parked branch of swapVisibleToProject.
+  if (windowExists(parked)) return { window: parked, type: null };
 
   const workers = listHiddenWorkerWindows(project);
   const preferred = state.lastActiveWorker[project];

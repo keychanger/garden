@@ -27,10 +27,18 @@ These extend the global rules in `<garden-repo>/rules.md`.
   every later swap from ever replacing it. Repair belongs there and nowhere else.
 - Hidden tmux windows use underscore-prefixed names (`_<project>-worker-N`, `_<project>-shell`).
   Do not create, rename, or destroy underscore-prefixed windows outside of dashboard code.
+- The visible pane is parked under the window name it already carries. `_<project>-active` is
+  only the fallback for when state has lost that name, and it encodes no worker: nothing
+  restored from it may be typed `worker`. A worker parked under it disappears from the status
+  pane and is marked `exited` by the next heal. `parkNameFor` (navigate.ts) recovers the real
+  name from the pane's own `@garden_name` label before falling back.
 - All state file writes must be atomic: write to a temp file, then rename. Never write
   directly to `dashboard.state.json` or `dashboard.registry.json`.
 - State files are the source of truth for dashboard logic. Tmux is the source of truth for
-  pane existence. When they disagree, the validator heals state to match tmux reality.
+  pane existence. When they disagree, the validator heals state to match tmux reality. That
+  holds only when tmux ANSWERS. A garden running inside an agent sandbox is denied the server
+  socket, so every probe fails exactly as a destroyed pane does — confirm the session is
+  reachable before treating absence as evidence, or the heal corrupts a healthy dashboard.
 
 ## Testing
 

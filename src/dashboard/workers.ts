@@ -56,8 +56,8 @@ import {
   clearAwaitingInput, clearDoneSentinel, dispatchDelayedContinue, dispatchDelayedSeed,
   setAwaitingInput,
 } from "./continue.js";
-import { swapVisibleToProject } from "./navigate.js";
-import { workerWindowName as workerWin, parkingWindowName, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
+import { swapVisibleToProject, parkNameFor } from "./navigate.js";
+import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
 
 // Model half of the `--ultracode` handoff preset: pin the worker to Opus
 // (1M context). The effort + dynamic-workflow half is rendered by the harness
@@ -726,7 +726,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
         }
 
         const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-        const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject!);
+        const parkName = parkNameFor(state);
         parkToHidden(parkName, state);
 
         const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,

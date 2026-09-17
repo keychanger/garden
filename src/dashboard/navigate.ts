@@ -12,6 +12,7 @@ import {
   listHiddenWorkerWindows,
   setPaneLabel,
   setPaneVar,
+  getPaneVar,
   paneRunningEditor,
 } from "./tmux.js";
 import { findWorkerByName, getWorkers, compareWorkerFreshness } from "./registry.js";
@@ -20,7 +21,7 @@ import { log } from "./log.js";
 import { createShellWindow, createLogsWindow, createGardenRootWindow, createGardenGrowhouseWindow, createGardenHistoryWindow, createGardenDiaryWindow, createGardenAlertsWindow } from "./create.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
 import { resolveGardenRunner } from "./runner.js";
-import { parkingWindowName, shellWindowName as shellWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
+import { parkingWindowName, shellWindowName as shellWin, workerWindowName as workerWin, gardenWindowName, parseWorkerSuffix, isWorkerWindow, type GardenView } from "./window-names.js";
 import { DASHBOARD_SESSION } from "../session.js";
 
 /**
@@ -40,6 +41,49 @@ function restoreWorkerPaneVars(paneId: string, project: string, windowName: stri
   if (entry?.task) {
     setPaneVar(paneId, "garden_task", entry.task);
   }
+}
+
+/**
+ * The window name to park the currently visible pane under.
+ *
+ * Normally that is the name state already records for it. When state has LOST
+ * that name, recover it from the pane itself before falling back to the
+ * generic `_<project>-active` parking name: `@garden_name` carries the worker
+ * name (or `shell-<project>`) and is re-applied on every swap, so the pane
+ * knows who it is even when state does not.
+ *
+ * Why this matters: the parking name encodes no worker. `parseWorkerSuffix`
+ * cannot parse it and `listHiddenWorkerWindows` does not match it, so once a
+ * worker's pane is parked under it that worker vanishes from the status pane,
+ * the next `validateAndHeal` marks the live entry `exited`, and the restore
+ * side re-adopts the name — permanently. `healActivePaneInState` nulls
+ * `activeWindowName` whenever the right slot's pane is missing and its
+ * adopt-the-occupant repair restores only the pane id, so a null here is a
+ * real, reachable state and not a theoretical one.
+ */
+export function parkNameFor(state: DashboardState): string {
+  if (state.activeWindowName) return state.activeWindowName;
+  const project = state.activeProject;
+  if (project && state.activePaneId) {
+    const recovered = recoverWindowName(state.activePaneId, project);
+    if (recovered) {
+      log.info("navigate", "recovered the parked window name from the pane", {
+        data: { project, window: recovered },
+      });
+      return recovered;
+    }
+  }
+  return parkingWindowName(project ?? "none");
+}
+
+// The window name a pane belongs in, read off the label it carries. Null for
+// anything we cannot tie to this project's registry or shell — a stale label,
+// a garden view pane, or an unreadable tmux.
+function recoverWindowName(paneId: string, project: string): string | null {
+  const label = getPaneVar(paneId, "garden_name");
+  if (!label) return null;
+  if (label === `shell-${project}`) return shellWin(project);
+  return findWorkerByName(project, label) ? workerWin(project, label) : null;
 }
 
 // Park the currently visible pane and restore (or create) a pane for
@@ -66,10 +110,14 @@ export function swapVisibleToProject(
   const parkTarget = parkingWindowName(projectName);
   const shellTarget = shellWin(projectName);
   let restoreWindow: string;
-  let paneType: "worker" | "shell";
+  let paneType: "worker" | "shell" | null;
   if (has(parkTarget)) {
     restoreWindow = parkTarget;
-    paneType = "worker";
+    // The parking name says only "something was here"; it names no worker, so
+    // claiming "worker" fabricated an identity the rest of the dashboard then
+    // could not resolve. Unknown is the honest type — worker-targeted keys
+    // report no focused worker until a navigation lands on a real window.
+    paneType = null;
   } else {
     const workerWindows = listHiddenWorkerWindows(projectName, names);
     const preferred = state.lastActiveWorker[projectName];
@@ -89,7 +137,7 @@ export function swapVisibleToProject(
     }
   }
 
-  const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject ?? "none");
+  const parkName = parkNameFor(state);
   if (!swapDirect(parkName, restoreWindow, state)) {
     swapToHidden(parkName, restoreWindow, state);
   }
@@ -202,7 +250,7 @@ export function focusWorker(): void {
 
     log.info("navigate", "focusWorker", { data: { target: targetWorker } });
 
-    const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject);
+    const parkName = parkNameFor(state);
     swapToHidden(parkName, targetWorker, state);
 
     if (state.activePaneId) {
@@ -242,7 +290,7 @@ export function focusShell(): void {
       createShellWindow(state.activeProject, project.path);
     }
 
-    const parkName = state.activeWindowName ?? parkingWindowName(state.activeProject);
+    const parkName = parkNameFor(state);
     swapToHidden(parkName, shellTarget, state);
 
     // The right-pane shell shows the same wall clock as worker panes
@@ -466,7 +514,7 @@ export function cyclePane(direction: 1 | -1): void {
 
     log.info("navigate", "cyclePane", { data: { direction, from: currentName, to: targetWindow } });
 
-    const parkName = currentName ?? parkingWindowName(lockedState.activeProject);
+    const parkName = parkNameFor(lockedState);
 
     // Fast path: direct swap (swap-pane + rename, no temp window)
     if (!swapDirect(parkName, targetWindow, lockedState)) {

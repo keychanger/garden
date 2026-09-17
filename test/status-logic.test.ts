@@ -421,6 +421,19 @@ describe("renderQuickStatus", () => {
     expect(result).not.toContain("1. \x1b[1;32mgarden");
   });
 
+  it("names an unparseable active window after the window, not a fabricated worker", () => {
+    // `_<project>-active` is the parking window: it encodes no worker name.
+    // The old fallback rendered the literal "worker-1", which no registry
+    // entry can match — a plausible-looking row (status `ready`, no task, no
+    // tags) for a worker that does not exist, while the real one had no row.
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "fixing the build", agentStatus: "working" },
+    ]);
+    const result = renderQuickStatus({ ...state, activeWindowName: "_garden-active" });
+    expect(result).not.toContain("worker-1");
+    expect(result).toContain("_garden-active");
+  });
+
   it("renders working from registry", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "fixing the build", agentStatus: "working" },

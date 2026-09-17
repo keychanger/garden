@@ -92,6 +92,14 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
 
+// Real dashboardExists() shells out to `tmux has-session`, which answers TRUE
+// on any workstation with a live dashboard (every garden worker runs the suite
+// there) and FALSE on CI. Mock it so reachability is the test's choice.
+vi.mock("../src/session.js", () => ({
+  DASHBOARD_SESSION: "garden-dashboard",
+  dashboardExists: vi.fn(() => true),
+}));
+
 import fs from "node:fs";
 import { validateAndHeal, sweepGhostEntries, healStatusPane, healActivePane, cleanContextFiles, cleanOrphanedReviewWindows } from "../src/dashboard/validate.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
@@ -99,6 +107,7 @@ import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, list
 import { readRegistry, writeRegistry, mutateRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 import { restoreFromHidden } from "../src/dashboard/layout.js";
+import { dashboardExists } from "../src/session.js";
 import { HEADLESS_RUNS_DIR } from "../src/paths.js";
 
 import { setPaneTitle, setPaneLabel, disablePaneInput, lockPaneMouse } from "../src/dashboard/tmux.js";
@@ -129,6 +138,7 @@ beforeEach(() => {
   vi.mocked(listHiddenWorkerWindows).mockReturnValue([]);
   vi.mocked(restoreFromHidden).mockImplementation(() => {});
   vi.mocked(readRegistry).mockReturnValue({ workers: {} });
+  vi.mocked(dashboardExists).mockReturnValue(true);
 });
 
 describe("healActivePane", () => {
@@ -162,6 +172,23 @@ describe("healActivePane", () => {
     expect(withStateLock).toHaveBeenCalled();
     const written = vi.mocked(writeDashState).mock.calls[0][0];
     expect(written.activePaneId).toBe("%50");
+  });
+
+  it("leaves the slot alone when tmux itself is unreachable", () => {
+    // A sandboxed garden is denied the tmux socket, so every probe fails the
+    // same way a destroyed slot does. Nulling activePaneType/activeWindowName
+    // on a healthy dashboard is what stranded a live worker's pane under the
+    // nameless `_<project>-active` window.
+    vi.mocked(dashboardExists).mockReturnValue(false);
+    vi.mocked(paneExists).mockReturnValue(false);
+    vi.mocked(listSessionPanes).mockReturnValue([]);
+    vi.mocked(tmuxSplit).mockReturnValue("");
+    vi.mocked(readDashState).mockReturnValue(makeState());
+
+    healActivePane();
+
+    expect(writeDashState).not.toHaveBeenCalled();
+    expect(tmuxSplit).not.toHaveBeenCalled();
   });
 
   it("swallows a contended state lock instead of throwing into the tick", () => {

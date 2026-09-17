@@ -61,6 +61,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   listHiddenWorkerWindows: vi.fn(() => []),
   setPaneLabel: vi.fn(),
   setPaneVar: vi.fn(),
+  getPaneVar: vi.fn(() => null),
   paneRunningEditor: vi.fn(() => true),
 }));
 
@@ -119,6 +120,7 @@ import {
   focusAlerts,
   cyclePane,
   cyclePlot,
+  parkNameFor,
 } from "../src/dashboard/navigate.js";
 
 import { readDashState, writeDashState } from "../src/dashboard/state.js";
@@ -127,7 +129,7 @@ import { refreshDashboard, refreshDashboardPlotCycle, refreshStatusElapsed, setP
 import {
   tmux, tmuxDisplay, paneExists, windowExists, getFirstPaneId,
   listAllWindowNames, listHiddenWorkerWindows,
-  setPaneLabel, setPaneVar, paneRunningEditor,
+  setPaneLabel, setPaneVar, getPaneVar, paneRunningEditor,
 } from "../src/dashboard/tmux.js";
 import { findWorkerByName } from "../src/dashboard/registry.js";
 import { plotsMap, getFocusedProjectNames } from "../src/config.js";
@@ -228,8 +230,11 @@ describe("switchProject", () => {
     switchProject("2");
 
     expect(swapDirect).toHaveBeenCalledWith("_garden-worker-bold-ash", "_other-active", state);
-    expect(state.activePaneType).toBe("worker");
     expect(state.activeWindowName).toBe("_other-active");
+    // The parking name encodes no worker, so the pane type stays unknown.
+    // Claiming "worker" made the status pane render a row for a worker that
+    // cannot exist while hiding the real one.
+    expect(state.activePaneType).toBeNull();
   });
 
   it("restores preferred last-active worker when available", () => {
@@ -1328,5 +1333,46 @@ describe("diary follows project switches", () => {
     expect(state.activePlot).toBe("b");
     expect(state.activeProject).toBe("garden");
     expect(sentSaveExit()).toBe(false);
+  });
+});
+
+describe("parkNameFor", () => {
+  it("uses the window name state already records", () => {
+    const name = parkNameFor(makeState({ activeWindowName: "_garden-worker-bold-ash" }));
+    expect(name).toBe("_garden-worker-bold-ash");
+    expect(getPaneVar).not.toHaveBeenCalled();
+  });
+
+  it("recovers a worker's window name from the pane when state lost it", () => {
+    // healActivePaneInState nulls activeWindowName whenever the right slot's
+    // pane looks gone, and its adopt-the-occupant repair restores only the
+    // pane id. Parking under the nameless `_<project>-active` from there hides
+    // the worker from the status pane and from listHiddenWorkerWindows.
+    vi.mocked(getPaneVar).mockReturnValue("bold-ash");
+    vi.mocked(findWorkerByName).mockReturnValue({ name: "bold-ash" } as never);
+
+    const name = parkNameFor(makeState({ activeWindowName: null, activePaneId: "%2" }));
+
+    expect(getPaneVar).toHaveBeenCalledWith("%2", "garden_name");
+    expect(name).toBe("_garden-worker-bold-ash");
+  });
+
+  it("recovers the project shell's window name the same way", () => {
+    vi.mocked(getPaneVar).mockReturnValue("shell-garden");
+    const name = parkNameFor(makeState({ activeWindowName: null, activePaneId: "%2" }));
+    expect(name).toBe("_garden-shell");
+  });
+
+  it("falls back to the parking name when the pane's label names nothing known", () => {
+    vi.mocked(getPaneVar).mockReturnValue("bold-ash");
+    vi.mocked(findWorkerByName).mockReturnValue(null);
+    const name = parkNameFor(makeState({ activeWindowName: null, activePaneId: "%2" }));
+    expect(name).toBe("_garden-active");
+  });
+
+  it("falls back to the parking name when tmux cannot be read", () => {
+    vi.mocked(getPaneVar).mockReturnValue(null);
+    const name = parkNameFor(makeState({ activeWindowName: null, activePaneId: "%2" }));
+    expect(name).toBe("_garden-active");
   });
 });

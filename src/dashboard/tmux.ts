@@ -411,6 +411,18 @@ export function setPaneVar(paneId: string, name: string, value: string): void {
   } catch { log.debug("tmux", "setPaneVar failed", { data: { paneId, name } }); }
 }
 
+// Read back a pane-level user option set by setPaneVar/setPaneLabel. Returns
+// null when the option is unset or the pane is unreachable, so a caller cannot
+// tell "no value" from "no tmux" — only use it to ENRICH a decision, never as
+// the evidence that something is absent.
+export function getPaneVar(paneId: string, name: string): string | null {
+  try {
+    return tmuxOutput("display-message", "-t", paneId, "-p", `#{@${name}}`) || null;
+  } catch {
+    return null;
+  }
+}
+
 export function getFirstPaneId(target: string): string | null {
   try {
     return tmuxOutput("list-panes", "-t", target, "-F", "#{pane_id}").split("\n")[0] || null;

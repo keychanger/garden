@@ -1208,7 +1208,15 @@ function collectWorkers(
   const registryByName = new Map(registryEntries.map(e => [e.name, e]));
 
   if (state.activeProject === projectName && state.activePaneType === "worker") {
-    const label = parseWorkerSuffix(state.activeWindowName ?? "") ?? "worker-1";
+    // Fall back to the window name itself, exactly as the hidden-window loop
+    // below does. The old fallback was the literal "worker-1", which no
+    // registry entry can ever match: an unparseable window name rendered a
+    // plausible-looking row for a worker that does not exist (status `ready`,
+    // no task, no tags) while the real worker — blocked on the operator, as it
+    // happened — had no row at all. A row named after the window is ugly on
+    // purpose; it says the slot's label is not a worker's.
+    const label = parseWorkerSuffix(state.activeWindowName ?? "")
+      ?? state.activeWindowName ?? "?";
     const entry = registryByName.get(label);
     workers.push({
       name: label,

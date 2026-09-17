@@ -63,6 +63,10 @@ vi.mock("../src/config.js", () => {
 
 vi.mock("../src/dashboard/navigate.js", () => ({
   swapVisibleToProject: vi.fn(),
+  // Stands in for the real helper's fallback chain; the pane-label recovery
+  // leg it adds is covered in navigate.test.ts.
+  parkNameFor: vi.fn((state: { activeWindowName: string | null; activeProject: string | null }) =>
+    state.activeWindowName ?? `_${state.activeProject}-active`),
 }));
 
 vi.mock("../src/dashboard/state.js", () => ({
@@ -1630,6 +1634,9 @@ describe("killPane", () => {
   });
 
   it("repairs when state names no right pane", () => {
+    // ⌥x is pressed inside a live dashboard, and the right-slot repair now
+    // declines to act when the tmux session is unreachable.
+    vi.mocked(dashboardExists).mockReturnValue(true);
     vi.mocked(readDashState).mockReturnValue(makeState({ activePaneId: null }));
     killPane();
     expect(vi.mocked(tmuxSplit)).toHaveBeenCalled();
@@ -1640,6 +1647,7 @@ describe("killPane", () => {
   });
 
   it("shows error when pane does not exist in tmux", () => {
+    vi.mocked(dashboardExists).mockReturnValue(true);
     vi.mocked(paneExists).mockReturnValue(false);
     vi.mocked(readDashState).mockReturnValue(makeState());
 
