@@ -126,7 +126,7 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
         message = `Set ${key} = ${value} for ${projectName}`;
       }
     } else if (key === "displayName") {
-      if (value === "" || value === "unset" || value === "null") {
+      if (value === "unset" || value === "null") {
         delete project.displayName;
         message = `Cleared ${key} for ${projectName} (shown as '${projectName}')`;
       } else if (!value.trim()) {

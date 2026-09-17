@@ -1165,13 +1165,34 @@ describe("displayName project config key", () => {
     expect(loadConfig().projects["keychange-ai"].displayName).toBeUndefined();
   });
 
-  it("config() rejects a blank or multi-line displayName", async () => {
-    const { saveConfig, GARDEN_DIR } = await importConfig();
+  it.each(["", "   ", "a\nb", "a\rb", "a\tb", "a\x1bb", "a\x00b", "a\x7fb"])("config() rejects an invalid displayName %j without clearing the label", async (value) => {
+    const { saveConfig, loadConfig, GARDEN_DIR } = await importConfig();
     const { config } = await import("../src/commands/config.js");
     fs.mkdirSync(GARDEN_DIR, { recursive: true });
-    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
-    await expect(config(["garden", "displayName", "   "])).rejects.toThrow(/non-empty/);
-    await expect(config(["garden", "displayName", "a\nb"])).rejects.toThrow(/single line/);
+    saveConfig({ projects: { garden: { path: "/tmp/garden", displayName: "Garden HQ" } } });
+    await expect(config(["garden", "displayName", value])).rejects.toThrow(/non-empty|single line/);
+    expect(loadConfig().projects.garden.displayName).toBe("Garden HQ");
+  });
+
+  it("reads the label through both config views and keeps project resolution on the key", async () => {
+    const { saveConfig, GARDEN_DIR, resolveProject } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden", displayName: "Garden HQ" } } });
+    expect(resolveProject("garden").name).toBe("garden");
+    expect(() => resolveProject("Garden HQ")).toThrow(/Unknown project/);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await config(["garden", "displayName"]);
+      expect(JSON.parse(spy.mock.calls.at(-1)![0])).toEqual({ displayName: "Garden HQ" });
+      await config(["garden"]);
+      expect(JSON.parse(spy.mock.calls.at(-1)![0]).displayName).toBe("Garden HQ");
+      await config(["garden", "displayName", "unset"]);
+      await config(["garden", "displayName"]);
+      expect(JSON.parse(spy.mock.calls.at(-1)![0])).toEqual({ displayName: null });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
