@@ -300,18 +300,8 @@ function executeWorkerCleanup(req: WorkerCleanupRequest): void {
 
   if (worktreePath && fs.existsSync(worktreePath)) {
     const err = gitCleanupStep(repoPath, ["worktree", "remove", worktreePath, "--force"]);
-    // "is not a working tree" is the reverse half-state of the prune below:
-    // the files survived while .git/worktrees/<name> did not. A removal that
-    // got half way leaves exactly this — the sandboxed fast path deletes the
-    // admin entry and is then denied the directory — and git refuses such a
-    // path on every later attempt, so the retry that is supposed to finish the
-    // job failed identically until the budget ran out and the husk became a
-    // standing orphan (97MB, garden/weak-tough-lynx, 2026-09-17). Git cannot
-    // remove a tree it no longer tracks, so deleting the canonical directory
-    // is the work that remains; --force had already authorized discarding
-    // whatever is in it. Narrow to that one error on purpose: any other
-    // refusal (a denied checkout, a locked worktree) must stay a retry.
-    if (err && /is not a working tree/i.test(err)) {
+    const unregisteredWorktreeError = `fatal: '${worktreePath}' is not a working tree`;
+    if (err?.trim() === unregisteredWorktreeError) {
       try {
         fs.rmSync(worktreePath, { recursive: true, force: true });
       } catch (rmErr) {

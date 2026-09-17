@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -142,6 +142,53 @@ describe("runWorkerCleanup (real git)", () => {
       path.join(env.repoPath, ".git", "worktrees", "numb-clear-vow"),
       { recursive: true, force: true },
     );
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(wtPath)).toBe(false);
+    expect(branches(env.repoPath)).not.toContain("numb-clear-vow");
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it.each(["operator inspection", "is not a working tree"])(
+    "preserves a locked worktree with reason '%s'", async (reason) => {
+      const { runWorkerCleanup, readWorkerCleanupRequest } =
+        await import("../../src/dashboard/worker-cleanup.js");
+      const file = await seed();
+      const uncommitted = path.join(wtPath, "uncommitted.txt");
+      fs.writeFileSync(uncommitted, "keep this work");
+      git(env.repoPath, "worktree", "lock", "--reason", reason, wtPath);
+
+      runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+      expect(fs.existsSync(uncommitted)).toBe(true);
+      expect(branches(env.repoPath)).toContain("numb-clear-vow");
+      expect(readWorkerCleanupRequest(file)?.attempts).toBe(1);
+      expect(readWorkerCleanupRequest(file)?.lastError).toContain("locked");
+    },
+  );
+
+  it("retries a husk when directory removal is denied", async () => {
+    const { runWorkerCleanup, readWorkerCleanupRequest } =
+      await import("../../src/dashboard/worker-cleanup.js");
+    const file = await seed();
+    fs.rmSync(path.join(env.repoPath, ".git", "worktrees", "numb-clear-vow"), {
+      recursive: true, force: true,
+    });
+    const rmSync = fs.rmSync;
+    const denied = vi.spyOn(fs, "rmSync").mockImplementation((target, options) => {
+      if (target === wtPath) throw new Error("EACCES: permission denied");
+      return rmSync(target, options);
+    });
+    try {
+      runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+    } finally {
+      denied.mockRestore();
+    }
+
+    expect(fs.existsSync(wtPath)).toBe(true);
+    expect(readWorkerCleanupRequest(file)?.attempts).toBe(1);
+    expect(readWorkerCleanupRequest(file)?.lastError).toContain("directory remove: Error: EACCES");
 
     runWorkerCleanup("leadingtone-io", "numb-clear-vow");
 
