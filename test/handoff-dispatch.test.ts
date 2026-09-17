@@ -431,6 +431,88 @@ describe("processPendingHandoffs", () => {
       .toMatch(/shape guard/i);
   });
 
+  it("passes an explicit model and effort through to newWorker", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({
+      targetProject: "wolf", seedFile: validSeed, crew: "codex-claude",
+      model: "gpt-6-astra", effort: "xhigh",
+    });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "wolf",
+      crew: "codex-claude",
+      model: "gpt-6-astra",
+      effort: "xhigh",
+    }));
+  });
+
+  it("omits model/effort from the newWorker call when the request carries none", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    processPendingHandoffs();
+    const call = vi.mocked(newWorker).mock.calls[0][0];
+    expect(call && "model" in call).toBe(false);
+    expect(call && "effort" in call).toBe(false);
+  });
+
+  it("rejects a request whose model field is not a bounded string", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const reqFile = path.join(reqDir, `${id}.req.json`);
+    const request = JSON.parse(fs.readFileSync(reqFile, "utf8"));
+    request.model = { name: "opus" };
+    fs.writeFileSync(reqFile, JSON.stringify(request));
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/shape guard/i);
+  });
+
+  it("rejects a flag-shaped model id from the untrusted request inbox", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const reqFile = path.join(reqDir, `${id}.req.json`);
+    const request = JSON.parse(fs.readFileSync(reqFile, "utf8"));
+    request.model = "--dangerously-skip-permissions";
+    fs.writeFileSync(reqFile, JSON.stringify(request));
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/shape guard/i);
+  });
+
+  it("refuses an effort rung outside the worker vocabulary rather than launching without it", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    const reqFile = path.join(reqDir, `${id}.req.json`);
+    const request = JSON.parse(fs.readFileSync(reqFile, "utf8"));
+    request.effort = "turbo";
+    fs.writeFileSync(reqFile, JSON.stringify(request));
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/shape guard/i);
+  });
+
+  it("refuses a request that sets both effort and ultracode (the preset already fixes the rung)", () => {
+    const id = submitHandoffRequest({
+      targetProject: "wolf", seedFile: validSeed, ultracode: true,
+    });
+    const reqFile = path.join(reqDir, `${id}.req.json`);
+    const request = JSON.parse(fs.readFileSync(reqFile, "utf8"));
+    request.effort = "xhigh";
+    fs.writeFileSync(reqFile, JSON.stringify(request));
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/effort.*ultracode/i);
+  });
+
   it("binds the result path to the request filename rather than a forged body id", () => {
     vi.mocked(newWorker).mockReturnValue("bold-ash");
     const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });

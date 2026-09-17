@@ -1040,6 +1040,28 @@ describe("newWorker", () => {
     expect(entry.trellis).toBeDefined();
   });
 
+  // The `garden handoff --model/--effort` path: the dispatcher spawns the
+  // child in the background under the crew the caller forwarded, and the
+  // explicit rung/model must outrank that crew's builder seat and land on the
+  // entry, which is what every later launch/resume/bounce reads.
+  it("handoff spawn: explicit model/effort outrank the forwarded crew's builder seat", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({
+      projectName: "myproject",
+      background: true,
+      seedMessageFile: "/tmp/seed.txt",
+      handoffRequestId: "11111111-1111-4111-8111-111111111111",
+      crew: "codex-claude",
+      model: "gpt-6-astra",
+      effort: "xhigh",
+    });
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.harness).toBe("codex");
+    expect(entry.crew).toBe("codex-claude");
+    expect(entry.model).toBe("gpt-6-astra");
+    expect(entry.effort).toBe("xhigh");
+  });
+
   // ===== Project-level model/effort defaults (ProjectConfig.model/.effort) =====
   // These layer beneath the per-spawn opts in newWorker (per-spawn > project >
   // account default), exactly as resolveSpawnBase layers project.baseBranch

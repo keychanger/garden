@@ -615,18 +615,12 @@ export function buildResumeCommand(
   return `${agentCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
 }
 
-// The selectable reasoning-effort rungs below the ultracode preset. These are
-// claude-code's `--effort` levels; the top rung (max effort + dynamic
-// workflows) is the ultracode preset, offered in the composer as "ultra" and
-// carried by `WorkerEntry.ultracode`, not an effort value here. The composer
-// effort submenu and the `--effort` CLI flag build their choices from this
-// list plus the "ultra" sentinel.
-export const WORKER_EFFORT_LEVELS = ["low", "medium", "high", "xhigh"] as const;
-export type WorkerEffort = (typeof WORKER_EFFORT_LEVELS)[number];
-
-export function isWorkerEffort(value: string): value is WorkerEffort {
-  return (WORKER_EFFORT_LEVELS as readonly string[]).includes(value);
-}
+// The selectable reasoning-effort rungs below the ultracode preset live in a
+// leaf module so validators outside this closure can read them; re-exported
+// here because every existing caller reaches them through create.ts.
+export {
+  WORKER_EFFORT_LEVELS, isWorkerEffort, type WorkerEffort,
+} from "./worker-effort.js";
 
 export interface WorktreeCommandOptions {
   /** Pre-resolved launch identity. Production launch boundaries pass this so

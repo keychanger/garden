@@ -293,7 +293,7 @@ export const HANDOFF_SKILL_FILENAME = "SKILL.md";
 
 export const HANDOFF_SKILL_CONTENT = `---
 name: handoff
-description: Use when the operator instructs you to hand off work to one or more fresh workers — a single pass-the-baton handoff, or a fan-out where you delegate several deferred items in parallel. Targets can be the same project (context reset) or a different project (cross-repo). Spawns named garden workers that participate in the normal review/merge flow, seeds each with a briefing you compose, and leaves you to mark yourself done. Supports --ultracode to create the new worker in Claude Code's ultracode mode (Opus + max effort + dynamic workflows), e.g. "hand this off to an ultracode worker". Do NOT invoke without an explicit operator instruction.
+description: Use when the operator instructs you to hand off work to one or more fresh workers — a single pass-the-baton handoff, or a fan-out where you delegate several deferred items in parallel. Targets can be the same project (context reset) or a different project (cross-repo). Spawns named garden workers that participate in the normal review/merge flow, seeds each with a briefing you compose, and leaves you to mark yourself done. Supports --ultracode to create the new worker in Claude Code's ultracode mode (Opus + max effort + dynamic workflows), e.g. "hand this off to an ultracode worker". Supports --model/--effort to pin the new worker's model and reasoning rung, e.g. "hand this to astra at xhigh". Do NOT invoke without an explicit operator instruction.
 ---
 
 # Handoff
@@ -378,6 +378,18 @@ garden handoff <target-project> --crew codex-claude <<'EOF'
 <briefing>
 EOF
 \`\`\`
+
+### Model and reasoning rung (\`--model\`, \`--effort\`)
+
+Pass \`--model <alias-or-id>\` and/or \`--effort low|medium|high|xhigh|ultra\` when the operator names how strong the new worker should be ("hand this to astra at xhigh"). Both outrank the crew's builder seat and the target project's default, so you can keep the crew you inherited — including its reviewer — and still change one dimension.
+
+\`\`\`bash
+garden handoff <target-project> --model gpt-6-astra --effort xhigh <<'EOF'
+<briefing>
+EOF
+\`\`\`
+
+\`--effort ultra\` IS the ultracode preset, so it cannot be combined with \`--ultracode\`. An unknown rung, an empty value, or any flag this command does not have is an error — nothing is spawned — so a mistyped option can never quietly produce a worker on the wrong configuration.
 
 ### Callback mode (\`--expect-callback\`)
 

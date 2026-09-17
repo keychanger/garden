@@ -20,6 +20,7 @@ import { atomicWriteFile } from "./atomic-write.js";
 import { getWorkers } from "./registry.js";
 import { newWorker } from "./workers.js";
 import { getCrew } from "./crew.js";
+import { isWorkerEffort } from "./worker-effort.js";
 import { loadConfig } from "../config.js";
 import { log } from "./log.js";
 
@@ -122,6 +123,15 @@ export interface HandoffRequest {
   // dispatch makes no bd claim — the child's own briefed claim is the claim.
   // See `NewWorkerOptions.bead`.
   bead?: string;
+  // Set when the source worker invoked `garden handoff --model <m>`. Pins the
+  // child's model (an alias or a concrete id), outranking the crew's builder
+  // seat and the target project's default. Opaque to garden, like every other
+  // model pin. See `NewWorkerOptions.model`.
+  model?: string;
+  // Set when the source worker invoked `garden handoff --effort <rung>`. One
+  // of WORKER_EFFORT_LEVELS; `--effort ultra` arrives as `ultracode` instead,
+  // so the two are never both set. See `NewWorkerOptions.effort`.
+  effort?: string;
 }
 
 export interface HandoffResponse {
@@ -139,6 +149,8 @@ export function submitHandoffRequest(opts: {
   ultracode?: boolean;
   crew?: string;
   bead?: string;
+  model?: string;
+  effort?: string;
 }): string {
   fs.mkdirSync(requestsDir(), { recursive: true });
   const id = crypto.randomUUID();
@@ -153,6 +165,8 @@ export function submitHandoffRequest(opts: {
     ultracode: opts.ultracode,
     crew: opts.crew,
     bead: opts.bead,
+    model: opts.model,
+    effort: opts.effort,
   };
   atomicWriteFile(requestPath(id), JSON.stringify(req), { mode: 0o600 });
   return id;
@@ -274,6 +288,12 @@ function validBeadId(value: unknown): value is string {
   return boundedString(value, 128) && !value.startsWith("-");
 }
 
+// A model id is opaque (garden keeps no model list) but reaches a launch
+// command line, so a flag-shaped value from the untrusted inbox is refused.
+function validModelId(value: unknown): value is string {
+  return boundedString(value, 128) && !value.startsWith("-");
+}
+
 function isHandoffRequest(value: unknown): value is HandoffRequest {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const request = value as Record<string, unknown>;
@@ -288,7 +308,12 @@ function isHandoffRequest(value: unknown): value is HandoffRequest {
     && (request.parentWorker === undefined || boundedString(request.parentWorker, 128))
     && (request.ultracode === undefined || typeof request.ultracode === "boolean")
     && (request.crew === undefined || boundedString(request.crew, 128))
-    && (request.bead === undefined || validBeadId(request.bead));
+    && (request.bead === undefined || validBeadId(request.bead))
+    && (request.model === undefined || validModelId(request.model))
+    // An effort outside the worker vocabulary would be dropped at launch, so
+    // the request is refused rather than spawning on the harness default.
+    && (request.effort === undefined
+        || (typeof request.effort === "string" && isWorkerEffort(request.effort)));
 }
 
 function parseJson(data: Buffer): unknown {
@@ -438,6 +463,18 @@ function processClaim(claimFile: string, filenameId: string): void {
   // A crew is resolved by name at spawn, and newWorker treats a name it
   // cannot resolve as "no crew" — silently spawning on the project default
   // when the caller asked for something specific. Refuse here instead.
+  // newWorker suppresses effort when ultracode is set (the preset already fixes
+  // max effort), so a request carrying both would launch on a rung the caller
+  // did not ask for. The CLI keeps them exclusive; refuse here too.
+  if (request.effort !== undefined && request.ultracode === true) {
+    rejectClaim(
+      claimFile,
+      filenameId,
+      "request sets both effort and ultracode; the ultracode preset already fixes max effort",
+    );
+    return;
+  }
+
   if (request.crew) {
     try {
       if (!getCrew(request.crew, loadConfig())) {
@@ -471,6 +508,8 @@ function processClaim(claimFile: string, filenameId: string): void {
       ...(request.ultracode ? { ultracode: true } : {}),
       ...(request.crew ? { crew: request.crew } : {}),
       ...(request.bead ? { bead: request.bead } : {}),
+      ...(request.model ? { model: request.model } : {}),
+      ...(request.effort ? { effort: request.effort } : {}),
     });
     const reconciledWorker = workerName ?? findExistingWorker(request);
     response = reconciledWorker

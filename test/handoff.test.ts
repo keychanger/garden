@@ -335,4 +335,100 @@ describe("garden handoff command", () => {
     const lines = await captureConsoleLog(() => handoff(["other", "--bead", "bd-7", "-m", "msg"]));
     expect(lines.join("\n")).toMatch(/bead bd-7/);
   });
+  // ===== Explicit model / effort overrides =====
+  //
+  // Without these, a sandboxed worker had no way to pick the child's model or
+  // reasoning rung: the crew it inherits fixes the harness but leaves effort at
+  // the harness default, and creating a pinned crew needs a config write the
+  // worker sandbox denies.
+
+  it("threads --model and --effort into the dispatch request", async () => {
+    const lines = await captureConsoleLog(
+      () => handoff(["other", "--model", "gpt-6-astra", "--effort", "xhigh", "-m", "build it"]),
+    );
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.model).toBe("gpt-6-astra");
+    expect(call.effort).toBe("xhigh");
+    expect(lines.join("\n")).toMatch(/model gpt-6-astra; effort xhigh/);
+  });
+
+  it("does not treat --model/--effort or their values as part of the briefing", async () => {
+    await captureConsoleLog(
+      () => handoff(["other", "--model", "gpt-6-astra", "--effort", "xhigh", "-m", "the real briefing"]),
+    );
+    const seedsDir = path.join(tmpDir, "seeds");
+    const body = fs.readFileSync(path.join(seedsDir, fs.readdirSync(seedsDir)[0]), "utf8");
+    expect(body).toContain("the real briefing");
+    expect(body).not.toContain("gpt-6-astra");
+    expect(body).not.toContain("xhigh");
+  });
+
+  it("leaves model and effort undefined on the dispatch when neither flag is passed", async () => {
+    await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.model).toBeUndefined();
+    expect(call.effort).toBeUndefined();
+  });
+
+  it("rejects --model / --effort without a value instead of swallowing the next flag", async () => {
+    await expect(handoff(["other", "--model"])).rejects.toThrow(/--model requires a value/);
+    await expect(handoff(["other", "--model", "-m", "msg"])).rejects.toThrow(/--model requires a value/);
+    await expect(handoff(["other", "--effort"])).rejects.toThrow(/--effort requires a value/);
+    await expect(handoff(["other", "--effort", "-m", "msg"])).rejects.toThrow(/--effort requires a value/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it("rejects an effort rung outside the worker vocabulary rather than silently dropping it", async () => {
+    await expect(handoff(["other", "--effort", "turbo", "-m", "msg"]))
+      .rejects.toThrow(/--effort must be one of: low, medium, high, xhigh, ultra/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it("maps --effort ultra onto the ultracode preset (one vocabulary with workers new)", async () => {
+    const lines = await captureConsoleLog(() => handoff(["other", "--effort", "ultra", "-m", "msg"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.ultracode).toBe(true);
+    expect(call.effort).toBeUndefined();
+    expect(lines.join("\n")).toMatch(/ultracode mode/);
+  });
+
+  it("refuses --effort together with --ultracode rather than silently dropping the rung", async () => {
+    await expect(handoff(["other", "--ultracode", "--effort", "xhigh", "-m", "msg"]))
+      .rejects.toThrow(/--effort and --ultracode are mutually exclusive/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it("rejects a repeated value-carrying flag rather than honouring only the first", async () => {
+    await expect(handoff(["other", "--model", "opus", "--model", "sonnet", "-m", "msg"]))
+      .rejects.toThrow(/Unknown or repeated handoff option '--model'/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unknown flag instead of ignoring it as briefing noise", async () => {
+    await expect(handoff(["other", "--efort", "xhigh", "-m", "msg"]))
+      .rejects.toThrow(/Unknown or repeated handoff option '--efort'/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it("does not mistake the -m message for an unknown flag when it starts with a dash", async () => {
+    await captureConsoleLog(() => handoff(["other", "-m", "--not-a-flag, just prose"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.targetProject).toBe("other");
+  });
+
+  it("composes --model/--effort with --crew and --expect-callback", async () => {
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    await captureConsoleLog(() => handoff([
+      "other", "--crew", "codex-claude", "--model", "gpt-6-astra", "--effort", "xhigh",
+      "--expect-callback", "-m", "msg",
+    ]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call).toMatchObject({
+      crew: "codex-claude",
+      model: "gpt-6-astra",
+      effort: "xhigh",
+      expectCallback: true,
+    });
+  });
 });

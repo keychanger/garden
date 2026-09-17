@@ -195,6 +195,9 @@ Dashboard:
                                  Add --crew <name> to spawn it under that crew; without it the worker inherits the calling
                                    worker's own crew (a designer's builder lands on the crew that designed); otherwise the
                                    target project's binding applies
+                                 Add --model <alias-or-id> and/or --effort low|medium|high|xhigh|ultra to pin the new
+                                   worker's model and reasoning rung (they outrank the crew's builder seat; 'ultra' is the
+                                   ultracode preset, so it cannot be combined with --ultracode)
                                  Add --bead <id> to stamp the bead↔worker join on the new worker's registry entry (no bd claim is made)
   reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate

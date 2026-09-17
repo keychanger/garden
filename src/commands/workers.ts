@@ -4,7 +4,8 @@ import path from "node:path";
 import { tryGetProject, SESSIONS_DIR, loadConfig } from "../config.js";
 import { newWorker, stopWorkerByName } from "../dashboard/workers.js";
 import { resolveWorkerArg } from "./resolve-worker.js";
-import { WORKER_EFFORT_LEVELS, isWorkerEffort } from "../dashboard/create.js";
+import { WORKER_EFFORT_LEVELS } from "../dashboard/create.js";
+import { requireModelValue, parseEffortFlag } from "./launch-flags.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
 import { getCrew, listCrews } from "../dashboard/crew.js";
 import { buildGrowIteration1Seed, GROW_GOAL_FILE_REL } from "../dashboard/grow-continue.js";
@@ -42,28 +43,6 @@ export async function workers(args: string[]): Promise<void> {
     + `[--max-iterations N]\n`
     + `  garden workers stop <worker>`,
   );
-}
-
-// --model accepts an Anthropic alias ("opus"/"sonnet" — resolved through the
-// provider's modelMap on provider-backed projects) or any concrete model id
-// the backend accepts; garden does not maintain a model list to validate
-// against (docs/MULTI-MODEL.md "Layer 2"). It is interpolated into launch
-// commands via shellEscape, so the only hard requirement is non-emptiness.
-function requireModelValue(raw: string): string {
-  const model = raw.trim();
-  if (!model) throw new Error("--model requires a non-empty value");
-  return model;
-}
-
-// --effort accepts the four reasoning rungs or "ultra" (the ultracode preset:
-// max effort + dynamic workflows). Maps to newWorker's effort/ultracode fields
-// — the two are mutually exclusive, so exactly one is returned. Default/grow
-// only; trellis resolves its own model and carries no effort.
-function parseEffortFlag(raw: string): { effort?: string; ultracode?: boolean } {
-  const value = raw.trim();
-  if (value === "ultra") return { ultracode: true };
-  if (isWorkerEffort(value)) return { effort: value };
-  throw new Error(`--effort must be one of: ${[...WORKER_EFFORT_LEVELS, "ultra"].join(", ")}, got '${raw}'`);
 }
 
 async function newCommand(args: string[]): Promise<void> {
