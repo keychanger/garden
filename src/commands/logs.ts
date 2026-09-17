@@ -11,7 +11,7 @@
 // `garden logs pretty`, `garden logs mode`.
 import fs from "node:fs";
 import path from "node:path";
-import { SESSIONS_DIR, getLogsMode, setLogsMode, loadConfig, logColorKeyForProject, type LogsMode, type GardenConfig } from "../config.js";
+import { SESSIONS_DIR, getLogsMode, setLogsMode, loadConfig, logColorKeyForProject, projectDisplayName, type LogsMode, type GardenConfig } from "../config.js";
 import { logColorAnsi, ASSIGNABLE_LOG_COLOR_KEYS, RESERVED_LOG_COLOR_KEY } from "../log-palette.js";
 import { isTTY } from "../output.js";
 import { atomicWriteFile } from "../dashboard/atomic-write.js";
@@ -420,10 +420,16 @@ function formatRawEntry(entry: LogEntry, useRelativeTime: boolean): string {
   return `${color.dim}${ts}${color.reset} ${levelColor}${symbol} ${level}${color.reset} ${color.cyan}${src}${color.reset} ${workerStr}${entry.msg}${dataStr}`;
 }
 
-function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
+function projectColumnName(project: string | null): string {
+  if (!project) return "system";
+  const cfg = getCachedConfig();
+  return cfg ? projectDisplayName(cfg, project) : project;
+}
+
+export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
   const ts = useRelativeTime ? relativeTime(entry.ts).padStart(TIMESTAMP_WIDTH) : absoluteTime(entry.ts);
   const project = projectForEntry(entry);
-  const rawLabel = project ?? "system";
+  const rawLabel = projectColumnName(project);
   const projectLabel = rawLabel.length > PROJECT_COL_WIDTH ? rawLabel.slice(0, PROJECT_COL_WIDTH) : rawLabel.padEnd(PROJECT_COL_WIDTH);
   const projectColor = project ? colorForProject(project) : color.dim;
   const projectStr = `${projectColor}${projectLabel}${color.reset}`;
