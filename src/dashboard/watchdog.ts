@@ -54,6 +54,7 @@ import { newDashboardWindow, windowExists, killWindowSafe, listAllWindowNames } 
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
 import { readRegistry, mutateRegistry, PR_STATE_KIND, OPERATOR_ACTION_FAILING_REASONS, type WorkerEntry, type WorkerRegistry } from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
+import { isAwaitingInput, isDoneSet } from "./continue.js";
 import { addAlert } from "./alerts.js";
 import { log, truncateLog } from "./log.js";
 import { sweepSpawnDrafts } from "./spawn-draft.js";
@@ -93,6 +94,13 @@ export const SLEEP_SLACK_MS = WATCHDOG_TICK_MS;
 // legitimately on an event of their own, so they are never watched.
 export function isWatchedState(entry: WorkerEntry): boolean {
   const state = entry.prState ?? "working";
+  // A `merged` worker holding a done or awaiting-input sentinel is parked on
+  // purpose: every poke replays a sweep that the sentinel turns into a no-op.
+  // Its exit is an operator prompt or `garden resume`, not a lost poller event.
+  if (state === "merged"
+      && (isDoneSet(entry.worktreePath) || isAwaitingInput(entry.worktreePath))) {
+    return false;
+  }
   if (PR_STATE_KIND[state].pollerOwed) return true;
   // A Stop hook saw commits ahead of base but the review-launch poke never
   // arrived — the one stranding class that lives in the working state.

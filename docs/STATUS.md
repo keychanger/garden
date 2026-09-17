@@ -520,7 +520,11 @@ cannot be expressed as "wait for an event":
   flight, not stranded — its work is bounded by `REVIEW_TIMEOUT_MS`, not the
   staleness threshold — so it is exempt: a live window is proof the event was
   not dropped, and the genuine stranding class (window exited, completion poke
-  lost) has a dead window and still trips. Poking is damped to at most one poke
+  lost) has a dead window and still trips. A `merged` worker holding
+  `.garden-done` or `.garden-awaiting-input` is exempt too: the sentinel makes
+  every sweep a no-op, and its exit is an operator prompt or `garden resume`
+  (after which the next tick watches it again), so a blocked worker parked in
+  `merged` does not draw a poke every threshold forever. Poking is damped to at most one poke
   per project per threshold, and the genuinely quiescent states (an idle
   `working` with no pending review, a *parked* `failing` with no pushed fix,
   `done`) are never watched, so a settled garden produces zero pokes. (2) It keeps each

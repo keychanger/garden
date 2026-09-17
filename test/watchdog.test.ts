@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -188,6 +191,22 @@ describe("isWatchedState", () => {
       failingSha: "same", lastSeenSha: "same",
     }))).toBe(false);
   });
+
+  it.each([".garden-awaiting-input", ".garden-done"])(
+    "does not watch a merged worker parked by %s", (sentinel) => {
+      // The sentinel suppresses the post-merge continue, so every poke replays a
+      // no-op sweep. The worker's exit is an operator prompt or `garden resume`,
+      // not a lost poller event.
+      const worktreePath = fs.mkdtempSync(path.join(os.tmpdir(), "watchdog-"));
+      try {
+        expect(isWatchedState(entry({ prState: "merged", worktreePath }))).toBe(true);
+        fs.writeFileSync(path.join(worktreePath, sentinel), "");
+        expect(isWatchedState(entry({ prState: "merged", worktreePath }))).toBe(false);
+      } finally {
+        fs.rmSync(worktreePath, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("does not watch operator-action failing dispositions even with new commits", () => {
     // trellis-flagged etc. require an explicit trellis command; pushing commits
