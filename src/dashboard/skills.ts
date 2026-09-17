@@ -383,8 +383,10 @@ EOF
 
 Pass \`--model <alias-or-id>\` and/or \`--effort low|medium|high|xhigh|ultra\` when the operator names how strong the new worker should be ("hand this to astra at xhigh"). Both outrank the crew's builder seat and the target project's default, so you can keep the crew you inherited — including its reviewer — and still change one dimension.
 
+\`--model\` does not select a harness: the model must belong to the inherited or selected crew's build member. If that member is Claude and the operator asks for Astra, select a Codex-building crew with the intended reviewer as well:
+
 \`\`\`bash
-garden handoff <target-project> --model gpt-6-astra --effort xhigh <<'EOF'
+garden handoff <target-project> --crew codex-claude --model gpt-6-astra --effort xhigh <<'EOF'
 <briefing>
 EOF
 \`\`\`

@@ -431,4 +431,32 @@ describe("garden handoff command", () => {
       expectCallback: true,
     });
   });
+
+  it.each(["--model", "--effort", "--ultracode", "--expect-callback", "-m"])(
+    "preserves a briefing equal to the known option %s",
+    async (message) => {
+      await captureConsoleLog(() => handoff(["other", "-m", message, "--model", "opus"]));
+      const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+      expect(fs.readFileSync(call.seedFile, "utf8")).toBe(`[handoff]\n\n${message}`);
+      expect(call).toMatchObject({ model: "opus", ultracode: false, expectCallback: false });
+    },
+  );
+
+  it("does not remove a boolean option to manufacture a missing model value", async () => {
+    await expect(handoff(["other", "--model", "--ultracode", "opus", "-m", "msg"]))
+      .rejects.toThrow(/--model requires a value/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   ", " --help", "m".repeat(129)])("rejects invalid --model value %j before dispatch", async (model) => {
+    await expect(handoff(["other", "--model", model, "-m", "msg"]))
+      .rejects.toThrow(/--model/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it.each(["--expect-callback", "--ultracode", "-m"])("rejects repeated %s", async (flag) => {
+    const args = flag === "-m" ? ["-m", "first", "-m", "second"] : [flag, flag, "-m", "msg"];
+    await expect(handoff(["other", ...args])).rejects.toThrow(/Unknown or repeated handoff option/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
 });

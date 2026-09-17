@@ -497,6 +497,13 @@ describe("processPendingHandoffs", () => {
       .toMatch(/shape guard/i);
   });
 
+  it.each(["", "   ", " --help", "m".repeat(129)])("rejects invalid model %j from the inbox", (model) => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, model });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error).toMatch(/shape guard/i);
+  });
+
   it("refuses a request that sets both effort and ultracode (the preset already fixes the rung)", () => {
     const id = submitHandoffRequest({
       targetProject: "wolf", seedFile: validSeed, ultracode: true,

@@ -291,7 +291,7 @@ function validBeadId(value: unknown): value is string {
 // A model id is opaque (garden keeps no model list) but reaches a launch
 // command line, so a flag-shaped value from the untrusted inbox is refused.
 function validModelId(value: unknown): value is string {
-  return boundedString(value, 128) && !value.startsWith("-");
+  return boundedString(value, 128) && value.trim().length > 0 && !value.trimStart().startsWith("-");
 }
 
 function isHandoffRequest(value: unknown): value is HandoffRequest {
@@ -460,9 +460,6 @@ function processClaim(claimFile: string, filenameId: string): void {
     return;
   }
 
-  // A crew is resolved by name at spawn, and newWorker treats a name it
-  // cannot resolve as "no crew" — silently spawning on the project default
-  // when the caller asked for something specific. Refuse here instead.
   // newWorker suppresses effort when ultracode is set (the preset already fixes
   // max effort), so a request carrying both would launch on a rung the caller
   // did not ask for. The CLI keeps them exclusive; refuse here too.
@@ -475,6 +472,9 @@ function processClaim(claimFile: string, filenameId: string): void {
     return;
   }
 
+  // A crew is resolved by name at spawn, and newWorker treats a name it
+  // cannot resolve as "no crew" — silently spawning on the project default
+  // when the caller asked for something specific. Refuse here instead.
   if (request.crew) {
     try {
       if (!getCrew(request.crew, loadConfig())) {

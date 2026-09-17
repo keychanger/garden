@@ -48,33 +48,15 @@ export async function handoff(args: string[]): Promise<void> {
     throw new Error(`Unknown project '${targetProject}'. Run 'garden list' to see registered projects.`);
   }
 
-  const rest = args.slice(1);
-  const callbackIdx = rest.indexOf("--expect-callback");
-  const expectCallback = callbackIdx !== -1;
-  if (expectCallback) rest.splice(callbackIdx, 1);
-
-  // --ultracode: create the child in Claude Code's ultracode mode (Opus +
-  // max effort + the dynamic-workflow keyword trigger). No further knobs;
-  // the recipe is fixed. Strip it before the briefing is read from `rest`.
-  const ultracodeIdx = rest.indexOf("--ultracode");
-  const ultracode = ultracodeIdx !== -1;
-  if (ultracode) rest.splice(ultracodeIdx, 1);
-
-  // --bead <id>: stamp the bead field on the new worker's registry entry —
-  // the registry→bd join board's chips and the removal-time unclaim read.
-  // Makes NO bd claim (the worker's own briefed claim is the claim).
-  // Value-carrying: splice BOTH tokens out before readBriefing scans rest
-  // for -m, or the id would be read as the -m message.
-  const bead = takeFlagValue(rest, "--bead", "--bead requires a bead id argument.");
+  const flags = parseHandoffFlags(args.slice(1));
+  const expectCallback = flags.has("--expect-callback");
+  const ultracode = flags.has("--ultracode");
+  const bead = flags.get("--bead");
   if (bead && bead.length > 128) {
     throw new Error("--bead id must be 128 characters or fewer.");
   }
 
-  // --crew <name>: the crew the child spawns under (its build member and
-  // review family). Value-carrying, so both tokens come out before the
-  // briefing scan, like --bead. Validated here, in the caller's process,
-  // rather than left to resolve as an inert dangling name at spawn.
-  let crew = takeFlagValue(rest, "--crew", "--crew requires a crew name argument.");
+  let crew = flags.get("--crew");
   if (crew) {
     const cfg = loadConfig();
     if (!getCrew(crew, cfg)) {
@@ -82,23 +64,12 @@ export async function handoff(args: string[]): Promise<void> {
     }
   }
 
-  // --model / --effort: the child's launch identity, in the same vocabulary
-  // `workers new` uses (shared parsers). They are the only way a sandboxed
-  // caller can pick a rung — a crew fixes the harness but leaves effort at the
-  // harness default, and minting a pinned crew needs a config write the worker
-  // sandbox denies. Both outrank the crew's builder seat inside newWorker.
-  const modelRaw = takeFlagValue(
-    rest, "--model", "--model requires a value (an alias like 'opus', or a concrete model id).",
-  );
+  const modelRaw = flags.get("--model");
   const model = modelRaw ? requireModelValue(modelRaw) : undefined;
   if (model && model.length > 128) {
     throw new Error("--model must be 128 characters or fewer.");
   }
-  const effortRaw = takeFlagValue(
-    rest,
-    "--effort",
-    `--effort requires a value (${[...WORKER_EFFORT_LEVELS, "ultra"].join(", ")}).`,
-  );
+  const effortRaw = flags.get("--effort");
   if (effortRaw !== undefined && ultracode) {
     throw new Error(
       "--effort and --ultracode are mutually exclusive: the ultracode preset already fixes "
@@ -111,13 +82,7 @@ export async function handoff(args: string[]): Promise<void> {
   const effort = effortOpts.effort;
   const ultracodeRequested = ultracode || effortOpts.ultracode === true;
 
-  // Every flag this command understands has been spliced out by now, so a
-  // leftover flag token is one it does not have. These used to fall through to
-  // the briefing scan and be ignored, which spawned the child on a
-  // configuration the caller had not asked for, with nothing said about it.
-  assertNoUnknownFlags(rest);
-
-  const briefing = await readBriefing(rest);
+  const briefing = await readBriefing(flags.get("-m"));
   if (!briefing.trim()) {
     throw new Error("Empty briefing. Pass -m \"<text>\" or pipe a message via stdin.");
   }
@@ -230,43 +195,40 @@ export async function handoff(args: string[]): Promise<void> {
   console.log(`Handed off to ${targetProject}/${resp.workerName}.${suffix}`);
 }
 
-// Pull a value-carrying flag and its value out of `rest` so neither token
-// reaches the briefing scan. A missing value — or the next flag standing where
-// the value belongs — is an error rather than a swallowed token.
-function takeFlagValue(rest: string[], flag: string, missingMessage: string): string | undefined {
-  const idx = rest.indexOf(flag);
-  if (idx === -1) return undefined;
-  const value = rest[idx + 1];
-  if (!value || !value.trim() || value.startsWith("-")) throw new Error(missingMessage);
-  rest.splice(idx, 2);
-  return value.trim();
-}
-
-// -m's message is the one remaining token that may legitimately start with a
-// dash, so it and its flag are skipped; anything else flag-shaped is a typo or
-// an option this command does not have.
-function assertNoUnknownFlags(rest: string[]): void {
-  const messageIdx = rest.indexOf("-m");
-  for (let i = 0; i < rest.length; i++) {
-    if (messageIdx !== -1 && (i === messageIdx || i === messageIdx + 1)) continue;
-    if (rest[i].startsWith("-")) {
+function parseHandoffFlags(args: string[]): Map<string, string> {
+  const missingMessages: Record<string, string> = {
+    "--bead": "--bead requires a bead id argument.",
+    "--crew": "--crew requires a crew name argument.",
+    "--model": "--model requires a value (an alias like 'opus', or a concrete model id).",
+    "--effort": `--effort requires a value (${[...WORKER_EFFORT_LEVELS, "ultra"].join(", ")}).`,
+    "-m": "-m requires a message argument.",
+  };
+  const flags = new Map<string, string>();
+  for (let i = 0; i < args.length; i++) {
+    const flag = args[i];
+    const boolean = flag === "--expect-callback" || flag === "--ultracode";
+    if (flags.has(flag) || (!boolean && !Object.hasOwn(missingMessages, flag))) {
       throw new Error(
-        `Unknown or repeated handoff option '${rest[i]}'. Supported once each: `
+        `Unknown or repeated handoff option '${flag}'. Supported once each: `
         + "--expect-callback, --ultracode, --crew <name>, --model <alias-or-id>, "
         + "--effort <rung>, --bead <id>, -m \"<message>\".",
       );
     }
+    if (boolean) {
+      flags.set(flag, "");
+      continue;
+    }
+    const value = args[++i];
+    if (value === undefined || (flag !== "-m" && (!value.trim() || value.trimStart().startsWith("-")))) {
+      throw new Error(missingMessages[flag]);
+    }
+    flags.set(flag, flag === "-m" ? value : value.trim());
   }
+  return flags;
 }
 
-async function readBriefing(rest: string[]): Promise<string> {
-  // -m "<text>" wins if supplied. Otherwise read stdin.
-  const mIdx = rest.indexOf("-m");
-  if (mIdx !== -1) {
-    const text = rest[mIdx + 1];
-    if (!text) throw new Error("-m requires a message argument.");
-    return text;
-  }
+async function readBriefing(message: string | undefined): Promise<string> {
+  if (message !== undefined) return message;
 
   if (process.stdin.isTTY) {
     throw new Error(
