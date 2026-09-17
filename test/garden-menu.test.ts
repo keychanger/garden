@@ -6,7 +6,7 @@ vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 
 const {
   buildGardenMenuPlan, buildChecksSlotsSubmenuPlan, buildMaxReviewsSubmenuPlan,
-  buildBranchSubmenuPlan,
+  buildBranchSubmenuPlan, buildLeftColumnSubmenuPlan, formatColumnSplit,
 } = await import("../src/dashboard/garden-menu.js");
 const { buildMenuArgv } = await import("../src/dashboard/menu.js");
 
@@ -17,6 +17,7 @@ describe("buildGardenMenuPlan", () => {
       checksSlots: "4 (hardware default; unset)",
       maxReviews: "3",
       buildBranch: "main",
+      leftColumn: "45% / 55% (default)",
     });
     const row = (n: string) => plan.rows.find(r => r.label.includes(n))!;
     // The menu is no longer limits-only, so the title dropped "machine-wide".
@@ -27,6 +28,8 @@ describe("buildGardenMenuPlan", () => {
     expect(row("max reviews").run).toBe("garden dashboard _garden-reviews-submenu");
     expect(row("build branch").label).toContain("main");
     expect(row("build branch").run).toBe("garden dashboard _garden-branch-submenu");
+    expect(row("column split").label).toContain("45% / 55% (default)");
+    expect(row("column split").run).toBe("garden dashboard _garden-layout-submenu");
   });
 
   it("encodes the limits/build divider as a real separator row", () => {
@@ -39,6 +42,7 @@ describe("buildGardenMenuPlan", () => {
       checksSlots: "4 (hardware default; unset)",
       maxReviews: "3",
       buildBranch: "main",
+      leftColumn: "45% / 55% (default)",
     });
     const seps = plan.rows.filter(r => r.sep);
     expect(seps).toHaveLength(1);
@@ -95,5 +99,25 @@ describe("buildMaxReviewsSubmenuPlan", () => {
   it("treats a live 0 (unlimited) as no marked preset", () => {
     const plan = buildMaxReviewsSubmenuPlan(0, "garden");
     expect(plan.rows.slice(0, -1).every(r => !r.label.includes("✓"))).toBe(true);
+  });
+});
+
+describe("buildLeftColumnSubmenuPlan", () => {
+  it("lists each split as the pair the operator thinks in, with the current one marked", () => {
+    const plan = buildLeftColumnSubmenuPlan(40, "garden");
+    expect(plan.rows[0].label).toBe("35% / 65%");
+    expect(plan.rows.find(r => r.label.startsWith("40%"))!.label).toBe("40% / 60%  ✓");
+    expect(plan.rows[1].run).toBe("garden dashboard _garden-layout-set 40");
+  });
+
+  it("offers an unset row that names the default it restores", () => {
+    const plan = buildLeftColumnSubmenuPlan(40, "garden");
+    expect(plan.rows.at(-1)!.label).toContain("default (45%)");
+    expect(plan.rows.at(-1)!.run).toBe("garden dashboard _garden-layout-set unset");
+  });
+
+  it("tags only the default value, so the menu says which one is garden's own", () => {
+    expect(formatColumnSplit(45)).toBe("45% / 55% (default)");
+    expect(formatColumnSplit(50)).toBe("50% / 50%");
   });
 });

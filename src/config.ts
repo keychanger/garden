@@ -506,6 +506,17 @@ export interface BuildConfig {
   branch?: string;
 }
 
+// How the dashboard divides the terminal between its two columns. Garden-level
+// because the split is a property of the operator's terminal, not of any one
+// project — every project's panes live in the same two slots. Set from the ⌥;
+// garden settings menu's left-column row.
+export interface LayoutConfig {
+  // Percent of the terminal width given to the left column (usage meter,
+  // status pane, growhouse). The right slot — the worker or project shell —
+  // takes the remainder. Unset = DEFAULT_LEFT_COLUMN_PERCENT.
+  leftPercent?: number;
+}
+
 export interface GardenConfig {
   projects: Record<string, ProjectConfig>;
   plots?: Record<string, PlotConfig>;
@@ -515,6 +526,7 @@ export interface GardenConfig {
   autoContinue?: Partial<AutoContinueConfig>;
   limits?: LimitsConfig;
   build?: BuildConfig;
+  layout?: LayoutConfig;
   // Operator-defined crews, keyed by name. Garden-level because a crew is a
   // shared resource definition projects reference by name — the same shape as
   // `providers` and `claudeProfiles`. Absent = builtin (generated) crews only.
@@ -522,6 +534,58 @@ export interface GardenConfig {
 }
 
 export const DEFAULT_BUILD_BRANCH = "main";
+
+// The left column carries `garden logs`, whose pretty mode spends a fixed
+// gutter on the timestamp/project/worker columns before the first character of
+// message text — so the left column pays a floor the right one doesn't, and an
+// even split is not the balanced one. 45 leaves the log message column where a
+// 50/50 split left it (after the gutter reclaim) and hands the rest to the
+// agent pane.
+export const DEFAULT_LEFT_COLUMN_PERCENT = 45;
+
+// Bounds, not preferences: below 30 the usage meter drops a column and status
+// rows lose their identity cluster; above 70 the agent pane can't hold a diff.
+export const MIN_LEFT_COLUMN_PERCENT = 30;
+export const MAX_LEFT_COLUMN_PERCENT = 70;
+
+// Percent of the terminal given to the left column.
+export function getLeftColumnPercent(config?: GardenConfig): number {
+  const cfg = config ?? loadConfig();
+  const n = cfg.layout?.leftPercent;
+  if (typeof n !== "number" || !Number.isFinite(n)) return DEFAULT_LEFT_COLUMN_PERCENT;
+  const rounded = Math.round(n);
+  if (rounded < MIN_LEFT_COLUMN_PERCENT || rounded > MAX_LEFT_COLUMN_PERCENT) {
+    return DEFAULT_LEFT_COLUMN_PERCENT;
+  }
+  return rounded;
+}
+
+// Percent of the terminal given to the right slot. This is the number tmux
+// wants: every split/resize site sizes the RIGHT pane, so the resolver returns
+// the complement rather than making each caller subtract.
+export function getRightColumnPercent(config?: GardenConfig): number {
+  return 100 - getLeftColumnPercent(config);
+}
+
+// Set (or clear, with undefined) the left column's share. Same lock-protected
+// R/M/W shape as setLimit. Throws on an out-of-range value rather than silently
+// clamping — the caller asked for a width it won't get.
+export function setLeftColumnPercent(percent: number | undefined): number {
+  return mutateConfig(cfg => {
+    if (percent === undefined) {
+      delete cfg.layout;
+      return getLeftColumnPercent(cfg);
+    }
+    const rounded = Math.round(percent);
+    if (!Number.isFinite(rounded)
+        || rounded < MIN_LEFT_COLUMN_PERCENT || rounded > MAX_LEFT_COLUMN_PERCENT) {
+      throw new Error(
+        `left column percent must be between ${MIN_LEFT_COLUMN_PERCENT} and ${MAX_LEFT_COLUMN_PERCENT}, got ${percent}`);
+    }
+    cfg.layout = { ...(cfg.layout ?? {}), leftPercent: rounded };
+    return getLeftColumnPercent(cfg);
+  });
+}
 
 // The branch the running build compares itself against.
 export function getBuildBranch(config?: GardenConfig): string {

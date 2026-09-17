@@ -42,6 +42,7 @@ vi.mock("../src/config.js", () => ({
   SESSIONS_DIR: "/tmp/fake-sessions",
   plotsMap: vi.fn((cfg: { plots?: Record<string, unknown> }) => cfg.plots ?? {}),
   isPlotFocused: vi.fn((plot: { focused?: boolean }) => plot.focused !== false),
+  getRightColumnPercent: vi.fn(() => 55),
 }));
 
 vi.mock("../src/session.js", () => ({
@@ -1393,17 +1394,17 @@ describe("repinUsagePaneHeight", () => {
 });
 
 describe("rebakePanesOnResize", () => {
-  it("restores the equal column split before rendering at the new width", () => {
+  it("restores the configured column split before rendering at the new width", () => {
     vi.mocked(getPaneSize).mockReturnValue({ width: 80, height: 10 });
     vi.mocked(tmux).mockImplementation((...args) => {
-      if (args[0] === "resize-pane" && args[2] === "%9" && args[3] === "-x" && args[4] === "50%") {
+      if (args[0] === "resize-pane" && args[2] === "%9" && args[3] === "-x" && args[4] === "55%") {
         vi.mocked(getPaneSize).mockReturnValue({ width: 100, height: 10 });
       }
     });
 
     try {
       rebakePanesOnResize(makeState({ activePaneId: "%9", statusPaneId: "%0" }), 5);
-      expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%9", "-x", "50%");
+      expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%9", "-x", "55%");
       expect(vi.mocked(renderQuickStatus).mock.calls.at(-1)?.[4]).toBe(100);
     } finally {
       vi.mocked(tmux).mockReset();

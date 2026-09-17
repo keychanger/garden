@@ -112,10 +112,42 @@ function absoluteTime(isoTs: string): string {
   return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
 
-// Width of the timestamp column. Absolute time is "MM-DD HH:MM:SS" (14 chars);
-// relative time ("5m ago", or the "MM-DD HH:MM" fallback for >24h) is right-padded
-// to match so downstream column math (PRETTY_MESSAGE_COL) holds for both modes.
+// Pretty mode's clock: time only. The date is carried by a separator rule
+// emitted when the day changes (see dateRuleFor), because repeating "MM-DD" on
+// every row spends six columns of the left dashboard column on a value that
+// changes once a day.
+function absoluteClock(isoTs: string): string {
+  const d = new Date(isoTs);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
+}
+
+// The local calendar day an entry belongs to, as the key the date rule changes on.
+function dayKey(isoTs: string): string {
+  const d = new Date(isoTs);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+// The day-boundary rule: a dim full-width divider carrying the date the
+// following entries belong to. Its own line rather than a wider timestamp
+// column — a date is a property of a run of entries, not of each one.
+export function formatDateRule(isoTs: string, width: number): string {
+  const d = new Date(isoTs);
+  if (Number.isNaN(d.getTime())) return "";
+  const label = `${WEEKDAYS[d.getDay()]} ${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  const head = `── ${label} `;
+  const fill = Math.max(width - head.length, 2);
+  return `${color.dim}${head}${"─".repeat(fill)}${color.reset}`;
+}
+
+// Width of the timestamp column. Raw mode keeps the full "MM-DD HH:MM:SS";
+// pretty mode uses "HH:MM:SS" plus date rules. Relative time ("5m ago", or the
+// "MM-DD HH:MM" fallback for >24h) is right-padded to its own longest form.
 const TIMESTAMP_WIDTH = 14;
+const PRETTY_CLOCK_WIDTH = 8;       // HH:MM:SS
+const PRETTY_RELATIVE_WIDTH = 11;   // the >24h "MM-DD HH:MM" fallback, the longest relative form
 
 // ---- worker → project lookup -----------------------------------------------
 //
@@ -191,6 +223,8 @@ export function resetWorkerMapCaches(): void {
   workerToProjectCache = null;
   workerToProjectHistoryCache = null;
   registryLoadFailed = false;
+  // The layout is measured from these caches, so it has to fall with them.
+  cachedLayouts = null;
 }
 
 function projectForEntry(entry: LogEntry): string | null {
@@ -214,17 +248,93 @@ function projectForEntry(entry: LogEntry): string | null {
   return null;
 }
 
-// Fixed column widths sized for typical garden names: project slugs run
-// 5–12 chars, worker slugs are 3-word adj-adj-noun and run 12–22. Anything
-// longer is truncated rather than reflowing the column dynamically.
-const PROJECT_COL_WIDTH = 16;
-const WORKER_COL_WIDTH = 22;
+// The identity columns are sized to the names that actually exist rather than
+// to the longest name the generator could ever produce. The gutter they form is
+// paid on every row before the first character of message text, and the logs
+// pane lives in the left column, which is the narrower half of the dashboard —
+// padding a 5-char project to 16 costs message text on every line.
+//
+// Bounds, not guesses: a worker name is adj-adj-noun over a 6-char-max
+// vocabulary (names.ts), so 20 is the true ceiling; the floor keeps the columns
+// from collapsing when the registry is empty or unreadable.
+const PROJECT_COL_MIN = 6;
+const PROJECT_COL_MAX = 16;
+const WORKER_COL_MIN = 12;
+const WORKER_COL_MAX = 20;
 
-// Visible-width prefix before the message column in pretty mode:
-// ts + "  " + project(16) + "  " + worker(22) + " " + glyph(1) + " ".
-// Continuation lines indent to this width so each detail aligns under the
-// headline's first message char.
-const PRETTY_MESSAGE_COL = TIMESTAMP_WIDTH + 2 + PROJECT_COL_WIDTH + 2 + WORKER_COL_WIDTH + 1 + 1 + 1;
+export interface PrettyLayout {
+  timestamp: number;
+  project: number;
+  worker: number;
+  // Visible-width prefix before the message column:
+  // ts + "  " + project + "  " + worker + " " + glyph(1) + " ". Continuation
+  // lines indent to this width so each detail aligns under the headline's
+  // first message char.
+  messageCol: number;
+}
+
+function layoutFor(timestamp: number, project: number, worker: number): PrettyLayout {
+  return { timestamp, project, worker, messageCol: timestamp + 2 + project + 2 + worker + 3 };
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.min(Math.max(n, lo), hi);
+}
+
+// Widest display name over the registered projects, and widest name over the
+// registered workers. Read ONCE per process and memoized: `garden logs
+// --follow` is a long-lived tail that appends rows, so a width recomputed as
+// names arrive would misalign every row already on screen. A name longer than
+// its column behaves as it always has — the project column truncates, the
+// worker column pushes the row right — so a worker created after the pane
+// started costs alignment on its own rows, never information.
+let cachedLayouts: { absolute: PrettyLayout; relative: PrettyLayout } | null = null;
+
+function measureProjectColumn(): number {
+  const cfg = getCachedConfig();
+  if (!cfg) return PROJECT_COL_MIN;
+  let widest = 0;
+  let anyFits = false;
+  for (const name of Object.keys(cfg.projects ?? {})) {
+    const len = projectDisplayName(cfg, name).length;
+    // A name over the cap is truncated at whatever the column turns out to be,
+    // so it gets no vote on the width — one project with a long displayName
+    // shouldn't pin the column to the cap for every other project's rows.
+    if (len > PROJECT_COL_MAX) continue;
+    anyFits = true;
+    widest = Math.max(widest, len);
+  }
+  if (!anyFits) return PROJECT_COL_MAX;
+  return clamp(widest, PROJECT_COL_MIN, PROJECT_COL_MAX);
+}
+
+function measureWorkerColumn(): number {
+  if (!workerToProjectCache) workerToProjectCache = loadWorkerMap();
+  let widest = 0;
+  for (const name of workerToProjectCache.keys()) widest = Math.max(widest, name.length);
+  // "poller" stands in for a project-level entry's actor; it must fit too.
+  return clamp(Math.max(widest, "poller".length), WORKER_COL_MIN, WORKER_COL_MAX);
+}
+
+// Width of the pane this render is going into. Read per call: the dashboard
+// logs pane is re-laid-out when the terminal or the column split changes, and
+// node updates process.stdout.columns on SIGWINCH.
+function paneWidth(): number {
+  const cols = process.stdout.columns;
+  return cols && cols > 0 ? cols : 120;
+}
+
+export function prettyLayout(useRelativeTime: boolean): PrettyLayout {
+  if (!cachedLayouts) {
+    const project = measureProjectColumn();
+    const worker = measureWorkerColumn();
+    cachedLayouts = {
+      absolute: layoutFor(PRETTY_CLOCK_WIDTH, project, worker),
+      relative: layoutFor(PRETTY_RELATIVE_WIDTH, project, worker),
+    };
+  }
+  return useRelativeTime ? cachedLayouts.relative : cachedLayouts.absolute;
+}
 
 // ---- suppression ------------------------------------------------------------
 
@@ -427,10 +537,13 @@ function projectColumnName(project: string | null): string {
 }
 
 export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
-  const ts = useRelativeTime ? relativeTime(entry.ts).padStart(TIMESTAMP_WIDTH) : absoluteTime(entry.ts);
+  const layout = prettyLayout(useRelativeTime);
+  const ts = useRelativeTime
+    ? relativeTime(entry.ts).padStart(layout.timestamp)
+    : absoluteClock(entry.ts);
   const project = projectForEntry(entry);
   const rawLabel = projectColumnName(project);
-  const projectLabel = rawLabel.length > PROJECT_COL_WIDTH ? rawLabel.slice(0, PROJECT_COL_WIDTH) : rawLabel.padEnd(PROJECT_COL_WIDTH);
+  const projectLabel = rawLabel.length > layout.project ? rawLabel.slice(0, layout.project) : rawLabel.padEnd(layout.project);
   const projectColor = project ? colorForProject(project) : color.dim;
   const projectStr = `${projectColor}${projectLabel}${color.reset}`;
   // Project-level poller entries (started/stopped, postMerge, etc.) carry no
@@ -438,8 +551,8 @@ export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): st
   // entries that clearly originated from the project's poller.
   const workerLabel = entry.worker ?? (entry.src === "poller" ? "poller" : null);
   const workerStr = workerLabel
-    ? `${color.dim}${workerLabel.padEnd(WORKER_COL_WIDTH)}${color.reset}`
-    : " ".repeat(WORKER_COL_WIDTH);
+    ? `${color.dim}${workerLabel.padEnd(layout.worker)}${color.reset}`
+    : " ".repeat(layout.worker);
   const glyph = PRETTY_LEVEL_GLYPHS[entry.level] ?? " ";
   const glyphColor = LEVEL_COLORS[entry.level] ?? "";
   const { headline, details } = summarize(entry);
@@ -447,12 +560,11 @@ export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): st
   const msgReset = msgColor ? color.reset : "";
   const headlineLine = `${color.dim}${ts}${color.reset}  ${projectStr}  ${workerStr} ${glyphColor}${glyph}${color.reset} ${msgColor}${headline}${msgReset}`;
   if (details.length === 0) return headlineLine;
-  const indent = " ".repeat(PRETTY_MESSAGE_COL);
+  const indent = " ".repeat(layout.messageCol);
   // Wrap each detail to the terminal so long error/data dumps stay within
   // the message column instead of natural-wrapping back to column 0.
   // Continuation prefix "  " aligns wrapped text under the char after "↳ ".
-  const termWidth = process.stdout.columns && process.stdout.columns > 0 ? process.stdout.columns : 120;
-  const usable = Math.max(termWidth - PRETTY_MESSAGE_COL, 20);
+  const usable = Math.max(paneWidth() - layout.messageCol, 20);
   const firstWidth = Math.max(usable - 2, 10); // "↳ "
   const contWidth = Math.max(usable - 2, 10);  // "  "
   const continuationLines: string[] = [];
@@ -716,6 +828,28 @@ function formatDedupedEntry(d: DedupedEntry, mode: LogsMode, useRelativeTime: bo
   return appendDedupSuffix(formatEntry(d.entry, mode, useRelativeTime), d.count);
 }
 
+// The day the last rendered row belonged to. Module-level because `--follow`
+// renders the backlog through printEntries and then streams through the poll
+// loop; both halves share one running date so the tail doesn't re-announce a
+// day the backlog already opened.
+let lastRenderedDay: string | null = null;
+
+// The rule to emit before this entry, or null when it belongs to the day
+// already on screen. Pretty mode only — raw mode carries the date in every
+// timestamp, so a rule there would be redundant.
+function dateRuleFor(entry: LogEntry, mode: LogsMode): string | null {
+  if (mode === "raw" || !isTTY) return null;
+  const day = dayKey(entry.ts);
+  if (!day || day === lastRenderedDay) return null;
+  lastRenderedDay = day;
+  return formatDateRule(entry.ts, paneWidth());
+}
+
+// Test seam: the follow loop and the batch renderer share module state.
+export function resetDateRuleState(): void {
+  lastRenderedDay = null;
+}
+
 interface RenderOptions {
   mode: LogsMode;
   showAll: boolean;
@@ -745,6 +879,8 @@ function printEntries(entries: LogEntry[], filters: Filters, opts: RenderOptions
   }
 
   for (const d of deduped) {
+    const rule = dateRuleFor(d.entry, opts.mode);
+    if (rule) console.log(rule);
     console.log(formatDedupedEntry(d, opts.mode, useRelativeTime));
   }
 }
@@ -797,6 +933,16 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
       const entry = parseLine(line);
       if (!entry || !matchesFilters(entry, filters)) continue;
       if (opts.mode === "pretty" && !opts.showAll && isSuppressed(entry)) continue;
+
+      // A day boundary ends the current dedup block: the rule has to land
+      // between the two runs, and the in-place repeat rewrite walks the cursor
+      // up through the previous render — it must never reach across the rule.
+      const rule = dateRuleFor(entry, opts.mode);
+      if (rule) {
+        if (prevKey) process.stdout.write("\n");
+        process.stdout.write(`${rule}\n`);
+        prevKey = "";
+      }
 
       const key = dedupKey(entry);
       const rendered = formatEntry(entry, opts.mode, false);

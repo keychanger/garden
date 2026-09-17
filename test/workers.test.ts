@@ -45,6 +45,7 @@ vi.mock("../src/config.js", () => {
     tryResolveClaudeProfile: vi.fn(() => null),
     tryResolveProvider,
     resolveSandboxWriteRoots: vi.fn((p: { sandboxWriteRoots?: string[] }) => p.sandboxWriteRoots ?? []),
+    getRightColumnPercent: vi.fn(() => 55),
     resolveProvider: vi.fn((project: { provider?: string }, config?: { providers?: Record<string, Record<string, unknown>> }) => {
       const provider = tryResolveProvider(project);
       if (provider) return provider;

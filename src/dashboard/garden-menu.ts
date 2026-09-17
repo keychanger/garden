@@ -10,9 +10,12 @@
 import {
   getBuildBranch,
   getChecksSlotsOverride,
+  getLeftColumnPercent,
   getMaxConcurrentReviews,
   setBuildBranch,
+  setLeftColumnPercent,
   setLimit,
+  DEFAULT_LEFT_COLUMN_PERCENT,
   type LimitsConfig,
 } from "../config.js";
 import { gardenInstallRepo, listBranches } from "./git.js";
@@ -27,6 +30,9 @@ import { log } from "./log.js";
 // curated model/effort list while the CLI covers exotic ids.
 const CHECKS_SLOT_CHOICES = [1, 2, 3, 4, 6, 8];
 const MAX_REVIEW_CHOICES = [1, 2, 3, 4, 6, 8];
+// Left-column shares worth a keystroke. The bounds in config.ts are wider;
+// anything else is a config.yml edit.
+const LEFT_COLUMN_CHOICES = [35, 40, 45, 50, 55, 60];
 
 // The config-key each menu row mutates. Kept explicit (not free-form) so the
 // dispatch can reject anything else.
@@ -40,6 +46,7 @@ export interface GardenMenuView {
   checksSlots: string; // "N" or "N (hardware default; unset)"
   maxReviews: string;  // "N" or "unlimited (unset)"
   buildBranch: string; // branch the running build is measured against
+  leftColumn: string;  // "45% / 55%" split, with "(default)" when unset
 }
 
 export function buildGardenMenuPlan(v: GardenMenuView): MenuSpec {
@@ -49,10 +56,32 @@ export function buildGardenMenuPlan(v: GardenMenuView): MenuSpec {
     { label: `(2) max reviews      ${v.maxReviews}`, key: "2", run: `${g} dashboard _garden-reviews-submenu` },
     { sep: true, label: "" },
     { label: `(3) build branch     ${v.buildBranch}`, key: "3", run: `${g} dashboard _garden-branch-submenu` },
+    { label: `(4) column split     ${v.leftColumn}`, key: "4", run: `${g} dashboard _garden-layout-submenu` },
   ];
-  // No longer only limits: the build branch is a garden-level setting that is
-  // not a resource budget.
+  // No longer only limits: the build branch and the column split are
+  // garden-level settings that are not resource budgets.
   return { title: "Garden settings", rows };
+}
+
+// The split reads as a pair because that is how the operator thinks about it
+// ("40/60"), even though only the left half is stored.
+export function formatColumnSplit(leftPercent: number): string {
+  const suffix = leftPercent === DEFAULT_LEFT_COLUMN_PERCENT ? " (default)" : "";
+  return `${leftPercent}% / ${100 - leftPercent}%${suffix}`;
+}
+
+export function buildLeftColumnSubmenuPlan(current: number, runner: string): MenuSpec {
+  const rows: MenuRow[] = LEFT_COLUMN_CHOICES.map((n, i) => ({
+    label: n === current ? `${formatColumnSplit(n)}  ✓` : formatColumnSplit(n),
+    key: i < 9 ? String(i + 1) : "",
+    run: `${runner} dashboard _garden-layout-set ${n}`,
+  }));
+  rows.push({
+    label: `(0) unset — default (${DEFAULT_LEFT_COLUMN_PERCENT}%)`,
+    key: "0",
+    run: `${runner} dashboard _garden-layout-set unset`,
+  });
+  return { title: "Terminal split: left column / right slot", rows };
 }
 
 // A numeric-limit submenu: one row per preset (current marked), each dispatching
@@ -97,6 +126,7 @@ function gardenMenuView(): GardenMenuView {
     checksSlots: override !== undefined ? String(override) : `${hw} (hardware default; unset)`,
     maxReviews: maxReviews > 0 ? String(maxReviews) : "unlimited (unset)",
     buildBranch: getBuildBranch(),
+    leftColumn: formatColumnSplit(getLeftColumnPercent()),
   };
 }
 
@@ -127,6 +157,10 @@ export function runMaxReviewsSubmenu(): void {
   runMenu(buildMaxReviewsSubmenuPlan(getMaxConcurrentReviews(), resolveGardenRunner()));
 }
 
+export function runLeftColumnSubmenu(): void {
+  runMenu(buildLeftColumnSubmenuPlan(getLeftColumnPercent(), resolveGardenRunner()));
+}
+
 export function runBuildBranchSubmenu(): void {
   const repo = gardenInstallRepo();
   runMenu(buildBranchSubmenuPlan(
@@ -152,6 +186,40 @@ export function applyBuildBranch(branch: string): void {
     })
     .catch(() => { /* best effort — the watchdog recounts within 5 min regardless */ });
   tmuxDisplay(`build branch: ${next}`);
+  runGardenMenu();
+}
+
+// _garden-layout-set <percent|unset>: rewrite the left column's share and apply
+// it to the live dashboard immediately. The applying half is exactly the
+// terminal-resize path (`rebakePanesOnResize` resizes the right slot to the
+// configured percent, then re-renders the width-shaped baked files;
+// `presizeHiddenWindows` carries the new width to parked worker windows) —
+// changing the ratio moves the same widths a resize does, so it must repair
+// the same things.
+export function applyLeftColumnFromMenu(value: string): void {
+  const clearing = value === "unset" || value === "";
+  let applied: number;
+  try {
+    applied = setLeftColumnPercent(clearing ? undefined : Number(value));
+  } catch (err) {
+    tmuxDisplay(err instanceof Error ? err.message : String(err));
+    log.error("garden-menu", "failed to set column split", { data: { value, error: String(err) } });
+    return;
+  }
+  log.info("garden-menu", "column split set", { data: { leftPercent: applied } });
+  // Local import for the same reason as applyBuildBranch: header/create pull
+  // the dashboard graph, and this path is only reached from a menu selection.
+  void (async () => {
+    try {
+      const { readDashState } = await import("./state.js");
+      const { USAGE_PANE_HEIGHT, presizeHiddenWindows } = await import("./create.js");
+      const { rebakePanesOnResize } = await import("./header.js");
+      const state = readDashState();
+      rebakePanesOnResize(state, USAGE_PANE_HEIGHT);
+      presizeHiddenWindows(state);
+    } catch { /* no live dashboard, or a pane went away — config write stands */ }
+  })();
+  tmuxDisplay(`column split: ${formatColumnSplit(applied)}`);
   runGardenMenu();
 }
 

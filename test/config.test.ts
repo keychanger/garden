@@ -653,6 +653,61 @@ describe("build.branch (garden-level staleness target)", () => {
   });
 });
 
+// Garden-level terminal split (config.ts LayoutConfig). Machine-wide like
+// `limits` and `build` — the split is a property of the operator's terminal,
+// not of any project. Every tmux split/resize site sizes the RIGHT pane, so the
+// complement getter is the one under test alongside the stored value.
+describe("layout.leftPercent (garden-level column split)", () => {
+  it("defaults to 45/55 when unset", async () => {
+    const { getLeftColumnPercent, getRightColumnPercent, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    expect(getLeftColumnPercent()).toBe(45);
+    expect(getRightColumnPercent()).toBe(55);
+  });
+
+  it("setLeftColumnPercent round-trips and the right column is the complement", async () => {
+    const { setLeftColumnPercent, getLeftColumnPercent, getRightColumnPercent, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    expect(setLeftColumnPercent(40)).toBe(40);
+    expect(getLeftColumnPercent()).toBe(40);
+    expect(getRightColumnPercent()).toBe(60);
+  });
+
+  it("setLeftColumnPercent(undefined) clears the key and prunes the empty layout block", async () => {
+    const { setLeftColumnPercent, getLeftColumnPercent, loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    setLeftColumnPercent(60);
+    expect(setLeftColumnPercent(undefined)).toBe(45);
+    expect(getLeftColumnPercent()).toBe(45);
+    expect(loadConfig().layout).toBeUndefined();
+  });
+
+  it("rejects an out-of-range percent rather than clamping it", async () => {
+    // Clamping would hand back a width the caller didn't ask for and report
+    // success; the menu shows the error instead.
+    const { setLeftColumnPercent, getLeftColumnPercent, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {} });
+    expect(() => setLeftColumnPercent(10)).toThrow(/between 30 and 70/);
+    expect(() => setLeftColumnPercent(90)).toThrow(/between 30 and 70/);
+    expect(getLeftColumnPercent()).toBe(45);
+  });
+
+  it("falls back to the default when the stored value is out of range or a non-number", async () => {
+    // A hand-edited config.yml must not be able to collapse a column to
+    // nothing — the dashboard has no other way back to a usable layout.
+    const { getLeftColumnPercent, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, "projects: {}\nlayout:\n  leftPercent: 5\n");
+    expect(getLeftColumnPercent()).toBe(45);
+    fs.writeFileSync(CONFIG_PATH, "projects: {}\nlayout:\n  leftPercent: wide\n");
+    expect(getLeftColumnPercent()).toBe(45);
+  });
+});
+
 // Trellis workflow adds three optional ProjectConfig keys. Round-trip them
 // through saveConfig → loadConfig and confirm isValidConfigKey accepts them.
 // See WORKFLOWS.md "Project config".

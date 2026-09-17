@@ -6,7 +6,7 @@
 // hook path, while workflows/index.ts retains every poller state handler.
 import fs from "node:fs";
 import path from "node:path";
-import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused, logColorKeyForProject } from "../config.js";
+import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused, logColorKeyForProject, getRightColumnPercent } from "../config.js";
 import { logColorTmux } from "../log-palette.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxBatch, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
@@ -1171,7 +1171,7 @@ export function repinUsagePaneHeight(state: DashboardState, fallbackHeight: numb
 // the alerts renderer stays tree-shaken out of the hook bundle.
 export function rebakePanesOnResize(state: DashboardState, usageFallbackHeight: number): void {
   if (state.activePaneId) {
-    try { tmux("resize-pane", "-t", state.activePaneId, "-x", "50%"); } catch { /* pane may be gone */ }
+    try { tmux("resize-pane", "-t", state.activePaneId, "-x", `${getRightColumnPercent()}%`); } catch { /* pane may be gone */ }
   }
   // The resize event is precisely the moment the TTL'd width cache goes stale;
   // bust it so writeQuickStatus re-reads the pane width unconditionally.

@@ -1,7 +1,7 @@
 // State validation and self-healing: reconciles dashboard state with tmux reality.
 import fs from "node:fs";
 import path from "node:path";
-import { SESSIONS_DIR, loadConfig } from "../config.js";
+import { SESSIONS_DIR, loadConfig, getRightColumnPercent } from "../config.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock } from "./state.js";
 import { mutateRegistry, readRegistry, type WorkerRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput, lockPaneMouse, renameWindow } from "./tmux.js";
@@ -353,7 +353,7 @@ function recreateRightSlot(state: DashboardState): string | null {
   const projectPath = state.activeProject
     ? loadConfig().projects[state.activeProject]?.path
     : undefined;
-  const args = ["-f", "-h", "-t", `${DASHBOARD_SESSION}:${MAIN_WINDOW}`, "-l", "50%"];
+  const args = ["-f", "-h", "-t", `${DASHBOARD_SESSION}:${MAIN_WINDOW}`, "-l", `${getRightColumnPercent()}%`];
   if (projectPath) args.push("-c", projectPath);
   try {
     return tmuxSplit(...args) || null;

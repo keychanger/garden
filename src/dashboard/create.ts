@@ -7,7 +7,7 @@ import {
   DASHBOARD_SESSION,
 } from "../session.js";
 import { atomicWriteFile } from "./atomic-write.js";
-import { loadConfig, tryGetProject, getFocusedProjectNames, firstFocusedPlotName, plotNames, resolveBeadsDir, SESSIONS_DIR, type ProjectConfig } from "../config.js";
+import { loadConfig, tryGetProject, getFocusedProjectNames, firstFocusedPlotName, plotNames, resolveBeadsDir, getRightColumnPercent, SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
@@ -88,7 +88,7 @@ export function ensureDashboard(): void {
     try { tmux("set-option", "-t", DASHBOARD_SESSION, "history-limit", "1000000"); } catch { /* ignore */ }
 
     if (healed.activePaneId) {
-      try { tmux("resize-pane", "-t", healed.activePaneId, "-x", "50%"); } catch { /* pane may be gone */ }
+      try { tmux("resize-pane", "-t", healed.activePaneId, "-x", `${getRightColumnPercent()}%`); } catch { /* pane may be gone */ }
     }
     respawnStatusPane(healed);
     respawnUsagePane(healed);
@@ -251,7 +251,8 @@ export function ensureDashboard(): void {
   const gardenShellId = tmuxOutput(
     "display-message", "-t", `${DASHBOARD_SESSION}:main.0`, "-p", "#{pane_id}");
 
-  const rightPaneId = tmuxSplit("-h", "-t", `${DASHBOARD_SESSION}:main.0`, "-c", firstPath, "-l", "50%");
+  const rightPaneId = tmuxSplit("-h", "-t", `${DASHBOARD_SESSION}:main.0`, "-c", firstPath,
+    "-l", `${getRightColumnPercent(config)}%`);
 
   const statusId = tmuxSplit("-v", "-b", "-t", gardenShellId, "-l", String(statusHeight),
     "sh", "-c", statusCmd);

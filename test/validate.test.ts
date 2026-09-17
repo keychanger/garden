@@ -51,6 +51,7 @@ vi.mock("../src/dashboard/state.js", () => ({
 vi.mock("../src/config.js", () => ({
   loadConfig: vi.fn(() => ({ projects: { garden: { path: "/tmp/garden" } } })),
   SESSIONS_DIR: "/tmp/fake-sessions",
+  getRightColumnPercent: vi.fn(() => 55),
 }));
 
 vi.mock("../src/dashboard/log.js", () => ({
@@ -334,8 +335,10 @@ describe("validateAndHeal", () => {
 
     const healed = validateAndHeal(makeState());
 
+    // The repair split sizes the RIGHT pane, so it takes the configured
+    // column split's complement (45% left -> 55% right).
     expect(tmuxSplit).toHaveBeenCalledWith(
-      "-f", "-h", "-t", expect.stringContaining(":main"), "-l", "50%", "-c", "/tmp/garden",
+      "-f", "-h", "-t", expect.stringContaining(":main"), "-l", "55%", "-c", "/tmp/garden",
     );
     expect(healed.activePaneId).toBe("%50");
   });

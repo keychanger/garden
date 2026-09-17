@@ -41,6 +41,7 @@ import {
 import {
   runGardenMenu, runChecksSlotsSubmenu, runMaxReviewsSubmenu, applyGardenLimitFromMenu,
   runBuildBranchSubmenu, applyBuildBranch,
+  runLeftColumnSubmenu, applyLeftColumnFromMenu,
 } from "./garden-menu.js";
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, focusAlerts, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
@@ -349,6 +350,15 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     if (branch) applyBuildBranch(branch);
     return;
   }
+  if (sub === "_garden-layout-submenu") {
+    runLeftColumnSubmenu();
+    return;
+  }
+  if (sub === "_garden-layout-set") {
+    // _garden-layout-set <left-percent|unset>.
+    if (args[1]) applyLeftColumnFromMenu(args[1].trim());
+    return;
+  }
   if (sub === "_garden-limit-set") {
     // _garden-limit-set <key> <value>; value "unset" clears the override.
     const [, key] = args;
@@ -508,7 +518,8 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     try {
       const state = readDashState();
       rebakePanesOnResize(state, USAGE_PANE_HEIGHT);
-      // The right slot is 50% of the terminal, so resizing the terminal changes
+      // The right slot is a fixed percentage of the terminal (see
+      // getRightColumnPercent), so resizing the terminal changes
       // its width. Hidden worker windows are window-size=manual (resize-window
       // sets that), so they stay frozen at the old width and a worker that keeps
       // working while parked paints scrollback that wraps early when later
