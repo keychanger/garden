@@ -5,6 +5,7 @@
 // that exist, and the date carried by a boundary rule instead of by every
 // timestamp.
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import fs from "node:fs";
 
 let logContent = "";
 
@@ -216,5 +217,71 @@ describe("date rules in a rendered batch", () => {
       entry({ ts: at(17, 14), msg: "second" }),
     );
     expect(printed.filter(l => l.startsWith("──"))).toHaveLength(1);
+  });
+
+  it("keeps repeated entries under their own day's rule", async () => {
+    const printed = await renderLog(
+      entry({ ts: at(16, 22) }),
+      entry({ ts: at(16, 23) }),
+      entry({ ts: at(17, 1) }),
+      entry({ ts: at(17, 2) }),
+    );
+    expect(printed).toHaveLength(4);
+    expect(printed[0]).toContain("Wed 09-16");
+    expect(printed[1]).toContain("(×2)");
+    expect(printed[2]).toContain("Thu 09-17");
+    expect(printed[3]).toContain("(×2)");
+  });
+});
+
+describe("date rules while following logs", () => {
+  it("continues the backlog's day and resets repeats before the next day's rule", async () => {
+    vi.useFakeTimers();
+    const signals = ["SIGINT", "SIGTERM"] as const;
+    const originalListeners = new Set(signals.flatMap(signal => process.listeners(signal)));
+    const printed: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(line => { printed.push(strip(line)); });
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const at = (day: number, hour: number) => new Date(2026, 8, day, hour).toISOString();
+    logContent = JSON.stringify(entry({ ts: at(16, 20), msg: "backlog" })) + "\n";
+    vi.mocked(fs.statSync).mockImplementation(() => ({ size: Buffer.byteLength(logContent) }) as fs.Stats);
+    let appended = "";
+    vi.mocked(fs.readSync).mockImplementation((_fd, buffer) => Buffer.from(appended).copy(buffer as Buffer));
+    const pending = logs(["--follow"]);
+    const append = async (day: number, hour: number) => {
+      appended = JSON.stringify(entry({ ts: at(day, hour), data: { baseBranch: "main" } })) + "\n";
+      logContent += appended;
+      writeSpy.mockClear();
+      await vi.advanceTimersByTimeAsync(1000);
+      return strip(writeSpy.mock.calls.map(call => String(call[0])).join(""));
+    };
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(printed.filter(line => line.startsWith("──"))).toHaveLength(1);
+      expect(await append(16, 21)).not.toContain("──");
+      expect(await append(16, 22)).toContain("(×2)");
+      const midnight = await append(17, 0);
+      expect(midnight).toContain("Thu 09-17");
+      expect(midnight).not.toContain("\x1b[A");
+      expect(midnight).not.toContain("(×");
+      const repeat = await append(17, 1);
+      expect(repeat).toContain("(×2)");
+      expect(repeat).toContain("\x1b[A");
+      expect(repeat).not.toContain("──");
+    } finally {
+      for (const signal of signals) {
+        for (const listener of process.listeners(signal)) {
+          if (originalListeners.has(listener)) continue;
+          if (signal === "SIGINT") (listener as () => void)();
+          process.removeListener(signal, listener);
+        }
+      }
+      await pending;
+      consoleSpy.mockRestore();
+      writeSpy.mockRestore();
+      vi.mocked(fs.statSync).mockReset();
+      vi.mocked(fs.readSync).mockReset();
+      vi.useRealTimers();
+    }
   });
 });

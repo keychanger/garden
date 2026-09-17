@@ -794,12 +794,13 @@ interface DedupedEntry {
   count: number;
 }
 
-export function dedup(entries: LogEntry[]): DedupedEntry[] {
+export function dedup(entries: LogEntry[], splitByDay = false): DedupedEntry[] {
   const result: DedupedEntry[] = [];
   for (const entry of entries) {
     const key = dedupKey(entry);
     const last = result[result.length - 1];
-    if (last && dedupKey(last.entry) === key) {
+    if (last && dedupKey(last.entry) === key
+        && (!splitByDay || dayKey(last.entry.ts) === dayKey(entry.ts))) {
       last.count++;
       last.entry = entry;
     } else {
@@ -864,7 +865,7 @@ function printEntries(entries: LogEntry[], filters: Filters, opts: RenderOptions
   const filtered = entries.filter((e) => matchesFilters(e, filters));
   const presented = applyPresentation(filtered, opts);
   const tail = presented.slice(-filters.count);
-  const deduped = dedup(tail);
+  const deduped = dedup(tail, isTTY && opts.mode === "pretty");
 
   if (!isTTY) {
     for (const d of deduped) {
