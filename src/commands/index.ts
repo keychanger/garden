@@ -34,6 +34,7 @@ import { auth } from "./auth.js";
 import { usage } from "./usage.js";
 import { auto } from "./auto.js";
 import { limits } from "./limits.js";
+import { awake } from "./awake.js";
 import { whoami } from "./whoami.js";
 import { review } from "./review.js";
 import { queue } from "./queue.js";
@@ -88,6 +89,7 @@ export const commands: Record<string, Command> = {
   auto,
   "auto-continue": auto,
   limits,
+  awake,
   whoami,
   review,
   queue,

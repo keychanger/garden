@@ -203,6 +203,10 @@ Dashboard:
   limits [status]                Show machine-wide resource budgets (garden-level)
   limits checks-slots <N|unset>  Cap concurrent checks-suite runs (default: cores/8)
   limits max-reviews <N|unset>   Cap simultaneous headless reviewers fleet-wide (default: unlimited)
+  awake [status]                 Show whether the Mac is held awake with the lid closed (macOS)
+  awake on [--for 8h]            Keep running with the lid closed while plugged in; released on unplug or timer end
+  awake off                      Let closing the lid sleep the Mac again
+  awake setup                    One-time sudoers entry so awake can toggle pmset disablesleep without a password
   reset                          Clear the worker registry and delete each worker's remote branch
   rebuild                        Rebuild garden and relaunch dashboard (macOS + iTerm only)
   version, --version, -v         Print the garden build version (git short SHA, or "dev" under tsx)

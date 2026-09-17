@@ -318,6 +318,19 @@ Some resource budgets are properties of the **workstation**, not of any one proj
 - **`checksSlots`**: overrides the hardware-derived checks-semaphore slot count (`max(1, floor(cores / 8))`; see the checks-semaphore paragraph above). Use it to pin the concurrent-suite budget when the automatic value doesn't fit the machine (a heavier or lighter suite than the `~half-the-cores` assumption).
 - **`maxConcurrentReviews`**: a fleet-wide cap on simultaneously running headless reviewers — counted live from tmux as the `_<project>-review-<worker>` windows across all projects (tmux is the source of truth for window existence, so the count is derived fresh with no acquire/release bookkeeping to leak across the fire-and-forget reviewer launches). The gate sits at the review-launch point in `handleWorking` (`src/dashboard/poller-review.ts`): when the cap is already met, the launch is **deferred** — `pendingReviewAt` stays set and a re-poke is scheduled, so the next poll (or any sibling FIFO event, such as a running review finishing and freeing a slot) re-drives the launch. Resolvers and ci-fix agents are deliberately **not** capped: they unblock already-in-flight merges, so throttling them could deadlock the pipeline; the cap governs only the pipeline's inflow. Default `0` = unlimited (the shipped behavior) — the count isn't even taken when the cap is off. This complements the checks semaphore: the semaphore bounds the heaviest thing a reviewer does (running the suite), while this bounds the number of concurrent reviewer inference processes.
 
+### Lid-closed awake
+
+`garden awake on [--for <duration>]` (`src/commands/awake.ts`, mechanism in `src/dashboard/awake.ts`) keeps a MacBook running with its lid closed so the fleet keeps working in a dark room. macOS has one switch that overrides lid-close (clamshell) sleep, the undocumented root-only `pmset -a disablesleep 1`: `pmset sleep 0` governs only the idle timer, clamshell mode needs an external display, and `caffeinate` cannot hold a closed lid.
+
+A Mac that never sleeps is dangerous to forget (a laptop in a bag overheats and drains), so awake is **held only while plugged in** and always has a way back off:
+
+- `on` refuses on battery, refuses when the `_garden-watchdog` window is not running (nothing would release it), and refuses until the sudoers entry exists. It flips the switch, then records `{since, until?}` in `~/.garden/control/awake.json`. That directory is outside every worker sandbox, and the file's presence is what marks the switch as garden's: a `disablesleep` the operator set by hand is never touched.
+- The watchdog calls `enforceAwake` every 60s tick. With no state file it reads nothing and forks nothing. Otherwise it releases on the first tick where the machine is on battery or `until` has passed, and a closed-lid machine is then put to sleep with `pmset sleepnow`, which is what closing the lid would have done. If sleep was re-enabled outside garden, it only forgets the state. A failed release raises an error alert naming the manual `sudo pmset -a disablesleep 0` and keeps the state so the next tick retries.
+- `garden dashboard exit` releases it, since the watchdog is gone after that.
+- `off` releases immediately without `sleepnow` (the operator is at an open laptop).
+
+The watchdog has no terminal, so the toggle needs passwordless root. `garden awake setup` installs `/etc/sudoers.d/garden-awake` (`visudo -cf` validated, `0440 root:wheel`) allowing exactly `/usr/bin/pmset -a disablesleep 0` and `... 1` for the operator's user and nothing else. Every sudo call passes `-k -n`, so cached credentials from the operator's terminal can never make the readiness check pass where the watchdog would fail.
+
 ### Merge Handling
 After a review passes, workers enter the `merge-pending` state. The merge queue processes one worker at a time per project (ordered by `mergePendingAt` timestamp):
 

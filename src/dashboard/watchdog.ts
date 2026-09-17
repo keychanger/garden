@@ -72,6 +72,7 @@ import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { getBuildBranch, loadConfig } from "../config.js";
 import { GARDEN_VERSION } from "../version.js";
 import { withFileLock } from "./file-lock.js";
+import { enforceAwake } from "./awake.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
@@ -764,6 +765,14 @@ export async function runWatchdogLoop(): Promise<void> {
         sweepWorkerCleanups(Date.now(), gardenRunner);
       } catch (err) {
         log.warn("watchdog", "worker cleanup sweep failed", { data: { error: String(err) } });
+      }
+      // Release `garden awake` once the machine is unplugged or its timer ends.
+      // On the fast tick: a closed laptop that just left AC power should be
+      // asleep within a minute, not an hour.
+      try {
+        enforceAwake(Date.now());
+      } catch (err) {
+        log.warn("watchdog", "awake enforcement failed", { data: { error: String(err) } });
       }
       // Advance the status pane's time-in-state suffixes ("reviewing 12m" ->
       // "13m"). Content-deduped inside, so this is a no-op when nothing is in
