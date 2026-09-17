@@ -76,4 +76,14 @@ export function isWorkerWindow(name: string): boolean {
   return WORKER_WINDOW_RE.test(name);
 }
 
+// The `_<project>-active` parking name, the fallback park target used when
+// dashboard state has lost the window name of the pane it is parking. It names
+// no worker, so a pane filed under it is invisible to the status pane and to
+// `listHiddenWorkerWindows` until something re-files it from other evidence.
+// (A worker literally named "active" also matches; it is a worker window by
+// `isWorkerWindow` too, and every consumer of both treats it correctly.)
+export function isParkingWindow(name: string): boolean {
+  return /^_.+-active$/.test(name);
+}
+
 export { GARDEN_VIEWS };

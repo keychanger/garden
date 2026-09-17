@@ -11,7 +11,13 @@
 // heal joins pane cwd against the registry's worktree paths and renames each
 // misfiled window (by window id, the only unambiguous handle) back to the
 // worker it really holds. `_stray-` windows quarantined by layout.ts re-enter
-// the fleet the same way.
+// the fleet the same way, as does a worker parked under the `_<project>-active`
+// parking name — the fallback park target used when state lost the pane's real
+// window name. That name encodes no worker, so the pane is invisible to the
+// status pane and to the ⌥]/⌥[ cycle, and the restore side re-adopts the name
+// on every navigation: without this leg the worker is stranded permanently
+// (observed 2026-09-17). The name is definitionally not a worker's, so pane cwd
+// is strictly better evidence and no duplicate-name proof is needed.
 //
 // Conservative by design: only windows already claiming to be worker windows
 // (or quarantined strays) are considered — reviewer / ci-fix / shell / poller
@@ -19,7 +25,7 @@
 // window whose true name is already taken is reported, never killed (two live
 // panes claiming one worker is an operator decision; see
 // feedback: never auto-cleanup workers).
-import { isWorkerWindow, parseWorkerWindow, workerWindowName } from "./window-names.js";
+import { isWorkerWindow, isParkingWindow, parseWorkerWindow, workerWindowName } from "./window-names.js";
 import { listSessionPanes, renameWindowById, type SessionPane } from "./tmux.js";
 import { readRegistry, type WorkerRegistry } from "./registry.js";
 import { addAlert } from "./alerts.js";
@@ -36,7 +42,7 @@ export interface WindowHealPlan {
 const STRAY_PREFIX = "_stray-";
 
 function healEligible(name: string): boolean {
-  return name.startsWith(STRAY_PREFIX) || isWorkerWindow(name);
+  return name.startsWith(STRAY_PREFIX) || isWorkerWindow(name) || isParkingWindow(name);
 }
 
 // Pure planner: one pane snapshot + one registry snapshot in, the rename set

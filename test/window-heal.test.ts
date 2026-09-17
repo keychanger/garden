@@ -134,4 +134,41 @@ describe("planWindowHeals", () => {
       { windowId: "@2", name: "_stray-2", expected: "_garden-worker-firm-hale-ledge" },
     ]);
   });
+
+  it("re-files a worker parked under the nameless parking window", () => {
+    // `_<project>-active` is the fallback park target used when state lost the
+    // pane's real window name. It names no worker, so the worker disappears
+    // from the status pane and from the cycle, and the restore side re-adopts
+    // the name on every navigation — stranded until something re-files it.
+    const plan = planWindowHeals([
+      pane("@1", "_garden-active", WT("garden", "firm-hale-ledge")),
+    ], registry());
+
+    expect(plan.renames).toEqual([
+      { windowId: "@1", from: "_garden-active", to: "_garden-worker-firm-hale-ledge" },
+    ]);
+  });
+
+  it("leaves a parking window alone when the worker already has its own window", () => {
+    // Two panes claiming one worker is an operator decision, never an
+    // automatic rename — same rule the duplicate-name path follows.
+    const plan = planWindowHeals([
+      pane("@1", "_garden-worker-firm-hale-ledge", WT("garden", "firm-hale-ledge")),
+      pane("@2", "_garden-active", WT("garden", "firm-hale-ledge")),
+    ], registry());
+
+    expect(plan.renames).toEqual([]);
+    expect(plan.conflicts).toEqual([
+      { windowId: "@2", name: "_garden-active", expected: "_garden-worker-firm-hale-ledge" },
+    ]);
+  });
+
+  it("ignores a parking window whose pane is not in any worker worktree", () => {
+    const plan = planWindowHeals([
+      pane("@1", "_garden-active", "/repo/garden"),
+    ], registry());
+
+    expect(plan.renames).toEqual([]);
+    expect(plan.conflicts).toEqual([]);
+  });
 });

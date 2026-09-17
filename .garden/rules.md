@@ -31,7 +31,8 @@ These extend the global rules in `<garden-repo>/rules.md`.
   only the fallback for when state has lost that name, and it encodes no worker: nothing
   restored from it may be typed `worker`. A worker parked under it disappears from the status
   pane and is marked `exited` by the next heal. `parkNameFor` (navigate.ts) recovers the real
-  name from the pane's own `@garden_name` label before falling back.
+  name from the pane's own `@garden_name` label before falling back, and the watchdog's window
+  heal re-files a pane already stranded under it from pane cwd.
 - All state file writes must be atomic: write to a temp file, then rename. Never write
   directly to `dashboard.state.json` or `dashboard.registry.json`.
 - State files are the source of truth for dashboard logic. Tmux is the source of truth for
