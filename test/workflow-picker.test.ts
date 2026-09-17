@@ -72,14 +72,14 @@ beforeEach(() => {
 // ─── buildWorkflowPickerPlan ──────────────────────────────────────────────
 
 describe("buildWorkflowPickerPlan", () => {
-  it("returns the d/o/t/h workflow rows, a separator, then the w/m/e/c/b composer rows", () => {
+  it("returns the d/o/t/h workflow rows, a separator, then the p/m/e/c/b composer rows", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
     expect(rows[0].key).toBe("d");
     expect(rows[1].key).toBe("s"); // designer ('d' is the default row)
     expect(rows[2].key).toBe("t");
     expect(rows[3].key).toBe("h"); // hoop — the grow workflow's operator-facing name
     expect(rows[4].sep).toBe(true);
-    expect(rows[5].key).toBe("w"); // build member — who builds ('b' is base, 'm' is model)
+    expect(rows[5].key).toBe("p"); // provider — who builds ('b' is base, 'm' is model)
     expect(rows[6].key).toBe("m");
     expect(rows[7].key).toBe("e");
     expect(rows[8].key).toBe("c");
@@ -121,11 +121,12 @@ describe("buildWorkflowPickerPlan", () => {
     expect(row.tmux).toBeUndefined();
   });
 
-  it("the composer rows dispatch the build/model/effort/crew/base submenus and show the staged draft", () => {
+  it("the composer rows dispatch the provider/model/effort/crew/base submenus and show the staged draft", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER, {
       member: "codex", model: "gpt-5.6-sol", effort: "xhigh", crew: "all-codex", base: "v2-api",
     }).rows;
     expect(rows[5].run).toContain("_compose-member-submenu");
+    expect(rows[5].label).toContain("provider");
     expect(rows[5].label).toContain("codex");
     expect(rows[6].run).toContain("_compose-model-submenu");
     expect(rows[6].label).toContain("gpt-5.6-sol");

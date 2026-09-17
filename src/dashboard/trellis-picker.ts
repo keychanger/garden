@@ -481,11 +481,11 @@ function draftBracket(draft: SpawnDraftPatch): string {
 export type ComposerDim = "member" | "model" | "effort" | "crew" | "base";
 
 const COMPOSER_DIM_KEYS: Record<ComposerDim, string> = {
-  member: "w", model: "m", effort: "e", crew: "c", base: "b",
+  member: "p", model: "m", effort: "e", crew: "c", base: "b",
 };
 
 // Build the workflow picker / spawn composer plan: the workflow rows, then the
-// override rows (build member, model, effort, crew, base). The `default` row
+// override rows (provider, model, effort, crew, base). The `default` row
 // dispatches _compose-default (consumes the staged draft) — NOT _new-worker,
 // which ⌥n keeps as the draft-free fast path. Pure: the draft is read by the
 // caller and passed in.
@@ -502,7 +502,7 @@ export function buildWorkflowPickerPlan(
     { label: "(t) trellis — pick a frozen design doc", key: "t", tmux: shellCmdTrellisPicker(runner, projectName) },
     { label: "(h) hoop — bounded iteration loop", key: "h", tmux: shellCmdGrowPlant(runner, projectName) },
     { sep: true, label: "" },
-    { label: `(w) build…         [${draft.member ?? "default"}]`, key: "w", run: `${runner} dashboard _compose-member-submenu ${p}` },
+    { label: `(p) provider…      [${draft.member ?? "default"}]`, key: "p", run: `${runner} dashboard _compose-member-submenu ${p}` },
     { label: `(m) model…         [${draft.model ?? "default"}]`, key: "m", run: `${runner} dashboard _compose-model-submenu ${p}` },
     { label: `(e) effort…        [${draft.effort ?? "default"}]`, key: "e", run: `${runner} dashboard _compose-effort-submenu ${p}` },
     { label: `(c) crew…          [${draft.crew ?? "default"}]`, key: "c", run: `${runner} dashboard _compose-crew-submenu ${p}` },
@@ -551,7 +551,7 @@ export function buildComposeMemberSubmenuPlan(project: string, members: string[]
     run: `${runner} dashboard _spawn-draft ${p} member ${shellEscape(m)}`,
   }));
   rows.push({ label: "(0) clear — project default", key: "0", run: `${runner} dashboard _spawn-draft ${p} member ${shellEscape("")}` });
-  return { title: `Build agent for the new worker on ${project}`, rows, startingChoice: currentIndex(members, current) };
+  return { title: `Provider for the new worker on ${project}`, rows, startingChoice: currentIndex(members, current) };
 }
 
 export function buildComposeCrewSubmenuPlan(project: string, crews: string[], current: string | undefined, runner: string): MenuSpec {
