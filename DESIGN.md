@@ -329,7 +329,9 @@ A Mac that never sleeps is dangerous to forget (a laptop in a bag overheats and 
 - `garden dashboard exit` releases it, since the watchdog is gone after that.
 - `off` releases immediately without `sleepnow` (the operator is at an open laptop).
 
-The watchdog has no terminal, so the toggle needs passwordless root. `garden awake setup` installs `/etc/sudoers.d/garden-awake` (`visudo -cf` validated, `0440 root:wheel`) allowing exactly `/usr/bin/pmset -a disablesleep 0` and `... 1` for the operator's user and nothing else. Every sudo call passes `-k -n`, so cached credentials from the operator's terminal can never make the readiness check pass where the watchdog would fail.
+The watchdog has no terminal, so the toggle needs passwordless root. `garden awake setup` installs `/etc/sudoers.d/garden-awake` (`visudo -cf` validated, `0440 root:wheel`) allowing exactly `/usr/bin/pmset -a disablesleep 0` and `... 1` for the operator's user and nothing else. Every unattended sudo call passes `-k -n`; setup's interactive validation and install calls may ask for a password. Readiness inspects the matching rule from `sudo -ll` for `!authenticate` on both toggles: successful listing alone does not prove passwordless execution.
+
+Activation, explicit off, watchdog enforcement, and dashboard shutdown serialize through `control/awake.json.lock`. Activation validates the timer before changing power settings, proves the release command works, verifies each toggle through `pmset -g`, and restores sleep if recording ownership fails. The watchdog releases a managed hold when power inspection fails as well, since it can no longer establish AC power. Shutdown releases before stopping the watchdog and refuses to close if release fails, preserving the retry path. Power subprocesses have a five-second timeout so a failed probe cannot stall enforcement indefinitely.
 
 ### Merge Handling
 After a review passes, workers enter the `merge-pending` state. The merge queue processes one worker at a time per project (ordered by `mergePendingAt` timestamp):
@@ -724,6 +726,10 @@ garden resurrect <worker>          # Rebuild a killed worker at its original wor
 garden resurrect --search <expr>   # Narrow by name/task/branch and transcript content ("what it did")
 garden handoff <project> [--expect-callback] [--ultracode] [--crew <name>] [--bead <id>] [-m ...]  # Spawn a fresh worker on <project> seeded with a briefing (stdin or -m); callback fires a prompt at the source pane on terminal state; --ultracode creates it in ultracode mode (Opus + max effort + dynamic workflows); --crew selects the child's crew (otherwise inheriting the caller's per-worker crew); --bead stamps the bead↔worker join on the entry (no bd claim is made)
 garden reply [-m ...]              # Stage a freeform note from a handoff child for its parent (delivered with the callback)
+garden awake [status]             # Show the macOS lid-closed awake hold and setup readiness
+garden awake on [--for 8h]         # Hold awake while plugged in, optionally until a timer ends
+garden awake off                  # Release garden's hold; leave an external override alone
+garden awake setup                # Install the scoped passwordless pmset sudoers entry
 garden auto [on|off|status]        # Toggle the global auto-continue gate
 garden auto threshold <N>          # Set the usage-threshold percent (auto-disable above this)
 garden auto resume-on-reset on|off # Re-enable automatically after the usage window resets
@@ -801,6 +807,8 @@ All read commands detect whether stdout is a TTY:
 ~/.garden/
   config.yml              # Project registry + garden-level resources (providers, claudeProfiles, crews, plots, limits)
   control/                # Poller-owned files; excluded from worker sandbox writes
+    awake.json            # Owned macOS sleep override ({since, until?})
+    awake.json.lock       # Serializes awake changes and dashboard shutdown
     headless/
       <project>-<worker>-review-prompt.txt  # Transient reviewer/resolver prompt
       <project>-<worker>-review-result.txt  # Transient reviewer/resolver output

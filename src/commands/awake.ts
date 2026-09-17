@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   AWAKE_STATE_PATH, PMSET, SUDOERS_PATH, canToggleWithoutPassword, clearAwakeState,
-  readAwakeState, readPowerState, setSleepDisabled, sudoersEntry, writeAwakeState,
+  readAwakeState, readPowerState, setSleepDisabled, sudoersEntry, writeAwakeState, withAwakeLock,
 } from "../dashboard/awake.js";
 import { windowExists } from "../dashboard/tmux.js";
 import { watchdogWindowName } from "../dashboard/window-names.js";
@@ -20,7 +20,7 @@ export function parseAwakeDuration(raw: string): number | null {
   const m = raw.match(/^(?:(\d+)h)?(?:(\d+)m)?$/);
   if (!m || (m[1] === undefined && m[2] === undefined)) return null;
   const ms = Number(m[1] ?? 0) * 3_600_000 + Number(m[2] ?? 0) * 60_000;
-  return ms > 0 ? ms : null;
+  return Number.isSafeInteger(ms) && ms > 0 && Number.isFinite(new Date(Date.now() + ms).getTime()) ? ms : null;
 }
 
 function clockTime(iso: string): string {
@@ -33,8 +33,8 @@ export async function awake(args: string[]): Promise<void> {
     throw new Error("garden awake is macOS-only: it drives pmset's lid-close sleep override.");
   }
   if (sub === "status") return showStatus();
-  if (sub === "on") return turnOn(args.slice(1));
-  if (sub === "off") return turnOff();
+  if (sub === "on") return withAwakeLock(() => turnOn(args.slice(1)));
+  if (sub === "off") return withAwakeLock(() => turnOff());
   if (sub === "setup") return setup();
   throw new Error(`Unknown subcommand: ${sub}. ${USAGE}`);
 }
@@ -54,6 +54,9 @@ function turnOn(rest: string[]): void {
   if (!power.onAc) {
     throw new Error("Not plugged in. garden awake only holds while on AC power; plug in and run it again.");
   }
+  if (power.sleepDisabled && !readAwakeState()) {
+    throw new Error(`Sleep is disabled outside garden. Run sudo ${PMSET} -a disablesleep 0 before enabling garden awake.`);
+  }
   if (!windowExists(watchdogWindowName())) {
     throw new Error(
       "The garden watchdog is not running (start the dashboard). It is what turns awake off "
@@ -64,18 +67,20 @@ function turnOn(rest: string[]): void {
     throw new Error(`garden awake needs permission to run ${PMSET} -a disablesleep without a password. ${SETUP_HINT}`);
   }
 
-  setSleepDisabled(true);
-  // The watchdog reads this same flag to decide the switch is still garden's;
-  // if it cannot see it, it would forget the state and never release.
-  if (readPowerState()?.sleepDisabled !== true) {
-    setSleepDisabled(false);
-    throw new Error(`${PMSET} -a disablesleep 1 ran, but ${PMSET} -g does not report SleepDisabled 1. Reverted; awake stays off.`);
-  }
   const now = Date.now();
   const state = forMs === undefined
     ? { since: new Date(now).toISOString() }
     : { since: new Date(now).toISOString(), until: new Date(now + forMs).toISOString() };
-  writeAwakeState(state);
+  // Listing sudo permissions does not prove a command is passwordless.
+  setSleepDisabled(false);
+  try {
+    setSleepDisabled(true);
+    writeAwakeState(state);
+  } catch (err) {
+    setSleepDisabled(false);
+    clearAwakeState();
+    throw err;
+  }
   log.info("awake", "on", { data: { ...state } });
   const end = state.until ? `until you unplug or ${clockTime(state.until)}, whichever comes first` : "until you unplug";
   console.log(`Awake: the lid can close without sleeping ${end}. Turn off early with \`garden awake off\`.`);
@@ -83,8 +88,10 @@ function turnOn(rest: string[]): void {
 
 function turnOff(): void {
   const power = readPowerState();
-  if (!readAwakeState() && power && !power.sleepDisabled) {
-    console.log("Awake is already off.");
+  if (!readAwakeState()) {
+    console.log(power?.sleepDisabled
+      ? `Sleep is disabled outside garden; left unchanged. Run sudo ${PMSET} -a disablesleep 0 to undo it.`
+      : "Awake is already off.");
     return;
   }
   setSleepDisabled(false);

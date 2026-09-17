@@ -25,6 +25,7 @@ import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
+import { withFileLock } from "./file-lock.js";
 
 export const PMSET = "/usr/bin/pmset";
 export const SUDOERS_PATH = "/etc/sudoers.d/garden-awake";
@@ -56,7 +57,10 @@ export function parseLidClosed(ioreg: string): boolean {
 }
 
 function run(file: string, args: string[]): string {
-  return execFileSync(file, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  return execFileSync(file, args, {
+    encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 5_000,
+    env: { ...process.env, LC_ALL: "C" },
+  });
 }
 
 export function readPowerState(): PowerState | null {
@@ -76,17 +80,23 @@ export function readPowerState(): PowerState | null {
 // terminal a minute ago would otherwise pass here and still fail in the
 // watchdog, which has no terminal and no cache.
 function pmsetDisablesleepArgs(value: "0" | "1", listOnly: boolean): string[] {
-  return ["-k", "-n", ...(listOnly ? ["-l"] : []), PMSET, "-a", "disablesleep", value];
+  return ["-k", "-n", ...(listOnly ? ["-ll"] : []), PMSET, "-a", "disablesleep", value];
 }
 
 export function canToggleWithoutPassword(): boolean {
   try {
-    run("sudo", pmsetDisablesleepArgs("1", true));
-    run("sudo", pmsetDisablesleepArgs("0", true));
-    return true;
+    return (["0", "1"] as const).every(value => {
+      const listing = run("sudo", pmsetDisablesleepArgs(value, true));
+      const options = listing.match(/^\s*Options:\s*(.*)$/m)?.[1].split(/,\s*/);
+      return options?.filter(option => option === "authenticate" || option === "!authenticate").at(-1) === "!authenticate";
+    });
   } catch {
     return false;
   }
+}
+
+export function withAwakeLock<T>(fn: () => T): T {
+  return withFileLock(`${AWAKE_STATE_PATH}.lock`, fn, { name: "awake" });
 }
 
 export function setSleepDisabled(disabled: boolean): void {
@@ -97,6 +107,9 @@ export function setSleepDisabled(disabled: boolean): void {
     throw new Error(
       `sudo ${PMSET} -a disablesleep ${disabled ? 1 : 0} failed: ${stderr || String(err)}`,
     );
+  }
+  if (parseSleepDisabled(run(PMSET, ["-g"])) !== disabled) {
+    throw new Error(`${PMSET} -g does not report SleepDisabled ${disabled ? 1 : 0} after setting it.`);
   }
 }
 
@@ -137,24 +150,27 @@ export function awakeReleaseReason(state: AwakeState, power: PowerState, nowMs: 
 
 // Watchdog entry point. Forks nothing unless awake is on.
 export function enforceAwake(nowMs: number): void {
-  const state = readAwakeState();
-  if (!state) return;
-  const power = readPowerState();
-  if (!power) return;
-  const reason = awakeReleaseReason(state, power, nowMs);
-  if (!reason) return;
-  releaseAwake(reason, power);
+  if (!readAwakeState()) return;
+  withAwakeLock(() => {
+    const state = readAwakeState();
+    if (!state) return;
+    const power = readPowerState();
+    const reason = power ? awakeReleaseReason(state, power, nowMs) : "power state unavailable";
+    if (reason) releaseAwake(reason, power);
+  });
 }
 
 export function releaseIfAwake(reason: string): void {
   if (!readAwakeState()) return;
   const power = readPowerState();
-  if (power) releaseAwake(reason, power);
+  if (!releaseAwake(reason, power)) {
+    throw new Error(`garden awake could not re-enable sleep; run sudo ${PMSET} -a disablesleep 0 before closing the dashboard.`);
+  }
 }
 
-export function releaseAwake(reason: string, power: PowerState): void {
+export function releaseAwake(reason: string, power: PowerState | null): boolean {
   try {
-    if (power.sleepDisabled) setSleepDisabled(false);
+    if (power?.sleepDisabled !== false) setSleepDisabled(false);
   } catch (err) {
     log.error("awake", "release failed", { data: { reason, error: String(err) } });
     addAlert({
@@ -166,15 +182,16 @@ export function releaseAwake(reason: string, power: PowerState): void {
         `The Mac will not sleep with its lid closed until you run: sudo ${PMSET} -a disablesleep 0`,
       dedupKey: "awake:release-failed",
     });
-    return;
+    return false;
   }
   clearAwakeState();
-  log.info("awake", "released", { data: { reason, lidClosed: power.lidClosed } });
-  if (power.sleepDisabled && power.lidClosed) {
+  log.info("awake", "released", { data: { reason, lidClosed: power?.lidClosed ?? null } });
+  if (power?.sleepDisabled && power.lidClosed) {
     try {
       run(PMSET, ["sleepnow"]);
     } catch (err) {
       log.warn("awake", "sleepnow failed", { data: { error: String(err) } });
     }
   }
+  return true;
 }

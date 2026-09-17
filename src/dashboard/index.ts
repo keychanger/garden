@@ -48,7 +48,7 @@ import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
 import { runWatchdogLoop, stopWatchdog } from "./watchdog.js";
-import { releaseIfAwake } from "./awake.js";
+import { releaseIfAwake, withAwakeLock } from "./awake.js";
 import { loadConfig } from "../config.js";
 import { addAlert } from "./alerts.js";
 
@@ -92,12 +92,13 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
       return;
     }
     log.info("dashboard", "closing dashboard");
-    stopAllPollers();
-    stopUsagePoller();
-    stopWatchdog();
-    // Nothing releases awake once the watchdog is gone.
-    releaseIfAwake("dashboard closed");
-    killDashboardSession();
+    withAwakeLock(() => {
+      releaseIfAwake("dashboard closed");
+      stopAllPollers();
+      stopUsagePoller();
+      stopWatchdog();
+      killDashboardSession();
+    });
     // Preserve the persisted state files across a clean exit. The registry is
     // the only record of each worker's sessionId / branch / worktree, and the
     // resume-on-restart path (create.ts) rebuilds the whole fleet from it —
