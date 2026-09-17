@@ -411,6 +411,16 @@ describe("renderQuickStatus", () => {
     activeWindowName: "_garden-worker-bold-ash",
   };
 
+  it("labels the project header with displayName when set", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { garden: { path: "/tmp/garden", displayName: "Garden HQ" } },
+    });
+    vi.mocked(getWorkers).mockReturnValue([]);
+    const result = renderQuickStatus(state);
+    expect(result).toContain("\x1b[1;32mGarden HQ\x1b[0m");
+    expect(result).not.toContain("1. \x1b[1;32mgarden");
+  });
+
   it("renders working from registry", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "fixing the build", agentStatus: "working" },

@@ -76,4 +76,17 @@ describe("garden list", () => {
     expect(formatted).toContain("myproj");
     expect(formatted).toContain("/my/project");
   });
+
+  it("reports displayName alongside the key and shows it in the pretty view", async () => {
+    const config = await setup();
+    config.saveConfig({ projects: { "keychange-ai": { path: "/k", displayName: "keychange.ai" } } });
+
+    const { list } = await importList();
+    await list();
+
+    const data = mockOutput.mock.calls[0][0];
+    expect(data).toEqual([{ name: "keychange-ai", displayName: "keychange.ai", path: "/k", index: 1 }]);
+    const pretty = mockOutput.mock.calls[0][1] as (data: unknown) => string;
+    expect(pretty(data)).toContain("keychange.ai");
+  });
 });

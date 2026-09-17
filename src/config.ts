@@ -82,6 +82,11 @@ export interface ProjectConfig {
   // to ultracode. See WORKER_EFFORT_LEVELS (dashboard/create.ts).
   effort?: string;
   logColor?: string;
+  // Operator-facing label for this project (status pane header, bottom bar,
+  // plot and list views). Purely cosmetic: the projects-map key stays the
+  // project's identity everywhere it is load-bearing — CLI args, worktree
+  // paths, logs, env vars, bead labels. Resolved via projectDisplayName.
+  displayName?: string;
   // Bead-intake loop (board→garden delegation; board's docs/DELEGATION.md).
   // When true, this project's poller converts ready, dispatch-labeled beads
   // in the project's resolved .beads store (resolveBeadsDir below) into
@@ -231,7 +236,7 @@ export const DEFAULT_HOLISTIC_REVIEW = "fix";
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
   "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials",
   "sandboxWriteRoots", "claudeProfile", "provider",
-  "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
+  "harness", "model", "effort", "logColor", "displayName", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
   "beadIntake", "beadIntakeCap", "beadsDir",
 ]);
@@ -854,6 +859,10 @@ export function mutateConfig<T>(fn: (config: GardenConfig) => T): T {
     saveConfig(config);
     return result;
   });
+}
+
+export function projectDisplayName(config: GardenConfig, name: string): string {
+  return config.projects[name]?.displayName || name;
 }
 
 export function getProject(name: string): ProjectConfig & { name: string } {

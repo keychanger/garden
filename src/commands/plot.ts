@@ -13,6 +13,7 @@ import {
   removeProjectFromPlot,
   reorderProjectInPlot,
   isPlotFocused,
+  projectDisplayName,
   PLOT_MAX_PROJECTS,
   type GardenConfig,
   type PlotConfig,
@@ -76,7 +77,9 @@ function listPlots(): void {
       .map((p) => {
         const marker = p.active ? " *" : "  ";
         const name = p.active ? `\x1b[1;32m${p.name.padEnd(nameWidth)}\x1b[0m` : p.name.padEnd(nameWidth);
-        const projectList = p.projects.length > 0 ? p.projects.join(", ") : "(empty)";
+        const projectList = p.projects.length > 0
+          ? p.projects.map(proj => projectDisplayName(config, proj)).join(", ")
+          : "(empty)";
         const focusedTag = p.focused ? "" : "  \x1b[2m(unfocused)\x1b[0m";
         return `${marker}${name}  ${projectList}${focusedTag}`;
       })
@@ -185,17 +188,17 @@ function cmdShow(args: string[]): void {
   if (!name) throw new Error("Usage: garden plot show <name>");
   const config = loadConfig();
   const plot = getPlot(config, name);
-  printPlot(name, plot);
+  printPlot(config, name, plot);
 }
 
-function printPlot(name: string, plot: PlotConfig): void {
+function printPlot(config: GardenConfig, name: string, plot: PlotConfig): void {
   output(
     { name, projects: plot.projects, focused: isPlotFocused(plot) },
     () => {
       const header = `${name}${isPlotFocused(plot) ? "" : " (unfocused)"} — ${plot.projects.length}/${PLOT_MAX_PROJECTS}`;
       const rows = plot.projects.length === 0
         ? ["  (empty)"]
-        : plot.projects.map((p, i) => `  ${i + 1}. ${p}`);
+        : plot.projects.map((p, i) => `  ${i + 1}. ${projectDisplayName(config, p)}`);
       return [header, ...rows].join("\n");
     },
   );

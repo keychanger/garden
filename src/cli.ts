@@ -78,7 +78,10 @@ Projects:
   remove <name>                  Remove a project (also purges from plots)
   list, ls                       List all projects
   config <project> [key] [value] View or set project config
-                                 keys incl. model / effort (default+grow worker
+                                 keys incl. displayName (label shown in the
+                                 dashboard and list/plot views; the project name
+                                 stays the key for commands, paths, and logs),
+                                 model / effort (default+grow worker
                                  defaults; per-spawn --model/--effort override)
                                  and beadIntake / beadIntakeCap / beadsDir
                                  (bead-intake loop: dispatch-labeled epics

@@ -1135,6 +1135,46 @@ describe("model / effort project config keys", () => {
   });
 });
 
+describe("displayName project config key", () => {
+  it("projectDisplayName falls back to the project key when unset", async () => {
+    const { projectDisplayName } = await importConfig();
+    const cfg = {
+      projects: {
+        "keychange-ai": { path: "/k", displayName: "keychange.ai" },
+        garden: { path: "/g" },
+      },
+    };
+    expect(projectDisplayName(cfg, "keychange-ai")).toBe("keychange.ai");
+    expect(projectDisplayName(cfg, "garden")).toBe("garden");
+    expect(projectDisplayName(cfg, "unregistered")).toBe("unregistered");
+  });
+
+  it("config() sets a trimmed displayName without renaming the project key, and clears it", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR, isValidConfigKey } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { "keychange-ai": { path: "/tmp/k" } } });
+    expect(isValidConfigKey("displayName")).toBe(true);
+
+    await config(["keychange-ai", "displayName", "  keychange.ai "]);
+    const cfg = loadConfig();
+    expect(Object.keys(cfg.projects)).toEqual(["keychange-ai"]);
+    expect(cfg.projects["keychange-ai"].displayName).toBe("keychange.ai");
+
+    await config(["keychange-ai", "displayName", "unset"]);
+    expect(loadConfig().projects["keychange-ai"].displayName).toBeUndefined();
+  });
+
+  it("config() rejects a blank or multi-line displayName", async () => {
+    const { saveConfig, GARDEN_DIR } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    await expect(config(["garden", "displayName", "   "])).rejects.toThrow(/non-empty/);
+    await expect(config(["garden", "displayName", "a\nb"])).rejects.toThrow(/single line/);
+  });
+});
+
 describe("config role subcommand", () => {
   async function setup() {
     const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();

@@ -472,6 +472,17 @@ describe("updateHeaderVar", () => {
     expect(leftCall![4]).toContain("#[bold]");
   });
 
+  it("labels @garden_left with the project's displayName, escaping tmux #", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: { garden: { path: "/repo/garden", displayName: "garden #1" } },
+    } as unknown as ReturnType<typeof loadConfig>);
+    updateHeaderVar();
+
+    const calls = vi.mocked(tmuxBatch).mock.calls.flat();
+    const leftCall = calls.find(c => c[0] === "set-option" && c[3] === "@garden_left");
+    expect(leftCall![4]).toContain("#[bold]garden ##1#[default]");
+  });
+
   it("sets @garden_right with version string", () => {
     updateHeaderVar();
 

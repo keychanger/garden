@@ -166,3 +166,30 @@ describe("garden plot (bare name activates)", () => {
     await expect(plot(["nonexistent"])).rejects.toThrow(/Unknown plot subcommand or plot/);
   });
 });
+
+describe("garden plot list/show pretty views", () => {
+  afterEach(() => {
+    delete process.env.GARDEN_PRETTY;
+  });
+
+  it("labels projects by displayName while JSON keeps the project key", async () => {
+    const config = await setup();
+    config.saveConfig({
+      projects: { "keychange-ai": { path: "/k", displayName: "keychange.ai" }, garden: { path: "/g" } },
+      plots: { work: { projects: ["keychange-ai", "garden"] } },
+    });
+    const { plot } = await import("../src/commands/plot.js");
+
+    const json = await captureConsoleLog(() => plot(["show", "work"]));
+    expect(JSON.parse(json[0]).projects).toEqual(["keychange-ai", "garden"]);
+
+    vi.resetModules();
+    process.env.GARDEN_PRETTY = "1";
+    const pretty = await import("../src/commands/plot.js");
+    const shown = (await captureConsoleLog(() => pretty.plot(["show", "work"]))).join("\n");
+    expect(shown).toContain("1. keychange.ai");
+    expect(shown).toContain("2. garden");
+    const listed = (await captureConsoleLog(() => pretty.plot(["list"]))).join("\n");
+    expect(listed).toContain("keychange.ai, garden");
+  });
+});

@@ -4,6 +4,7 @@ import { output } from "../output.js";
 
 interface ProjectInfo {
   name: string;
+  displayName?: string;
   path: string;
   index: number;
 }
@@ -19,6 +20,7 @@ export async function list(): Promise<void> {
 
   const projects: ProjectInfo[] = names.map((name, i) => ({
     name,
+    ...(config.projects[name].displayName ? { displayName: config.projects[name].displayName } : {}),
     path: config.projects[name].path,
     index: i + 1,
   }));
@@ -26,7 +28,7 @@ export async function list(): Promise<void> {
   output(projects, (data) => {
     const items = data as ProjectInfo[];
     return items
-      .map((p) => `  ${p.index}. ${p.name.padEnd(16)} ${p.path}`)
+      .map((p) => `  ${p.index}. ${(p.displayName ?? p.name).padEnd(16)} ${p.path}`)
       .join("\n");
   });
 }

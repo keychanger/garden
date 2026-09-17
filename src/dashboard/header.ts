@@ -130,7 +130,8 @@ function formatLeft(
   const branch = repoPath ? (currentBranchFast(repoPath) ?? "main") : "main";
   const plotPrefix = activePlot ? `${activePlot} #[fg=colour244]\u203a#[default] ` : "";
   const trellisSummary = formatTrellisSummary(activeProject);
-  return ` ${plotPrefix}#[bold]${activeProject}#[default]  ${branch}${trellisSummary} `;
+  const label = (projectConfig?.displayName || activeProject).replace(/#/g, "##");
+  return ` ${plotPrefix}#[bold]${label}#[default]  ${branch}${trellisSummary} `;
 }
 
 // Append a compact trellis summary to the left status segment when the

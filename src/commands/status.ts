@@ -398,7 +398,8 @@ function renderProjectHeader(h: {
   alertCount: number;
 }): string {
   const marker = h.isActive ? " ◄" : "";
-  const displayName = h.isActive ? `\x1b[1;32m${h.name}\x1b[0m` : h.name;
+  const label = h.projectConfig?.displayName || h.name;
+  const displayName = h.isActive ? `\x1b[1;32m${label}\x1b[0m` : label;
   const baseToken = formatConfiguredBaseToken(h.projectConfig);
   // Crew badge only on the FOCUSED project's header — it's context for the
   // project you're working in, not standing grey across the whole list

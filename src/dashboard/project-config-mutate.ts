@@ -37,7 +37,7 @@ import {
 export const SETTABLE_KEYS = [
   "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials",
   "claudeProfile", "provider",
-  "harness", "model", "effort", "logColor", "trellisDir", "maxTrellisIterations",
+  "harness", "model", "effort", "logColor", "displayName", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
   "beadIntake", "beadIntakeCap", "beadsDir",
 ] as const;
@@ -124,6 +124,18 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
       } else {
         project.logColor = value;
         message = `Set ${key} = ${value} for ${projectName}`;
+      }
+    } else if (key === "displayName") {
+      if (value === "" || value === "unset" || value === "null") {
+        delete project.displayName;
+        message = `Cleared ${key} for ${projectName} (shown as '${projectName}')`;
+      } else if (!value.trim()) {
+        throw new Error("displayName requires a non-empty label");
+      } else if (/[\x00-\x1f\x7f]/.test(value)) {
+        throw new Error("displayName must be a single line without control characters");
+      } else {
+        project.displayName = value.trim();
+        message = `Set ${key} = ${project.displayName} for ${projectName} (display only; commands still take '${projectName}')`;
       }
     } else if (key === "claudeProfile") {
       if (value === "" || value === "unset" || value === "null") {
