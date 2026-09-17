@@ -246,14 +246,16 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
 // The input prompt glyphs: Claude Code's "❯" (U+276F) and Codex's "›"
 // (U+203A). The operator's typed text appears right after the marker — but the
 // box is NOT blank when empty: both TUIs render dimmed ghost/placeholder text
-// into an empty box (Codex: "Ask Codex to do anything"), and capture-pane strips
-// the dimming, so the bare remainder after the marker can't distinguish a real
-// draft from a suggestion. The caret can: it sits at the end of typed text, with
-// any suggestion rendered to its right. So the draft is the span between the
-// marker and the cursor column (see extractOperatorDraft). Neither glyph opens
-// a line below the other harness's input row, so both are matched regardless
-// of harness.
+// into an empty box (Codex: "Ask Codex to do anything"). Draft detection reads a
+// styled capture and drops dimmed text, and additionally bounds the draft by the
+// caret: it sits at the end of typed text, with any suggestion rendered to its
+// right (see extractDraftInfo). Neither glyph opens a line below the other
+// harness's input row, so both are matched regardless of harness.
 const PROMPT_MARKERS = ["❯", "›"];
+
+// Both TUIs also reuse their glyph as the selection cursor in numbered menus
+// (`› 2. Keep current model`, `❯ 1. Yes, try it`), whose rows are not dimmed.
+const NUMBERED_OPTION = /^\d+\.\s/;
 
 // Backoff for re-arming an auto-continue prompt that was deferred because the
 // operator had an unsent draft in the box. 12s spacing × 15 attempts ≈ 3min of
@@ -262,19 +264,61 @@ const PROMPT_MARKERS = ["❯", "›"];
 const DRAFT_BACKOFF_MS = 12_000;
 const MAX_DRAFT_RETRIES = 15;
 
-// Pull the operator's unsent draft out of a captured Claude pane. The live
-// input line is the bottom-most line whose only glyphs before the prompt marker
-// are whitespace (the status/mode lines sit below it, agent output above), so we
-// scan upward and take the first match.
+const ESCAPE_SEQUENCE = /\x1b(?:\[([0-9;:?]*)([@-~])|\][^\x07\x1b]*(?:\x07|\x1b\\))/g;
+
+// Whether the SGR parameters leave the faint (dim) attribute on. Extended colors
+// (38/48/58 ;5;n and ;2;r;g;b) carry numeric sub-parameters that must be
+// skipped, or a `38;5;2` palette index reads as the dim code.
+function sgrLeavesDim(params: string, dim: boolean): boolean {
+  const codes = params === "" ? ["0"] : params.split(";");
+  for (let i = 0; i < codes.length; i++) {
+    if (codes[i].includes(":")) continue;
+    const code = Number(codes[i] || "0");
+    if (code === 0 || code === 22) dim = false;
+    else if (code === 2) dim = true;
+    else if (code === 38 || code === 48 || code === 58) {
+      i += codes[i + 1] === "5" ? 2 : codes[i + 1] === "2" ? 4 : 0;
+    }
+  }
+  return dim;
+}
+
+// One styled capture row as plain text, with dimmed characters blanked to
+// spaces so column indices still line up with the caret. tmux restarts the
+// attribute state on every captured row.
+function withoutDimmedText(row: string): string {
+  let out = "";
+  let dim = false;
+  let from = 0;
+  for (const match of row.matchAll(ESCAPE_SEQUENCE)) {
+    const chunk = row.slice(from, match.index);
+    out += dim ? " ".repeat(chunk.length) : chunk;
+    from = match.index + match[0].length;
+    if (match[2] === "m") dim = sgrLeavesDim(match[1], dim);
+  }
+  const tail = row.slice(from);
+  return out + (dim ? " ".repeat(tail.length) : tail);
+}
+
+// Pull the operator's unsent draft out of a styled (`capture-pane -e`) capture
+// of a worker pane. The live input line is the bottom-most line whose only
+// glyphs before the prompt marker are whitespace (the status/mode lines sit
+// below it, agent output above), so we scan upward and take the first match.
 //
-// `cursor` (0-based col,row from the same pane) excludes the dimmed
-// ghost/placeholder text Claude Code paints into an empty box: the caret marks
-// the end of typed text, so only the span between the marker and the cursor
-// column is the operator's draft — anything to the caret's right is a suggestion.
-// A caret on a row below the marker means the draft wrapped (so the first row
-// holds text); a caret above it is not on the input line. When the cursor is
-// unknown (null — pane unreachable), fall back to the whole post-marker
-// remainder. Returns "" when the box is empty or no prompt line is visible.
+// Dimmed text is never a draft: it is the ghost suggestion or placeholder the
+// TUI paints into an empty box. Typed text and paste placeholders render at
+// normal intensity (verified on Claude Code 2.1.274 and Codex 0.154). Dimming
+// is the primary filter because the caret is not always on the input line — an
+// idle Claude Code pane was observed with its caret hidden and parked at the
+// pane's bottom-left, which the caret bound alone reads as a wrapped draft.
+//
+// `cursor` (0-based col,row from the same pane) then bounds what remains: the
+// caret marks the end of typed text, so only the span between the marker and
+// the cursor column is the operator's draft. A caret on a row below the marker
+// means the draft wrapped (so the first row holds text); a caret above it is not
+// on the input line. When the cursor is unknown (null — pane unreachable), fall
+// back to the whole post-marker remainder. Returns "" when the box is empty or
+// no prompt line is visible.
 export interface DraftInfo {
   /** The operator's unsent text, as extracted from the marker row. */
   text: string;
@@ -285,10 +329,15 @@ export interface DraftInfo {
    *  prefix match against our own pending text safe without a length floor.
    *  False whenever the cursor is unknown, since wrap cannot be established. */
   wrapped: boolean;
+  /** True when the marker is a numbered selection menu's cursor rather than the
+   *  composer. Nothing may be pasted — Enter would pick an option — but it is
+   *  not the operator's draft either. A numbered multi-line draft can match too;
+   *  it still blocks, only under the menu wording. */
+  menu: boolean;
 }
 
 export function extractDraftInfo(captured: string, cursor: PaneCursor | null): DraftInfo {
-  const lines = captured.split("\n");
+  const lines = captured.split("\n").map(withoutDimmedText);
   let markerRow = -1;
   let inputStart = -1;
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -300,20 +349,34 @@ export function extractDraftInfo(captured: string, cursor: PaneCursor | null): D
       break;
     }
   }
-  if (markerRow === -1) return { text: "", wrapped: false };
+  if (markerRow === -1) return { text: "", wrapped: false, menu: false };
 
-  if (!cursor) return { text: lines[markerRow].slice(inputStart).trim(), wrapped: false };
-  if (cursor.y < markerRow) return { text: "", wrapped: false };
-  if (cursor.y > markerRow) return { text: lines[markerRow].slice(inputStart).trim(), wrapped: true };
-  return { text: lines[markerRow].slice(inputStart, cursor.x).trim(), wrapped: false };
+  const isOption = (row: string | undefined) => row !== undefined && NUMBERED_OPTION.test(row.trim());
+  if (isOption(lines[markerRow].slice(inputStart))
+      && (isOption(lines[markerRow - 1]) || isOption(lines[markerRow + 1]))) {
+    return { text: "", wrapped: false, menu: true };
+  }
+
+  if (!cursor) return { text: lines[markerRow].slice(inputStart).trim(), wrapped: false, menu: false };
+  if (cursor.y < markerRow) return { text: "", wrapped: false, menu: false };
+  if (cursor.y > markerRow) return { text: lines[markerRow].slice(inputStart).trim(), wrapped: true, menu: false };
+  return { text: lines[markerRow].slice(inputStart, cursor.x).trim(), wrapped: false, menu: false };
 }
 
 export function extractOperatorDraft(captured: string, cursor: PaneCursor | null): string {
   return extractDraftInfo(captured, cursor).text;
 }
 
-export function paneHasOperatorDraft(paneId: string): boolean {
-  return extractOperatorDraft(capturePaneText(paneId), capturePaneCursor(paneId)).length > 0;
+function readPaneInput(paneId: string): DraftInfo {
+  return extractDraftInfo(capturePaneText(paneId, { styles: true }), capturePaneCursor(paneId));
+}
+
+// Why a garden paste must wait on this pane's input box, or null when it is clear.
+type InputBlocker = "operator draft" | "selection menu";
+
+function inputBlocker(input: DraftInfo): InputBlocker | null {
+  if (input.menu) return "selection menu";
+  return input.text.length > 0 ? "operator draft" : null;
 }
 
 // Visible heads a garden-initiated paste can render as in the input box.
@@ -384,27 +447,28 @@ export function isOwnStuckPaste(
 // The loop workflows' variant of the draft gate (see loop.ts): a draft blocks
 // the cold respawn only when it is a genuine operator compose. Garden's own
 // stuck paste must not block — the respawn discards it and re-seeds, which is
-// the loop-shaped recovery.
+// the loop-shaped recovery. An open selection menu always blocks.
 export function paneHasBlockingOperatorDraft(
   paneId: string,
   entry: { continueSentAt?: number },
 ): boolean {
-  const draft = extractOperatorDraft(capturePaneText(paneId), capturePaneCursor(paneId));
-  if (draft.length === 0) return false;
-  return !isOwnStuckPaste(entry, draft);
+  const input = readPaneInput(paneId);
+  if (input.menu) return true;
+  if (input.text.length === 0) return false;
+  return !isOwnStuckPaste(entry, input.text);
 }
 
-// True when the worker's pane currently holds an unsent operator draft. Used by
-// the backoff re-arm to tell a draft-deferred skip apart from the other skip
-// reasons (no pane, agent mid-turn) that should not retry on this loop.
-export function workerHasOperatorDraft(projectName: string, workerName: string): boolean {
+// What currently blocks a paste into the worker's input box, if anything. Used
+// by the backoff re-arm to tell a draft- or menu-deferred skip apart from the
+// other skip reasons (no pane, agent mid-turn) that should not retry on this loop.
+function workerInputBlocker(projectName: string, workerName: string): InputBlocker | null {
   const paneId = resolveWorkerPaneId(projectName, workerName);
-  if (!paneId) return false;
-  return paneHasOperatorDraft(paneId);
+  if (!paneId) return null;
+  return inputBlocker(readPaneInput(paneId));
 }
 
 // Re-arm a deferred auto-continue after DRAFT_BACKOFF_MS when — and only when —
-// the worker still has an unsent draft. Called by the _continue-worker* dispatch
+// the worker still has an unsent draft or an open selection menu. Called by the _continue-worker* dispatch
 // handlers after a skipped delivery: a skip caused by the agentStatus gate (box
 // empty) leaves no draft, so this no-ops and the existing *-if-stuck retry leg
 // owns that case. Stops after MAX_DRAFT_RETRIES so a draft left sitting forever
@@ -415,15 +479,18 @@ export function rearmContinueIfDrafting(
   workerName: string,
   attempt: number,
 ): void {
-  if (!workerHasOperatorDraft(projectName, workerName)) return;
+  const blocker = workerInputBlocker(projectName, workerName);
+  if (!blocker) return;
   if (attempt >= MAX_DRAFT_RETRIES) {
-    log.warn("workers", "continue backoff exhausted, operator still drafting", {
+    const still = blocker === "selection menu" ? "selection menu still open" : "operator still drafting";
+    log.warn("workers", `continue backoff exhausted, ${still}`, {
       worker: workerName,
       data: { project: projectName, attempts: attempt },
     });
     return;
   }
-  log.info("workers", "continue deferred, operator drafting; re-arming", {
+  const deferred = blocker === "selection menu" ? "selection menu open" : "operator drafting";
+  log.info("workers", `continue deferred, ${deferred}; re-arming`, {
     worker: workerName,
     data: { project: projectName, attempt, backoffMs: DRAFT_BACKOFF_MS },
   });
@@ -686,13 +753,18 @@ function onTruncated(
     return;
   }
   // An operator mid-compose owns the box; concatenating onto their draft is the
-  // harm the draft guard exists to prevent, and is worse than the fragment.
-  if (paneHasOperatorDraft(paneId)) {
-    log.warn("workers", "prompt truncated, resend deferred to operator draft", {
+  // harm the draft guard exists to prevent, and is worse than the fragment. An
+  // open menu would take the paste as option picks.
+  const blocker = inputBlocker(readPaneInput(paneId));
+  if (blocker) {
+    log.warn("workers", `prompt truncated, resend deferred to ${blocker}`, {
       worker: workerName,
       data: { project: projectName, kind },
     });
-    alertTruncatedPrompt(projectName, workerName, kind, "an operator draft is in the input box", seedFile);
+    const reason = blocker === "selection menu"
+      ? "a selection menu is open in the pane"
+      : "an operator draft is in the input box";
+    alertTruncatedPrompt(projectName, workerName, kind, reason, seedFile);
     return;
   }
   const message = correctivePrompt(sent);
@@ -817,8 +889,17 @@ export function continueWorker(
     });
     return false;
   }
-  const draftInfo = extractDraftInfo(capturePaneText(paneId), capturePaneCursor(paneId));
+  const draftInfo = readPaneInput(paneId);
   const draft = draftInfo.text;
+  // A numbered menu is holding the input: a paste would pick options and Enter
+  // would confirm one. Owed like a draft skip, and retried by the same re-arm.
+  if (draftInfo.menu) {
+    log.info("workers", "continue skipped, selection menu open", {
+      worker: workerName,
+      data: { project: projectName },
+    });
+    return false;
+  }
   if (draft.length > 0) {
     // Garden's own earlier paste, stuck unsubmitted (Enter eaten). The message
     // is already in the box — re-pasting would double it, and deferring would

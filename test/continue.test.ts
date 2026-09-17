@@ -98,6 +98,7 @@ import { tmux, pasteAndSubmit, paneExists, windowExists, getFirstPaneId, capture
 import { recordContinueDispatched } from "../src/dashboard/telemetry.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { readLandedPrompt } from "../src/dashboard/prompt-verify.js";
+import { log } from "../src/dashboard/log.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
@@ -191,6 +192,34 @@ const CODEX_STUCK_PLACEHOLDER_BOX = [
   "",
   "  gpt-6-astra high · Context 74% left · ~/.garden/worktrees/wolf/glib-close-foam",
 ].join("\n");
+
+// Styled (`capture-pane -e`) captures, recorded from live panes on 2026-09-17.
+const dim = (words: string) => words.split(" ").map((w) => `\x1b[2m${w}\x1b[0m`).join(" ");
+// round-brisk-mead: an idle Claude worker showing a dimmed prompt suggestion,
+// with its caret hidden and parked at column 0 of the pane's last row — four
+// rows below the marker, where the caret bound alone reads it as a wrapped draft.
+const PARKED_CARET_SUGGESTION_BOX = [
+  "\x1b[38;5;244m" + RULE,
+  "\x1b[39m❯ " + dim("does the composer title still show codex model when claude staged?"),
+  "\x1b[38;5;244m" + RULE,
+  "  Opus 5 · high · 85% of 1000k context left",
+  "  ⏵⏵ auto mode on (shift+tab to cycle)",
+  "",
+].join("\n");
+const PARKED_CARET = { x: 0, y: 5 };
+// glib-close-foam: Codex's rate-limit menu over an idle composer. The selected
+// row reuses the composer glyph and is NOT dimmed; the caret sits at its end.
+const CODEX_MENU_BOX = [
+  "  Approaching rate limits",
+  "  Switch to gpt-5.6-luna for lower credit usage?",
+  "",
+  "  1. Switch to gpt-5.6-luna                 Fast and affordable agentic coding model.",
+  "\x1b[38;5;6m› 2. Keep current model\x1b[39m",
+  "  3. Keep current model (never show again)  Hide future rate limit reminders about switching models.",
+  "",
+  "  Press enter to confirm or esc to go back",
+].join("\n");
+const CODEX_MENU_CARET = { x: 23, y: 4 };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -556,6 +585,45 @@ describe("continueWorker", () => {
     expect(delivered).toBe(true);
     expect(pasteAndSubmit).toHaveBeenCalledWith("%9", expect.any(String));
   });
+
+  it("delivers past a dimmed suggestion when the hidden caret is parked below the box", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "round-brisk-mead", sessionId: "s", task: "", agentStatus: "idle",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-round-brisk-mead",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(PARKED_CARET_SUGGESTION_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue(PARKED_CARET);
+
+    expect(continueWorker("myproject", "round-brisk-mead")).toBe(true);
+    // Dimming only survives a styled capture.
+    expect(capturePaneText).toHaveBeenCalledWith("%9", { styles: true });
+    expect(pasteAndSubmit).toHaveBeenCalledWith("%9", expect.any(String));
+  });
+
+  it("does not paste into an open selection menu, and does not call it a draft", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "glib-close-foam", sessionId: "s", task: "", harness: "codex",
+      agentStatus: "idle", interruptedWhileWorking: true,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-glib-close-foam",
+      activePaneId: "%9",
+    }));
+    vi.mocked(capturePaneText).mockReturnValue(CODEX_MENU_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue(CODEX_MENU_CARET);
+
+    expect(continueWorker("myproject", "glib-close-foam")).toBe(false);
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    expect(pressEnter).not.toHaveBeenCalled();
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith("workers", "continue skipped, selection menu open",
+      expect.anything());
+    expect(log.info).not.toHaveBeenCalledWith("workers", "continue skipped, operator has unsent draft",
+      expect.anything());
+  });
 });
 
 // The autonomy metric (DESIGN.md: "operator work = all prompts − garden's")
@@ -717,6 +785,63 @@ describe("paneHasBlockingOperatorDraft", () => {
     vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
     expect(paneHasBlockingOperatorDraft("%9", { continueSentAt: 123 })).toBe(true);
   });
+
+  it("blocks a loop respawn on an open selection menu", () => {
+    vi.mocked(capturePaneText).mockReturnValue(CODEX_MENU_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue(CODEX_MENU_CARET);
+    expect(paneHasBlockingOperatorDraft("%9", { continueSentAt: 123 })).toBe(true);
+  });
+
+  it("does not block a loop respawn on a dimmed suggestion", () => {
+    vi.mocked(capturePaneText).mockReturnValue(PARKED_CARET_SUGGESTION_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue(PARKED_CARET);
+    expect(paneHasBlockingOperatorDraft("%9", {})).toBe(false);
+  });
+});
+
+describe("extractDraftInfo (styled capture — dimmed text is never a draft)", () => {
+  it("ignores a dimmed suggestion even when the caret is parked below the marker", () => {
+    expect(extractDraftInfo(PARKED_CARET_SUGGESTION_BOX, PARKED_CARET).text).toBe("");
+    // Control: the same row undimmed is a (wrapped) draft, so dimming is what excludes it.
+    expect(extractDraftInfo(PARKED_CARET_SUGGESTION_BOX.replaceAll("\x1b[2m", ""), PARKED_CARET))
+      .toMatchObject({ text: "does the composer title still show codex model when claude staged?", wrapped: true });
+  });
+
+  it("ignores a dimmed suggestion when the cursor is unknown", () => {
+    expect(extractDraftInfo(PARKED_CARET_SUGGESTION_BOX, null).text).toBe("");
+  });
+
+  it("keeps typed text and drops a dimmed completion after it", () => {
+    const captured = "\x1b[39m❯ fix \x1b[2mthe auth bug\x1b[0m";
+    expect(extractDraftInfo(captured, null).text).toBe("fix");
+  });
+
+  it("does not read an extended color's parameters as the dim attribute", () => {
+    expect(extractDraftInfo("❯ \x1b[38;5;2mgreen\x1b[39m \x1b[38;2;2;2;2mrgb\x1b[39m", null).text)
+      .toBe("green rgb");
+  });
+
+  it("keeps colored paste placeholders so stuck-paste recovery still sees them", () => {
+    expect(extractDraftInfo("\x1b[1m›\x1b[0m \x1b[38;5;6m[Pasted Content 3020 chars]\x1b[39m", null).text)
+      .toBe("[Pasted Content 3020 chars]");
+  });
+});
+
+describe("extractDraftInfo (selection menus)", () => {
+  it("reports a numbered menu row under the prompt glyph as a menu, not a draft", () => {
+    expect(extractDraftInfo(CODEX_MENU_BOX, CODEX_MENU_CARET))
+      .toEqual({ text: "", wrapped: false, menu: true });
+  });
+
+  it("recognizes Claude Code's numbered menus the same way", () => {
+    const captured = ["  Try the new fullscreen renderer?", "  ❯ 1. Yes, try it", "    2. Not now"].join("\n");
+    expect(extractDraftInfo(captured, { x: 17, y: 1 }).menu).toBe(true);
+  });
+
+  it("treats a lone numbered line in the composer as the operator's draft", () => {
+    const info = extractDraftInfo("• Pushed.\n\n› 1. rebase first\n\n  gpt-6-astra high", { x: 17, y: 2 });
+    expect(info).toEqual({ text: "1. rebase first", wrapped: false, menu: false });
+  });
 });
 
 describe("extractDraftInfo (wrap reporting)", () => {
@@ -821,6 +946,17 @@ describe("rearmContinueIfDrafting", () => {
     vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
     rearmContinueIfDrafting("_continue-worker", "myproject", "bold-ash", 15);
     expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("keeps re-arming while a selection menu is open, and says so", () => {
+    vi.mocked(capturePaneText).mockReturnValue(CODEX_MENU_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue(CODEX_MENU_CARET);
+
+    rearmContinueIfDrafting("_continue-worker", "myproject", "glib-close-foam", 0);
+
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(log.info).toHaveBeenCalledWith("workers", "continue deferred, selection menu open; re-arming",
+      expect.anything());
   });
 
   it("threads the merge subcommand through so the re-fire rebuilds the enriched prompt", () => {
@@ -1850,6 +1986,23 @@ describe("continueWorker delivery verification", () => {
     expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
       level: "error",
       worker: "bold-ash",
+      message: expect.stringContaining("operator draft"),
+    }));
+  });
+
+  it("names a selection menu, not an operator draft, when one blocks the resend", () => {
+    send();
+    vi.mocked(readLandedPrompt).mockReturnValue(FRAGMENT);
+    vi.mocked(capturePaneText).mockReturnValue(CODEX_MENU_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue(CODEX_MENU_CARET);
+
+    vi.advanceTimersByTime(5_000);
+
+    expect(pasteAndSubmit).toHaveBeenCalledTimes(1);
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining("selection menu"),
+    }));
+    expect(addAlert).not.toHaveBeenCalledWith(expect.objectContaining({
       message: expect.stringContaining("operator draft"),
     }));
   });

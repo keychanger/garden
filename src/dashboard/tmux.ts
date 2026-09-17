@@ -347,12 +347,15 @@ export function getActivePaneId(): string | null {
 // stdout. We deliberately do NOT pass `-J`: draft detection pairs this capture
 // with capturePaneCursor, and cursor_y is in physical-row space, so the output
 // must stay one line per pane row (joining wrapped lines would desync the row
-// indices). Returns "" on any failure (pane gone, sandbox), which the caller
-// reads as "no draft" — failing open preserves the common auto-continue path
-// rather than blocking it on a capture error.
-export function capturePaneText(paneId: string): string {
+// indices). `styles` adds `-e`, keeping SGR attributes so draft detection can
+// tell dimmed suggestion/placeholder text from typed text. Returns "" on any
+// failure (pane gone, sandbox), which the caller reads as "no draft" — failing
+// open preserves the common auto-continue path rather than blocking it on a
+// capture error.
+export function capturePaneText(paneId: string, opts: { styles?: boolean } = {}): string {
   try {
-    return execFileSync("tmux", ["capture-pane", "-p", "-t", paneId], {
+    const args = opts.styles ? ["capture-pane", "-p", "-e", "-t", paneId] : ["capture-pane", "-p", "-t", paneId];
+    return execFileSync("tmux", args, {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
     });

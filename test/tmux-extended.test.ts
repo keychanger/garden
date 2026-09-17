@@ -40,6 +40,7 @@ import {
   newDashboardWindow,
   newDashboardWindowPaned,
   getActivePaneId,
+  capturePaneText,
   tmuxDisplay,
   setPaneTitle,
   setPaneLabel,
@@ -491,6 +492,20 @@ describe("getActivePaneId", () => {
   it("returns null on failure", () => {
     mockExecFileSync.mockImplementation(() => { throw new Error("no session"); });
     expect(getActivePaneId()).toBeNull();
+  });
+});
+
+describe("capturePaneText", () => {
+  it("captures plain text by default", () => {
+    mockExecFileSync.mockReturnValue("❯ hi");
+    expect(capturePaneText("%3")).toBe("❯ hi");
+    expect(mockExecFileSync.mock.calls[0][1]).toEqual(["capture-pane", "-p", "-t", "%3"]);
+  });
+
+  it("keeps SGR attributes when styles are requested", () => {
+    mockExecFileSync.mockReturnValue("❯ \x1b[2mghost\x1b[0m");
+    expect(capturePaneText("%3", { styles: true })).toBe("❯ \x1b[2mghost\x1b[0m");
+    expect(mockExecFileSync.mock.calls[0][1]).toEqual(["capture-pane", "-p", "-e", "-t", "%3"]);
   });
 });
 
