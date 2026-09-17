@@ -1365,6 +1365,24 @@ describe("newWorker", () => {
     expect(entry.effort).toBe("xhigh");
   });
 
+  // A seat's model/effort are in its own member's vocabulary; a different
+  // builder must not launch on them (claude-code started on gpt-6-astra).
+  it("crew model/effort: a named builder that differs from the crew's worker seat skips the seat's dims", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", crew: "codex-claude",
+    } as ReturnType<typeof tryGetProject>);
+    newWorker({ harness: "claude-code" });
+    let entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.harness).toBe("claude-code");
+    expect(entry.model).toBeUndefined();
+
+    newWorker({ crew: "codex-claude", harness: "claude" });
+    entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.harness).toBe("claude-code");
+    expect(entry.model).toBeUndefined();
+  });
+
   it("crew effort 'ultra' promotes to the ultracode preset, as at the CLI", () => {
     vi.mocked(loadConfig).mockReturnValue({
       projects: {}, plots: {},

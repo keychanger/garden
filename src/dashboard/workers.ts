@@ -23,7 +23,7 @@ import {
   type AgentStatus, type WorkerEntry,
 } from "./registry.js";
 import { recordWorkerCreated, recordOperatorAction, recordWorkerRemoved, shortHash, type RoleSnapshot } from "./telemetry.js";
-import { designerSeat, getCrew, resolveProjectCrew } from "./crew.js";
+import { designerSeat, getCrew, resolveProjectCrew, type CrewMember } from "./crew.js";
 import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -460,9 +460,23 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // A crew's worker half supplies both dims one layer down from the flat
   // project key: per-worker crew (--crew) above the project key, the
   // project's bound crew below it.
+  //
+  // A seat's model and effort name things in its own member's vocabulary, so
+  // they apply only when that member is the one building. A builder named
+  // over the crew (the composer's build dim, --harness on a designer) would
+  // otherwise launch claude-code on the crew's Codex model.
+  const seatIfBuilding = (seat: CrewMember | undefined): CrewMember | undefined =>
+    seat
+      && canonicalHarnessName(seat.harness) === preflightPlan.harness
+      && (seat.provider ?? null) === (preflightPlan.resolvedProvider?.name ?? null)
+      ? seat
+      : undefined;
+  const workerSeat = seatIfBuilding(workerCrew?.worker);
+  const projectSeat = seatIfBuilding(projectCrew?.worker);
+  const buildingDesignSeat = seatIfBuilding(designSeat);
   const crewEffort = projectDefaultsApply
-    ? (workerCrew?.worker.effort ?? project.effort ?? projectCrew?.worker.effort)
-    : designSeat?.effort;
+    ? (workerSeat?.effort ?? project.effort ?? projectSeat?.effort)
+    : buildingDesignSeat?.effort;
   let reqUltracode = opts.ultracode === true;
   let reqEffort = opts.effort;
   if (!reqUltracode && reqEffort === undefined && crewEffort) {
@@ -470,8 +484,8 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     else reqEffort = crewEffort;
   }
   const projectModel = projectDefaultsApply
-    ? (workerCrew?.worker.model ?? project.model ?? projectCrew?.worker.model)
-    : designSeat?.model;
+    ? (workerSeat?.model ?? project.model ?? projectSeat?.model)
+    : buildingDesignSeat?.model;
   // Workflow-level model/effort defaults (the designer/planner seats → Opus /
   // xhigh) sit one layer beneath the per-spawn and project defaults, mirroring
   // how trellis reads workflow.workerModel per iteration. Not applied for
