@@ -85,7 +85,11 @@ beforeEach(() => {
 async function renderLog(...entries: object[]): Promise<string[]> {
   logContent = entries.map(e => JSON.stringify(e)).join("\n");
   const printed: string[] = [];
-  const spy = vi.spyOn(console, "log").mockImplementation((line: string) => { printed.push(strip(line)); });
+  // Split: one console.log can carry a whole multi-line render, and these
+  // assertions are about individual display rows.
+  const spy = vi.spyOn(console, "log").mockImplementation((line: string) => {
+    for (const row of strip(String(line)).split("\n")) printed.push(row);
+  });
   try {
     await logs([]);
   } finally {
@@ -283,5 +287,61 @@ describe("date rules while following logs", () => {
       vi.mocked(fs.readSync).mockReset();
       vi.useRealTimers();
     }
+  });
+});
+
+describe("no rendered row overruns the pane", () => {
+  // The defect this covers: headlines were emitted raw while only details were
+  // wrapped, so any message wider than the message column ran off and the
+  // terminal re-wrapped the tail to column 0, out of alignment with every
+  // other row. Measured at 83 of 4000 real entries on a 97-column pane, the
+  // worst an alert at 412 columns.
+  const longHeadline = "branch already contains the base tip; skipping rebase and proceeding straight to the merge queue";
+
+  function widthsOf(rendered: string): number[] {
+    return strip(rendered).split("\n").map(l => l.length);
+  }
+
+  it("wraps a long headline into the message column instead of overrunning", () => {
+    process.stdout.columns = 97;
+    const rendered = formatPrettyEntry(entry({ worker: "fell-white-deer", msg: longHeadline }), false);
+    const lines = strip(rendered).split("\n");
+    expect(lines.length).toBeGreaterThan(1);
+    expect(Math.max(...widthsOf(rendered))).toBeLessThanOrEqual(97);
+    // A wrapped headline is still the message, so its continuations carry no
+    // "↳" — that glyph means "detail of the message above".
+    expect(lines[1]).not.toContain("↳");
+    expect(lines[1].indexOf(lines[1].trim())).toBe(prettyLayout(false).messageCol);
+  });
+
+  it("holds across pane widths, with and without details", () => {
+    for (const width of [70, 80, 97, 110, 146, 200]) {
+      process.stdout.columns = width;
+      for (const e of [
+        entry({ worker: "fell-white-deer", msg: longHeadline }),
+        entry({ worker: "fell-white-deer", msg: longHeadline, data: { worktreePath: "/Users/jic/.garden/worktrees/garden/fell-white-deer", baseBranch: "develop" } }),
+        entry({ worker: "fell-white-deer", msg: "x".repeat(400) }),
+      ]) {
+        expect(Math.max(...widthsOf(formatPrettyEntry(e, false)))).toBeLessThanOrEqual(width);
+      }
+    }
+  });
+
+  it("keeps a worker name that overflows its column from pushing the row over", () => {
+    // An over-long worker name is never truncated (it is the argument `garden
+    // logs -w` takes), so it shifts its own row right — and that shift has to
+    // come off the headline's budget.
+    process.stdout.columns = 97;
+    const rendered = formatPrettyEntry(
+      entry({ worker: "a-really-long-worker-name", msg: longHeadline }), false);
+    expect(Math.max(...widthsOf(rendered))).toBeLessThanOrEqual(97);
+  });
+
+  it("reserves room for the dedup suffix rather than letting it push the line over", async () => {
+    process.stdout.columns = 97;
+    const repeated = entry({ worker: "fell-white-deer", msg: longHeadline });
+    const printed = await renderLog(repeated, repeated, repeated);
+    expect(printed.some(l => l.includes("(×3)"))).toBe(true);
+    expect(Math.max(...printed.map(l => l.length))).toBeLessThanOrEqual(97);
   });
 });

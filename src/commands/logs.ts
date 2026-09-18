@@ -536,7 +536,20 @@ function projectColumnName(project: string | null): string {
   return cfg ? projectDisplayName(cfg, project) : project;
 }
 
-export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): string {
+// Headlines wrap to the same bound as details rather than running off the
+// pane. They were emitted raw, so any message wider than the pane's message
+// column overran and the terminal re-wrapped the tail to column 0, out of
+// alignment with everything else (measured: 83 of 4000 entries at a 97-column
+// pane, the worst an alert at 412 columns). Capped at the same line count as a
+// detail so one multi-KB alert cannot take the whole pane; the full text is
+// always in the alerts view and the JSON.
+const HEADLINE_MAX_LINES = 4;
+
+// `reserve` holds columns back on the FIRST line for a suffix the caller will
+// append there (the dedup `(×N)`). Passed in rather than measured afterwards
+// because appending to a line already wrapped to the full width is precisely
+// what would push it over.
+export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean, reserve = 0): string {
   const layout = prettyLayout(useRelativeTime);
   const ts = useRelativeTime
     ? relativeTime(entry.ts).padStart(layout.timestamp)
@@ -558,13 +571,31 @@ export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): st
   const { headline, details } = summarize(entry);
   const msgColor = entry.level === "error" ? color.red : entry.level === "warn" ? color.yellow : "";
   const msgReset = msgColor ? color.reset : "";
-  const headlineLine = `${color.dim}${ts}${color.reset}  ${projectStr}  ${workerStr} ${glyphColor}${glyph}${color.reset} ${msgColor}${headline}${msgReset}`;
-  if (details.length === 0) return headlineLine;
   const indent = " ".repeat(layout.messageCol);
+  // Floored at 10 (wrapDetail's own give-up threshold) rather than 20: a floor
+  // WIDER than what the pane leaves is itself an overrun, which is what made
+  // every row run off a pane under ~66 columns. Below gutter+10 nothing can
+  // fit — the gutter is fixed — and wrapDetail passes the text through.
+  const usable = Math.max(paneWidth() - layout.messageCol, 10);
+  // The headline's own wrap. Continuation lines sit at the message column with
+  // no "↳ " — that glyph means "this is a detail of the message above", and a
+  // wrapped headline is still the message.
+  // A worker name wider than its measured column is never truncated (it is the
+  // argument `garden logs -w` and `garden kick` take), so it pushes ITS OWN row
+  // right by the excess. Only the first line starts after that shift —
+  // continuations are indented to the message column like any other — so the
+  // overflow comes off the first line's budget alone.
+  const workerOverflow = Math.max((workerLabel?.length ?? 0) - layout.worker, 0);
+  const headlineParts = wrapDetail(
+    headline, Math.max(usable - reserve - workerOverflow, 10), usable, HEADLINE_MAX_LINES);
+  const headlineLines = headlineParts.map((part, i) =>
+    i === 0
+      ? `${color.dim}${ts}${color.reset}  ${projectStr}  ${workerStr} ${glyphColor}${glyph}${color.reset} ${msgColor}${part}${msgReset}`
+      : `${indent}${msgColor}${part}${msgReset}`);
+  if (details.length === 0) return headlineLines.join("\n");
   // Wrap each detail to the terminal so long error/data dumps stay within
   // the message column instead of natural-wrapping back to column 0.
   // Continuation prefix "  " aligns wrapped text under the char after "↳ ".
-  const usable = Math.max(paneWidth() - layout.messageCol, 20);
   const firstWidth = Math.max(usable - 2, 10); // "↳ "
   const contWidth = Math.max(usable - 2, 10);  // "  "
   const continuationLines: string[] = [];
@@ -575,7 +606,7 @@ export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean): st
       continuationLines.push(`${indent}${color.dim}${prefix}${wrapped[i]}${color.reset}`);
     }
   }
-  return [headlineLine, ...continuationLines].join("\n");
+  return [...headlineLines, ...continuationLines].join("\n");
 }
 
 function parseLine(line: string): LogEntry | null {
@@ -810,23 +841,52 @@ export function dedup(entries: LogEntry[], splitByDay = false): DedupedEntry[] {
   return result;
 }
 
-function formatEntry(entry: LogEntry, mode: LogsMode, useRelativeTime: boolean): string {
+function formatEntry(entry: LogEntry, mode: LogsMode, useRelativeTime: boolean, reserve = 0): string {
   return mode === "raw"
     ? formatRawEntry(entry, useRelativeTime)
-    : formatPrettyEntry(entry, useRelativeTime);
+    : formatPrettyEntry(entry, useRelativeTime, reserve);
 }
 
-// (×N) goes on the headline, never on a continuation line.
-function appendDedupSuffix(rendered: string, count: number): string {
+// Visible width of the dedup suffix for a given count — the columns the
+// headline's first line must leave free so appending it cannot overrun.
+function dedupReserve(count: number): number {
+  return count > 1 ? `  (×${count})`.length : 0;
+}
+
+// Visible width, ignoring the SGR escapes the renderer interleaves.
+function visibleWidth(s: string): number {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;]*m/g, "").length;
+}
+
+// (×N) goes on the headline, never on a continuation line. `indent` is the
+// message column, used only for the fallback below.
+function appendDedupSuffix(rendered: string, count: number, indent = ""): string {
   if (count <= 1) return rendered;
   const suffix = `  ${color.dim}(×${count})${color.reset}`;
   const nl = rendered.indexOf("\n");
-  if (nl === -1) return `${rendered}${suffix}`;
-  return `${rendered.slice(0, nl)}${suffix}${rendered.slice(nl)}`;
+  const first = nl === -1 ? rendered : rendered.slice(0, nl);
+  const rest = nl === -1 ? "" : rendered.slice(nl);
+  // The headline reserved room for this (dedupReserve), so it fits in every
+  // pane wide enough to hold the gutter plus a wrappable message. On a pane
+  // too narrow for that the reserve hits its floor, and appending anyway is
+  // the one overrun the wrap cannot prevent — so the count takes its own line.
+  if (visibleWidth(first) + visibleWidth(suffix) <= paneWidth()) {
+    return `${first}${suffix}${rest}`;
+  }
+  return `${first}\n${indent}${color.dim}(×${count})${color.reset}${rest}`;
 }
 
 function formatDedupedEntry(d: DedupedEntry, mode: LogsMode, useRelativeTime: boolean): string {
-  return appendDedupSuffix(formatEntry(d.entry, mode, useRelativeTime), d.count);
+  return appendDedupSuffix(
+    formatEntry(d.entry, mode, useRelativeTime, dedupReserve(d.count)),
+    d.count, dedupIndent(mode, useRelativeTime));
+}
+
+// Where a wrapped-off dedup count lands: under the message column in pretty
+// mode, at the left edge in raw mode (which has no such column).
+function dedupIndent(mode: LogsMode, useRelativeTime: boolean): string {
+  return mode === "raw" ? "" : " ".repeat(prettyLayout(useRelativeTime).messageCol);
 }
 
 // The day the last rendered row belonged to. Module-level because `--follow`
@@ -946,15 +1006,19 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
       }
 
       const key = dedupKey(entry);
-      const rendered = formatEntry(entry, opts.mode, false);
-      const renderedLineCount = rendered.split("\n").length;
       if (key === prevKey) {
         repeatCount++;
-        process.stdout.write(
-          `${clearPreviousRender(prevLineCount)}${appendDedupSuffix(rendered, repeatCount)}`,
-        );
-        prevLineCount = renderedLineCount;
+        // Re-render for the new count: the suffix grows by a digit at 10, 100,
+        // … and the headline's first line has to give up that column rather
+        // than run past the pane.
+        const repeated = appendDedupSuffix(
+          formatEntry(entry, opts.mode, false, dedupReserve(repeatCount)),
+          repeatCount, dedupIndent(opts.mode, false));
+        process.stdout.write(`${clearPreviousRender(prevLineCount)}${repeated}`);
+        prevLineCount = repeated.split("\n").length;
       } else {
+        const rendered = formatEntry(entry, opts.mode, false);
+        const renderedLineCount = rendered.split("\n").length;
         if (prevKey) process.stdout.write("\n");
         process.stdout.write(rendered);
         prevKey = key;
