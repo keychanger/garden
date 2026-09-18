@@ -515,8 +515,8 @@ export interface WorkerEntry {
   // task-title.ts). Claimed before the model call and never released, so the
   // attempt runs at most once per worker: a slow call cannot be double-
   // dispatched by the next watchdog tick, and a failing one cannot re-spend on
-  // every tick forever. Absent on every claude-code worker — that harness
-  // writes its own rolling pane title and needs no help naming the thread.
+  // every tick forever. Also used for a claude-code worker whose pane title
+  // leaves the task blank past the title grace period.
   titleGeneratedAt?: number;
 }
 

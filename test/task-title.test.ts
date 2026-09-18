@@ -218,15 +218,61 @@ describe("runWorkerTitle", () => {
     return transcript;
   }
 
-  async function run(generateTitle: () => string | null) {
-    // The modules at the top of this file were loaded against the real HOME;
+  async function run(generateTitle: () => string | null, now = 601_000) {
+    // The modules at the top of this file were loaded against the setup HOME;
     // re-import them so their path constants bind to the temp one.
     vi.resetModules();
     const { runWorkerTitle } = await import("../src/dashboard/task-title.js");
     const { findWorkerByName } = await import("../src/dashboard/registry.js");
-    runWorkerTitle("omi-godot", "wet-bold-tor", { generateTitle, now: () => 9_999 });
+    runWorkerTitle("omi-godot", "wet-bold-tor", { generateTitle, now: () => now });
     return findWorkerByName("omi-godot", "wet-bold-tor");
   }
+
+  it("does not spend an attempt before the grace expires", async () => {
+    seed({});
+    const generateTitle = vi.fn(() => "Too early");
+    const entryAfter = await run(generateTitle, 300_999);
+    expect(generateTitle.mock.calls.length).toBe(0);
+    expect(entryAfter?.titleGeneratedAt).toBeUndefined();
+  });
+
+  it("titles the row when the grace expires", async () => {
+    seed({});
+    const entryAfter = await run(() => "Family meal content", 301_000);
+    expect(entryAfter?.task).toBe("Family meal content");
+    expect(entryAfter?.titleGeneratedAt).toBe(301_000);
+  });
+
+  it("leaves the attempt available until a real prompt exists", async () => {
+    const transcript = seed({});
+    fs.writeFileSync(transcript, "");
+    const generateTitle = vi.fn(() => "No prompt");
+    const entryAfter = await run(generateTitle);
+    expect(generateTitle.mock.calls.length).toBe(0);
+    expect(entryAfter?.titleGeneratedAt).toBeUndefined();
+  });
+
+  it("does not repeat a failed generation", async () => {
+    seed({});
+    await run(() => null);
+    const generateTitle = vi.fn(() => "Second attempt");
+    const entryAfter = await run(generateTitle);
+    expect(generateTitle.mock.calls.length).toBe(0);
+    expect(entryAfter?.task).toBe("");
+  });
+
+  it("preserves a harness title written during generation", async () => {
+    seed({});
+    const entryAfter = await run(() => {
+      const registryPath = path.join(env.sessionsDir, "dashboard.registry.json");
+      const registry = JSON.parse(fs.readFileSync(registryPath, "utf-8"));
+      registry.workers["omi-godot"][0].task = "Live harness title";
+      fs.writeFileSync(registryPath, JSON.stringify(registry));
+      return "Generated title";
+    });
+    expect(entryAfter?.task).toBe("Live harness title");
+    expect(entryAfter?.titleGeneratedAt).toBe(601_000);
+  });
 
   it("titles a blank row from the prompt a peer session delivered", async () => {
     // The claim carries the task it was taken from, and for these workers that
@@ -235,14 +281,14 @@ describe("runWorkerTitle", () => {
     seed({});
     const entryAfter = await run(() => "Family meal authored content");
     expect(entryAfter?.task).toBe("Family meal authored content");
-    expect(entryAfter?.titleGeneratedAt).toBe(9_999);
+    expect(entryAfter?.titleGeneratedAt).toBe(601_000);
   });
 
   it("spends its one attempt even when the model returns nothing", async () => {
     seed({});
     const entryAfter = await run(() => null);
     expect(entryAfter?.task).toBe("");
-    expect(entryAfter?.titleGeneratedAt).toBe(9_999);
+    expect(entryAfter?.titleGeneratedAt).toBe(601_000);
   });
 
   it("does not claim a worker whose row the harness has since named", async () => {

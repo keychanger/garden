@@ -272,8 +272,9 @@ export function runWorkerTitle(
   // until the transcript holds the real opening prompt. The task is NOT
   // required to still equal that prompt's first line: a worker whose row an
   // earlier build let a plan step overwrite is exactly one that needs a topic.
+  const now = opts.now ?? Date.now;
   const snapshot = readRegistry().workers[project]?.find(e => e.name === worker);
-  if (!snapshot || !needsTaskTitle(snapshot)) return;
+  if (!snapshot || !needsTaskTitle(snapshot, now())) return;
   const transcript = getHarnessCore(snapshot.harness).resolveTranscriptPath(snapshot);
   const readOpening = OPENING_READERS[snapshot.harness ?? DEFAULT_HARNESS];
   const opening = transcript && readOpening ? readOpening(transcript) : null;
@@ -284,8 +285,8 @@ export function runWorkerTitle(
   // from "the claim was refused". Returning the bare string conflated the two
   // and dropped every blank worker after spending its one attempt.
   const claimed = updateWorkerFieldsIf(project, worker, entry =>
-    needsTaskTitle(entry)
-      ? { fields: { titleGeneratedAt: (opts.now ?? Date.now)() }, result: { task: entry.task } }
+    needsTaskTitle(entry, now())
+      ? { fields: { titleGeneratedAt: now() }, result: { task: entry.task } }
       : { fields: null, result: null });
   if (!claimed) return;
 
