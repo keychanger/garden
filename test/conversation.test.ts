@@ -10,6 +10,7 @@ import {
   resolveTranscriptPath,
   sumTranscriptUsage,
   readLatestTranscriptModel,
+  readOpeningPrompt,
   formatConversationPane,
   gardenLabel,
   handoffSeedLabel,
@@ -716,5 +717,75 @@ describe("readLatestTranscriptModel — the model a worker is actually running",
   it("ignores malformed lines", () => {
     const p = write("e.jsonl", `{"model": broken json\n` + jsonl([asstWithModel("claude-fable-5", "2026-07-25T11:00:00Z")]));
     expect(readLatestTranscriptModel(p)).toBe("claude-fable-5");
+  });
+});
+
+describe("readOpeningPrompt — what a worker was first asked to do", () => {
+  const tmp = useTmpHome();
+
+  function write(name: string, content: string): string {
+    const p = path.join(tmp.sessionsDir, name);
+    fs.writeFileSync(p, content);
+    return p;
+  }
+
+  // A prompt relayed from another Claude Code session over the cross-session
+  // socket: recorded as a meta, system-sourced user record whose `origin`
+  // carries the message the peer actually sent.
+  const peer = (body: string, ts = "2026-09-18T16:17:23Z") => user(
+    `Another Claude session sent a message:\n<cross-session-message from-name="tough-deep-snow">\n${body}`,
+    ts,
+    { isMeta: true, promptSource: "system", origin: { kind: "peer", name: "tough-deep-snow", body } },
+  );
+
+  it("returns the operator's first typed prompt", () => {
+    const p = write("a.jsonl", jsonl([
+      user("Fix the dinner scene", "2026-09-18T16:00:00Z", { promptSource: "typed" }),
+      assistant([{ type: "text", text: "on it" }]),
+      user("and the goodnight too", "2026-09-18T17:00:00Z", { promptSource: "typed" }),
+    ]));
+    expect(readOpeningPrompt(p)).toBe("Fix the dinner scene");
+  });
+
+  it("returns the body of a prompt a peer session delivered", () => {
+    // The whole point: a fanned-out worker's ONLY statement of its task arrives
+    // this way, and Claude Code writes no pane title for it — so this record is
+    // the only thing garden can name the row from.
+    const p = write("b.jsonl", jsonl([peer("Your task: section 1 of the fix plan")]));
+    expect(readOpeningPrompt(p)).toBe("Your task: section 1 of the fix plan");
+  });
+
+  it("skips the harness's own injected records", () => {
+    const p = write("c.jsonl", jsonl([
+      user("<task-notification>a background task finished</task-notification>",
+        "2026-09-18T16:00:00Z", { promptSource: "system" }),
+      user("Caveat: the messages below were generated while running local commands",
+        "2026-09-18T16:00:01Z", { isMeta: true }),
+      user("Fix the dinner scene", "2026-09-18T16:00:02Z", { promptSource: "typed" }),
+    ]));
+    expect(readOpeningPrompt(p)).toBe("Fix the dinner scene");
+  });
+
+  it("skips a subagent's prompt", () => {
+    const p = write("d.jsonl", jsonl([
+      { ...user("sidechain work", "2026-09-18T16:00:00Z", { promptSource: "typed" }), isSidechain: true },
+      user("Fix the dinner scene", "2026-09-18T16:00:01Z", { promptSource: "typed" }),
+    ]));
+    expect(readOpeningPrompt(p)).toBe("Fix the dinner scene");
+  });
+
+  it("returns null when nothing has been asked yet", () => {
+    const p = write("e.jsonl", jsonl([assistant([{ type: "text", text: "booted" }])]));
+    expect(readOpeningPrompt(p)).toBeNull();
+  });
+
+  it("returns null for an unreadable transcript rather than throwing", () => {
+    expect(readOpeningPrompt(path.join(tmp.sessionsDir, "nope.jsonl"))).toBeNull();
+  });
+
+  it("ignores malformed lines", () => {
+    const p = write("f.jsonl", `{"type": "user" broken\n`
+      + jsonl([user("Fix the dinner scene", "2026-09-18T16:00:00Z", { promptSource: "typed" })]));
+    expect(readOpeningPrompt(p)).toBe("Fix the dinner scene");
   });
 });

@@ -1,5 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { spawnSync } from "node:child_process";
+import { useTmpHome } from "./helpers.js";
 
 vi.mock("node:child_process", () => ({
   spawn: vi.fn(),
@@ -8,8 +11,9 @@ vi.mock("node:child_process", () => ({
 
 import {
   buildTitleCommand, buildTitlePrompt, generateTaskTitle, needsTaskTitle, sanitizeTitle,
-  titleCandidates,
+  titleCandidates, titleableHarnesses,
 } from "../src/dashboard/task-title.js";
+import { harnessNames } from "../src/dashboard/harness/core.js";
 import type { WorkerEntry, WorkerRegistry } from "../src/dashboard/registry.js";
 
 function entry(over: Partial<WorkerEntry> = {}): WorkerEntry {
@@ -98,6 +102,50 @@ describe("needsTaskTitle", () => {
   });
 });
 
+describe("needsTaskTitle — a row still blank long after the worker started", () => {
+  const NOW = 1_800_000_000_000;
+  const blank = (over: Partial<WorkerEntry> = {}) => entry({
+    harness: "claude-code",
+    task: "",
+    agentStatus: "working",
+    createdAt: NOW - 10 * 60_000,
+    ...over,
+  });
+
+  it("selects a claude-code worker whose pane title never named the thread", () => {
+    // The fan-out case: prompted over the cross-session socket, which moves no
+    // terminal title, so the row's only source produced nothing at all.
+    expect(needsTaskTitle(blank(), NOW)).toBe(true);
+  });
+
+  it("still skips a claude-code worker whose pane title is doing its job", () => {
+    expect(needsTaskTitle(blank({ task: "Fix the Erica composer" }), NOW)).toBe(false);
+  });
+
+  it("waits out the grace, so a worker whose title is merely slow is left alone", () => {
+    expect(needsTaskTitle(blank({ createdAt: NOW - 60_000 }), NOW)).toBe(false);
+  });
+
+  it("skips a worker that has never been prompted or has exited", () => {
+    // Nothing to title from, and without this the sweep would dispatch on every
+    // tick for the worker's whole life.
+    expect(needsTaskTitle(blank({ agentStatus: "ready" }), NOW)).toBe(false);
+    expect(needsTaskTitle(blank({ agentStatus: "loading" }), NOW)).toBe(false);
+    expect(needsTaskTitle(blank({ agentStatus: "exited" }), NOW)).toBe(false);
+    expect(needsTaskTitle(blank({ agentStatus: undefined }), NOW)).toBe(false);
+  });
+
+  it("skips a worker already attempted", () => {
+    expect(needsTaskTitle(blank({ titleGeneratedAt: 1 }), NOW)).toBe(false);
+  });
+});
+
+describe("titleableHarnesses", () => {
+  it("covers every registered harness, so a new one is never silently untitled", () => {
+    expect(titleableHarnesses().sort()).toEqual([...harnessNames()].sort());
+  });
+});
+
 describe("titleCandidates", () => {
   it("returns the due workers across projects and skips the rest", () => {
     const registry: WorkerRegistry = {
@@ -113,11 +161,94 @@ describe("titleCandidates", () => {
       { project: "leadingtone-io", worker: "lean-stout-quartz" },
     ]);
   });
+
+  it("includes a worker of any harness whose row is still blank", () => {
+    const registry: WorkerRegistry = {
+      workers: {
+        "omi-godot": [
+          entry({
+            name: "wet-bold-tor", harness: "claude-code", task: "",
+            agentStatus: "working", createdAt: 1_000,
+          }),
+        ],
+      },
+    };
+    expect(titleCandidates(registry, 1_000 + 10 * 60_000)).toEqual([
+      { project: "omi-godot", worker: "wet-bold-tor" },
+    ]);
+  });
 });
 
 describe("buildTitleCommand", () => {
   it("shell-escapes both identity arguments", () => {
     const cmd = buildTitleCommand("/usr/bin/garden", "leading'tone", "lean-stout-quartz");
     expect(cmd).toBe("/usr/bin/garden dashboard _worker-title 'leading'\\''tone' lean-stout-quartz");
+  });
+});
+
+describe("runWorkerTitle", () => {
+  const env = useTmpHome();
+
+  function seed(entryOver: Record<string, unknown>): string {
+    const transcript = path.join(env.sessionsDir, "t.jsonl");
+    fs.writeFileSync(transcript, JSON.stringify({
+      type: "user",
+      isMeta: true,
+      promptSource: "system",
+      origin: { kind: "peer", name: "tough-deep-snow", body: "Your task: section 1 of the fix plan" },
+      message: { role: "user", content: "Another Claude session sent a message: ..." },
+    }) + "\n");
+    fs.writeFileSync(
+      path.join(env.sessionsDir, "dashboard.registry.json"),
+      JSON.stringify({
+        workers: {
+          "omi-godot": [{
+            name: "wet-bold-tor",
+            sessionId: "s",
+            harness: "claude-code",
+            transcriptPath: transcript,
+            agentStatus: "working",
+            createdAt: 1_000,
+            task: "",
+            ...entryOver,
+          }],
+        },
+      }),
+    );
+    return transcript;
+  }
+
+  async function run(generateTitle: () => string | null) {
+    // The modules at the top of this file were loaded against the real HOME;
+    // re-import them so their path constants bind to the temp one.
+    vi.resetModules();
+    const { runWorkerTitle } = await import("../src/dashboard/task-title.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+    runWorkerTitle("omi-godot", "wet-bold-tor", { generateTitle, now: () => 9_999 });
+    return findWorkerByName("omi-godot", "wet-bold-tor");
+  }
+
+  it("titles a blank row from the prompt a peer session delivered", async () => {
+    // The claim carries the task it was taken from, and for these workers that
+    // task is the empty string — a claim result that reads as "refused" would
+    // spend the one attempt and never write the title.
+    seed({});
+    const entryAfter = await run(() => "Family meal authored content");
+    expect(entryAfter?.task).toBe("Family meal authored content");
+    expect(entryAfter?.titleGeneratedAt).toBe(9_999);
+  });
+
+  it("spends its one attempt even when the model returns nothing", async () => {
+    seed({});
+    const entryAfter = await run(() => null);
+    expect(entryAfter?.task).toBe("");
+    expect(entryAfter?.titleGeneratedAt).toBe(9_999);
+  });
+
+  it("does not claim a worker whose row the harness has since named", async () => {
+    seed({ task: "Fix the Erica composer" });
+    const entryAfter = await run(() => "should not be used");
+    expect(entryAfter?.task).toBe("Fix the Erica composer");
+    expect(entryAfter?.titleGeneratedAt).toBeUndefined();
   });
 });

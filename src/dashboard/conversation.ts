@@ -269,6 +269,74 @@ export function readLatestPrompt(transcriptPath: string): string | null {
   return null;
 }
 
+// Bytes of transcript head scanned for the opening prompt. The first genuine
+// prompt is within the first few records of a Claude Code transcript (unlike a
+// Codex rollout, which records the whole composed instructions ahead of it), so
+// this is a wide margin rather than a tight fit.
+const PROMPT_HEAD_BYTES = 256 * 1024;
+
+// The FIRST prompt that told this worker what to do, verbatim — the thread
+// titler's input (see task-title.ts). Mirrors readLatestPrompt but scans the
+// head rather than the tail, and admits one shape that one deliberately drops:
+// a prompt another Claude session delivered over the cross-session socket.
+// Those are recorded as meta, system-sourced user records carrying an
+// `origin.kind === "peer"` envelope, and for delivery verification they are
+// correctly ignored — they are not garden's paste. For titling they are the
+// opposite: when a parent fans work out over that socket, the peer message is
+// the ONLY statement of the task the worker ever receives, and a reader that
+// skips it leaves the row permanently blank. `origin.body` is the message the
+// peer sent, without the "Another Claude session sent a message:" wrapper the
+// transcript text carries.
+export function readOpeningPrompt(transcriptPath: string): string | null {
+  let raw: string;
+  try {
+    const fd = fs.openSync(transcriptPath, "r");
+    try {
+      const buf = Buffer.alloc(PROMPT_HEAD_BYTES);
+      const read = fs.readSync(fd, buf, 0, buf.length, 0);
+      raw = buf.subarray(0, read).toString("utf-8");
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return null;
+  }
+  for (const line of raw.split("\n")) {
+    if (!line || !line.includes('"user"')) continue;
+    let obj: Record<string, unknown>;
+    try {
+      obj = JSON.parse(line);
+    } catch {
+      // A head read can clip the final line; it is unparseable and would be
+      // skipped anyway.
+      continue;
+    }
+    if (!obj || typeof obj !== "object" || obj.type !== "user") continue;
+    if (obj.isSidechain === true) continue;
+    const peer = peerMessageBody(obj);
+    if (peer) return peer;
+    if (obj.isMeta === true) continue;
+    const text = userText(obj);
+    if (text === null) continue;
+    const source = typeof obj.promptSource === "string" ? obj.promptSource : undefined;
+    if (isInjectedSystemMessage(text, source)) continue;
+    if (text.trim()) return text.trim();
+  }
+  return null;
+}
+
+// The body of a prompt relayed from another Claude Code session, or null when
+// the record is not one. The envelope is what distinguishes a peer's
+// instruction from the harness's own injected meta records, which carry no
+// `origin`.
+function peerMessageBody(obj: Record<string, unknown>): string | null {
+  const origin = obj.origin;
+  if (!origin || typeof origin !== "object") return null;
+  const { kind, body } = origin as { kind?: unknown; body?: unknown };
+  if (kind !== "peer" || typeof body !== "string") return null;
+  return body.trim() || null;
+}
+
 // The text of a user-role record, joining multi-part content. Null when the
 // record carries no text at all (a tool_result or image-only turn).
 function userText(obj: Record<string, unknown>): string | null {
