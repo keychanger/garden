@@ -213,7 +213,7 @@ export async function applyLeftColumnFromMenu(value: string): Promise<void> {
   // operator dismisses it, so an unawaited resize would land behind the menu.
   try {
     const { reconcileColumnSplit } = await import("./column-split.js");
-    await reconcileColumnSplit();
+    await reconcileColumnSplit(true);
   } catch { /* no live dashboard, or a pane went away — config write stands */ }
   tmuxDisplay(`column split: ${formatColumnSplit(applied)}`);
   runGardenMenu();

@@ -1394,6 +1394,16 @@ describe("repinUsagePaneHeight", () => {
 });
 
 describe("rebakePanesOnResize", () => {
+  it("reports a failed right-pane resize so reconciliation can retry", () => {
+    vi.mocked(tmux).mockImplementationOnce(() => { throw new Error("pane gone"); });
+    expect(rebakePanesOnResize(makeState({ activePaneId: "%9" }), 5)).toBe(false);
+  });
+
+  it("applies the reconciler's captured percentage instead of rereading config", () => {
+    expect(rebakePanesOnResize(makeState({ activePaneId: "%9" }), 5, 60)).toBe(true);
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%9", "-x", "60%");
+  });
+
   it("restores the configured column split before rendering at the new width", () => {
     vi.mocked(getPaneSize).mockReturnValue({ width: 80, height: 10 });
     vi.mocked(tmux).mockImplementation((...args) => {

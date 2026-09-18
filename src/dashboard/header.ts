@@ -1169,9 +1169,15 @@ export function repinUsagePaneHeight(state: DashboardState, fallbackHeight: numb
 // refresh-client — so a resize can't disturb copy-mode scrolling (a10642c).
 // CLI-bundle only (like refreshStatusElapsed): not reachable from hook.js, so
 // the alerts renderer stays tree-shaken out of the hook bundle.
-export function rebakePanesOnResize(state: DashboardState, usageFallbackHeight: number): void {
+export function rebakePanesOnResize(
+  state: DashboardState, usageFallbackHeight: number, rightPercent = getRightColumnPercent(),
+): boolean {
+  let splitApplied = false;
   if (state.activePaneId) {
-    try { tmux("resize-pane", "-t", state.activePaneId, "-x", `${getRightColumnPercent()}%`); } catch { /* pane may be gone */ }
+    try {
+      tmux("resize-pane", "-t", state.activePaneId, "-x", `${rightPercent}%`);
+      splitApplied = true;
+    } catch { /* pane may be gone */ }
   }
   // The resize event is precisely the moment the TTL'd width cache goes stale;
   // bust it so writeQuickStatus re-reads the pane width unconditionally.
@@ -1189,6 +1195,7 @@ export function rebakePanesOnResize(state: DashboardState, usageFallbackHeight: 
   writeAlertsRendered(shared);
   repinStatusPaneHeight(state);
   repinUsagePaneHeight(state, usageFallbackHeight);
+  return splitApplied;
 }
 
 // resizeAndSignal's ordering (grow-then-signal / signal-then-shrink) without its
