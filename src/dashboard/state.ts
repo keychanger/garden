@@ -55,6 +55,14 @@ export interface DashboardState {
   // roughly hourly and forever. Comparing signatures makes the alert fire on
   // CHANGE only: a new orphan appearing, or the set shrinking after a cleanup.
   orphanWorktreeSignature: string | null;
+  // The left-column percentage currently APPLIED to the tmux panes, or null
+  // when nothing has applied one yet. Config holds the intent
+  // (`layout.leftPercent`); this holds what the panes actually show, so the
+  // watchdog can reconcile the two. Keyed on the configured value rather than
+  // on measured widths deliberately: an operator's own manual pane resize
+  // leaves config untouched and so is never stomped, while a changed setting
+  // (or a dashboard predating one) is applied within a tick.
+  appliedLeftPercent: number | null;
 }
 
 export const STATE_FILE = path.join(SESSIONS_DIR, "dashboard.state.json");
@@ -75,6 +83,7 @@ const DEFAULT_STATE: DashboardState = {
   lastActiveProjectByPlot: {},
   buildBehind: null,
   orphanWorktreeSignature: null,
+  appliedLeftPercent: null,
 };
 
 // Shape guard for parsed state. Runs AFTER the migration patches so legacy
@@ -107,7 +116,9 @@ function isDashboardState(x: unknown): x is DashboardState {
     // Tolerate absence: state files written before this field existed are
     // valid, and readDashState fills the default.
     (r.buildBehind === undefined || r.buildBehind === null || typeof r.buildBehind === "number") &&
-    (r.orphanWorktreeSignature === undefined || isStrOrNull(r.orphanWorktreeSignature))
+    (r.orphanWorktreeSignature === undefined || isStrOrNull(r.orphanWorktreeSignature)) &&
+    (r.appliedLeftPercent === undefined || r.appliedLeftPercent === null
+      || typeof r.appliedLeftPercent === "number")
   );
 }
 
@@ -150,6 +161,10 @@ export function readDashState(): DashboardState {
     if (raw.usagePaneId === undefined) raw.usagePaneId = null;
     if (raw.buildBehind === undefined) raw.buildBehind = null;
     if (raw.orphanWorktreeSignature === undefined) raw.orphanWorktreeSignature = null;
+    // A dashboard created before the split was configurable has applied
+    // nothing; null makes the watchdog's first reconcile apply the current
+    // setting rather than assuming the panes already match it.
+    if (raw.appliedLeftPercent === undefined) raw.appliedLeftPercent = null;
     if (raw.activePlot === undefined) raw.activePlot = null;
     if (!raw.lastActiveWorker) raw.lastActiveWorker = {};
     if (!raw.lastActiveProjectByPlot) raw.lastActiveProjectByPlot = {};

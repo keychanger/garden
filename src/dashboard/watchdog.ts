@@ -66,6 +66,7 @@ import {
 import { startCodexInputWatcher } from "./codex-input.js";
 import { sweepWorkerModels } from "./model-drift.js";
 import { healWorkerWindows } from "./window-heal.js";
+import { reconcileColumnSplit } from "./column-split.js";
 import {
   commitsBehindOrigin, gardenInstallRepo, listWorktreeDirs, workerCleanupMarkerPath,
 } from "./git.js";
@@ -781,6 +782,16 @@ export async function runWatchdogLoop(): Promise<void> {
         enforceAwake(Date.now());
       } catch (err) {
         log.warn("watchdog", "awake enforcement failed", { data: { error: String(err) } });
+      }
+      // Apply a column split the panes are not showing yet. Every other site
+      // that sizes the right slot fires on an event (create, attach, repair,
+      // client-resize), so a setting changed while a session stays attached —
+      // including a new build changing the default — had no path to the panes
+      // until the operator detached or resized. No-op once applied.
+      try {
+        await reconcileColumnSplit();
+      } catch (err) {
+        log.warn("watchdog", "column split reconcile failed", { data: { error: String(err) } });
       }
       // Advance the status pane's time-in-state suffixes ("reviewing 12m" ->
       // "13m"). Content-deduped inside, so this is a no-op when nothing is in

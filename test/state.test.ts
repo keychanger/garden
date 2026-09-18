@@ -29,7 +29,22 @@ describe("readDashState", () => {
       lastActiveProjectByPlot: {},
       buildBehind: null,
       orphanWorktreeSignature: null,
+      appliedLeftPercent: null,
     });
+  });
+
+  it("fills appliedLeftPercent for a state file written before the split was configurable", async () => {
+    // The shipped upgrade path: null (not the configured value) so the
+    // watchdog's first reconcile applies the split to panes that are still
+    // showing whatever ratio they were created with.
+    const { readDashState, STATE_FILE } = await importState();
+    fs.writeFileSync(STATE_FILE, JSON.stringify({
+      activeProject: "garden", activePlot: null, statusPaneId: "%1", usagePaneId: null,
+      gardenShellPaneId: "%2", gardenPaneType: "growhouse", gardenWindowName: null,
+      alertsSeenMark: null, activePaneId: "%3", activePaneType: "worker",
+      activeWindowName: null, lastActiveWorker: {}, lastActiveProjectByPlot: {},
+    }));
+    expect(readDashState().appliedLeftPercent).toBeNull();
   });
 
   it("returns default state on corrupted JSON", async () => {
@@ -91,6 +106,7 @@ describe("writeDashState / readDashState", () => {
       lastActiveProjectByPlot: {},
       buildBehind: 3,
       orphanWorktreeSignature: "garden/lost-pale-fern",
+      appliedLeftPercent: 45,
     };
     writeDashState(original);
     const loaded = readDashState();

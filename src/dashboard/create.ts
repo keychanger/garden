@@ -7,9 +7,10 @@ import {
   DASHBOARD_SESSION,
 } from "../session.js";
 import { atomicWriteFile } from "./atomic-write.js";
-import { loadConfig, tryGetProject, getFocusedProjectNames, firstFocusedPlotName, plotNames, resolveBeadsDir, getRightColumnPercent, SESSIONS_DIR, type ProjectConfig } from "../config.js";
+import { loadConfig, tryGetProject, getFocusedProjectNames, firstFocusedPlotName, plotNames, resolveBeadsDir, getRightColumnPercent, getLeftColumnPercent, SESSIONS_DIR, type ProjectConfig } from "../config.js";
 import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock, STATE_FILE } from "./state.js";
+import { recordAppliedColumnSplit } from "./column-split.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, buildAlertsCommand, updateHeaderVar, installInputGuard, setPaneProjectColor, statusRenderedHeight, usageRenderedHeight } from "./header.js";
@@ -88,7 +89,14 @@ export function ensureDashboard(): void {
     try { tmux("set-option", "-t", DASHBOARD_SESSION, "history-limit", "1000000"); } catch { /* ignore */ }
 
     if (healed.activePaneId) {
-      try { tmux("resize-pane", "-t", healed.activePaneId, "-x", `${getRightColumnPercent()}%`); } catch { /* pane may be gone */ }
+      try {
+        tmux("resize-pane", "-t", healed.activePaneId, "-x", `${getRightColumnPercent()}%`);
+        // Record what attach just applied, so the watchdog's drift check sees
+        // the panes already match and skips a redundant rebake. The state write
+        // above already happened, so this persists on its own.
+        healed.appliedLeftPercent = getLeftColumnPercent();
+        recordAppliedColumnSplit(healed.appliedLeftPercent);
+      } catch { /* pane may be gone */ }
     }
     respawnStatusPane(healed);
     respawnUsagePane(healed);
@@ -323,6 +331,8 @@ export function ensureDashboard(): void {
 
   const state: DashboardState = {
     orphanWorktreeSignature: null,
+    // Creation splits at the configured ratio, so the panes already show it.
+    appliedLeftPercent: getLeftColumnPercent(config),
     activeProject: firstProject,
     activePlot: initialActivePlot,
     statusPaneId: statusId,

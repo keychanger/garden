@@ -207,15 +207,13 @@ export async function applyLeftColumnFromMenu(value: string): Promise<void> {
     return;
   }
   log.info("garden-menu", "column split set", { data: { leftPercent: applied } });
-  // Local import for the same reason as applyBuildBranch: header/create pull
-  // the dashboard graph, and this path is only reached from a menu selection.
+  // Apply through the shared reconciler rather than driving the panes here, so
+  // the menu and the watchdog's drift check are one writer and agree on what
+  // has been applied. Awaited before the menu reopens: runMenu blocks until the
+  // operator dismisses it, so an unawaited resize would land behind the menu.
   try {
-    const { readDashState } = await import("./state.js");
-    const { USAGE_PANE_HEIGHT, presizeHiddenWindows } = await import("./create.js");
-    const { rebakePanesOnResize } = await import("./header.js");
-    const state = readDashState();
-    rebakePanesOnResize(state, USAGE_PANE_HEIGHT);
-    presizeHiddenWindows(state);
+    const { reconcileColumnSplit } = await import("./column-split.js");
+    await reconcileColumnSplit();
   } catch { /* no live dashboard, or a pane went away — config write stands */ }
   tmuxDisplay(`column split: ${formatColumnSplit(applied)}`);
   runGardenMenu();
