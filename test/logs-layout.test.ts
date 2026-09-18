@@ -4,10 +4,11 @@
 // These cover the two halves of that: identity columns measured from the names
 // that exist, and the date carried by a boundary rule instead of by every
 // timestamp.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 
 let logContent = "";
+const originalColumns = process.stdout.columns;
 
 const registry = {
   workers: {
@@ -75,9 +76,14 @@ function entry(over: Partial<{ ts: string; worker: string; msg: string; data: Re
 }
 
 beforeEach(() => {
+  process.stdout.columns = 97;
   resetWorkerMapCaches();
   resetDateRuleState();
   logContent = "";
+});
+
+afterEach(() => {
+  process.stdout.columns = originalColumns;
 });
 
 // Render the whole batch the way `garden logs` does and hand back the visible
@@ -239,6 +245,54 @@ describe("date rules in a rendered batch", () => {
 });
 
 describe("date rules while following logs", () => {
+  it.each([10, 20])("rewrites the whole wrapped entry as repeat counts grow with %i message columns", async (messageWidth) => {
+    process.stdout.columns = prettyLayout(false).messageCol + messageWidth;
+    vi.useFakeTimers();
+    const signals = ["SIGINT", "SIGTERM"] as const;
+    const originalListeners = new Set(signals.flatMap(signal => process.listeners(signal)));
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    logContent = JSON.stringify(entry({ msg: "backlog" })) + "\n";
+    vi.mocked(fs.statSync).mockImplementation(() => ({ size: Buffer.byteLength(logContent) }) as fs.Stats);
+    let appended = "";
+    vi.mocked(fs.readSync).mockImplementation((_fd, buffer) => Buffer.from(appended).copy(buffer as Buffer));
+    const pending = logs(["--follow"]);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      let previousLines = 1;
+      for (let count = 1; count <= 11; count++) {
+        appended = JSON.stringify(entry({ msg: "x".repeat(20), data: { n: 1 } })) + "\n";
+        logContent += appended;
+        writeSpy.mockClear();
+        await vi.advanceTimersByTimeAsync(1000);
+        const output = strip(writeSpy.mock.calls.map(call => String(call[0])).join(""));
+        if (count > 1) {
+          expect(output.split("\x1b[A").length - 1).toBe(previousLines - 1);
+          expect(output).toContain(`(×${count})`);
+        }
+        const rendered = output.replaceAll("\r", "").replaceAll("\x1b[K", "").replaceAll("\x1b[A", "");
+        const rows = rendered.split("\n");
+        expect(Math.max(...rows.map(row => row.length))).toBeLessThanOrEqual(process.stdout.columns);
+        expect(rows.at(-1)?.trim()).toBe("↳ n=1");
+        previousLines = rows.length;
+      }
+    } finally {
+      for (const signal of signals) {
+        for (const listener of process.listeners(signal)) {
+          if (originalListeners.has(listener)) continue;
+          if (signal === "SIGINT") (listener as () => void)();
+          process.removeListener(signal, listener);
+        }
+      }
+      await pending;
+      consoleSpy.mockRestore();
+      writeSpy.mockRestore();
+      vi.mocked(fs.statSync).mockReset();
+      vi.mocked(fs.readSync).mockReset();
+      vi.useRealTimers();
+    }
+  });
+
   it("continues the backlog's day and resets repeats before the next day's rule", async () => {
     vi.useFakeTimers();
     const signals = ["SIGINT", "SIGTERM"] as const;
@@ -301,6 +355,51 @@ describe("no rendered row overruns the pane", () => {
   function widthsOf(rendered: string): number[] {
     return strip(rendered).split("\n").map(l => l.length);
   }
+
+  it("preserves the identity row for an empty headline", () => {
+    const rendered = strip(formatPrettyEntry(entry({ worker: "fell-white-deer", msg: "" }), false));
+    expect(rendered).toContain("14:51:40");
+    expect(rendered).toContain("fell-white-deer");
+  });
+
+  it("keeps embedded headline whitespace inside the message column", () => {
+    const rendered = strip(formatPrettyEntry({
+      ...entry({ worker: "fell-white-deer", msg: "command failed:\n\tgit refused\r\nretry later" }),
+      level: "error", src: "alert",
+    }, false));
+    expect(rendered).toContain("command failed: git refused retry later");
+    expect(rendered).not.toMatch(/[\n\r\t]/);
+  });
+
+  it("keeps raw repeat counts on the original line regardless of pane width", async () => {
+    process.stdout.columns = 50;
+    const repeated = entry({ msg: longHeadline });
+    logContent = [repeated, repeated].map(e => JSON.stringify(e)).join("\n");
+    const printed: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation(line => { printed.push(strip(String(line))); });
+    try {
+      await logs(["--raw"]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(printed).toHaveLength(1);
+    expect(printed[0]).not.toContain("\n");
+    expect(printed[0]).toContain(`${longHeadline}  project=garden  (×2)`);
+  });
+
+  it("caps long headlines at four lines with an ellipsis", () => {
+    const lines = strip(formatPrettyEntry(entry({ msg: "x".repeat(4000) }), false)).split("\n");
+    expect(lines).toHaveLength(4);
+    expect(lines[3]).toMatch(/…$/);
+  });
+
+  it("puts the count on its own aligned line when the reserve cannot fit", async () => {
+    process.stdout.columns = prettyLayout(true).messageCol + 10;
+    const repeated = entry({ msg: "x".repeat(100) });
+    const printed = await renderLog(repeated, repeated);
+    expect(printed).toContain(`${" ".repeat(prettyLayout(true).messageCol)}(×2)`);
+    expect(Math.max(...printed.map(line => line.length))).toBeLessThanOrEqual(process.stdout.columns);
+  });
 
   it("wraps a long headline into the message column instead of overrunning", () => {
     process.stdout.columns = 97;

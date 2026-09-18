@@ -536,13 +536,6 @@ function projectColumnName(project: string | null): string {
   return cfg ? projectDisplayName(cfg, project) : project;
 }
 
-// Headlines wrap to the same bound as details rather than running off the
-// pane. They were emitted raw, so any message wider than the pane's message
-// column overran and the terminal re-wrapped the tail to column 0, out of
-// alignment with everything else (measured: 83 of 4000 entries at a 97-column
-// pane, the worst an alert at 412 columns). Capped at the same line count as a
-// detail so one multi-KB alert cannot take the whole pane; the full text is
-// always in the alerts view and the JSON.
 const HEADLINE_MAX_LINES = 4;
 
 // `reserve` holds columns back on the FIRST line for a suffix the caller will
@@ -572,10 +565,7 @@ export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean, res
   const msgColor = entry.level === "error" ? color.red : entry.level === "warn" ? color.yellow : "";
   const msgReset = msgColor ? color.reset : "";
   const indent = " ".repeat(layout.messageCol);
-  // Floored at 10 (wrapDetail's own give-up threshold) rather than 20: a floor
-  // WIDER than what the pane leaves is itself an overrun, which is what made
-  // every row run off a pane under ~66 columns. Below gutter+10 nothing can
-  // fit — the gutter is fixed — and wrapDetail passes the text through.
+  // Preserve wrapDetail's minimum width; narrower panes can still overflow.
   const usable = Math.max(paneWidth() - layout.messageCol, 10);
   // The headline's own wrap. Continuation lines sit at the message column with
   // no "↳ " — that glyph means "this is a detail of the message above", and a
@@ -587,7 +577,8 @@ export function formatPrettyEntry(entry: LogEntry, useRelativeTime: boolean, res
   // overflow comes off the first line's budget alone.
   const workerOverflow = Math.max((workerLabel?.length ?? 0) - layout.worker, 0);
   const headlineParts = wrapDetail(
-    headline, Math.max(usable - reserve - workerOverflow, 10), usable, HEADLINE_MAX_LINES);
+    renderDataValue(headline), Math.max(usable - reserve - workerOverflow, 10), usable, HEADLINE_MAX_LINES);
+  if (headlineParts.length === 0) headlineParts.push("");
   const headlineLines = headlineParts.map((part, i) =>
     i === 0
       ? `${color.dim}${ts}${color.reset}  ${projectStr}  ${workerStr} ${glyphColor}${glyph}${color.reset} ${msgColor}${part}${msgReset}`
@@ -859,9 +850,8 @@ function visibleWidth(s: string): number {
   return s.replace(/\x1b\[[0-9;]*m/g, "").length;
 }
 
-// (×N) goes on the headline, never on a continuation line. `indent` is the
-// message column, used only for the fallback below.
-function appendDedupSuffix(rendered: string, count: number, indent = ""): string {
+// An absent indent keeps raw mode's suffix on the original line.
+function appendDedupSuffix(rendered: string, count: number, indent?: string): string {
   if (count <= 1) return rendered;
   const suffix = `  ${color.dim}(×${count})${color.reset}`;
   const nl = rendered.indexOf("\n");
@@ -871,7 +861,7 @@ function appendDedupSuffix(rendered: string, count: number, indent = ""): string
   // pane wide enough to hold the gutter plus a wrappable message. On a pane
   // too narrow for that the reserve hits its floor, and appending anyway is
   // the one overrun the wrap cannot prevent — so the count takes its own line.
-  if (visibleWidth(first) + visibleWidth(suffix) <= paneWidth()) {
+  if (indent === undefined || visibleWidth(first) + visibleWidth(suffix) <= paneWidth()) {
     return `${first}${suffix}${rest}`;
   }
   return `${first}\n${indent}${color.dim}(×${count})${color.reset}${rest}`;
@@ -883,10 +873,8 @@ function formatDedupedEntry(d: DedupedEntry, mode: LogsMode, useRelativeTime: bo
     d.count, dedupIndent(mode, useRelativeTime));
 }
 
-// Where a wrapped-off dedup count lands: under the message column in pretty
-// mode, at the left edge in raw mode (which has no such column).
-function dedupIndent(mode: LogsMode, useRelativeTime: boolean): string {
-  return mode === "raw" ? "" : " ".repeat(prettyLayout(useRelativeTime).messageCol);
+function dedupIndent(mode: LogsMode, useRelativeTime: boolean): string | undefined {
+  return mode === "raw" ? undefined : " ".repeat(prettyLayout(useRelativeTime).messageCol);
 }
 
 // The day the last rendered row belonged to. Module-level because `--follow`
