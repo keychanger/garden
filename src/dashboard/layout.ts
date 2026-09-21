@@ -30,6 +30,7 @@ type StaleClear = "cleared" | "incoming-misfiled" | "failed";
 function clearStaleWindows(windowName: string, incomingPaneId: string): StaleClear {
   const panes = listSessionPanes();
   const incoming = panes.find(p => p.paneId === incomingPaneId);
+  let result: StaleClear = "cleared";
   for (const pane of panes) {
     if (pane.windowName !== windowName) continue;
     if (paneRunningOnlyShell(pane.paneId)) {
@@ -37,7 +38,8 @@ function clearStaleWindows(windowName: string, incomingPaneId: string): StaleCle
       continue;
     }
     if (incoming && paneHoldsWorker(pane, windowName) && paneHoldsWorker(incoming, windowName) === false) {
-      return "incoming-misfiled";
+      result = "incoming-misfiled";
+      continue;
     }
     if (!renameWindowById(pane.windowId, `_stray-${pane.windowId.replace(/^@/, "")}`)) {
       return "failed";
@@ -46,7 +48,7 @@ function clearStaleWindows(windowName: string, incomingPaneId: string): StaleCle
       data: { windowName, windowId: pane.windowId, panePath: pane.panePath },
     });
   }
-  return "cleared";
+  return result;
 }
 
 export function parkToHidden(windowName: string, state: DashboardState): string | null {
@@ -161,6 +163,7 @@ export function swapDirect(parkWindowName: string, restoreWindowName: string, st
     log.warn("layout", "swapDirect: target window missing");
     return false;
   }
+  if (panes.some(p => p.windowName === parkWindowName)) return false;
   const targetPaneId = target.paneId;
 
   // Resize only when size drifted — unconditional resize fires SIGWINCH and forces a Claude redraw per tab.

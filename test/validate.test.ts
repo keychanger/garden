@@ -347,12 +347,12 @@ describe("validateAndHeal", () => {
       expect(restoreFromHidden).not.toHaveBeenCalled();
     });
 
-    it("swaps the parked worker back in over an adopted bare shell", () => {
+    it.each(["/Users/op", WORKTREE])("swaps the parked worker back in over an adopted bare shell at %s", occupantPath => {
       // The observed sequence: a fresh shell in $HOME took the slot while the
       // real agent sat parked under the worker's own window name. Carrying the
       // worker identity onto the shell made the next park file the shell under
       // that name and quarantine the live agent as a stray.
-      slotWith("/Users/op");
+      slotWith(occupantPath);
       vi.mocked(paneRunningOnlyShell).mockImplementation((id: string) => id === "%37");
       vi.mocked(restoreFromHidden).mockImplementation((_win: string, st: DashboardState) => {
         st.activePaneId = "%4";
@@ -376,6 +376,18 @@ describe("validateAndHeal", () => {
       expect(healed.activePaneType).toBeNull();
       expect(healed.activeWindowName).toBeNull();
       expect(restoreFromHidden).not.toHaveBeenCalled();
+    });
+
+    it("keeps the adopted shell unidentified when the parked worker cannot be restored", () => {
+      slotWith(WORKTREE);
+      vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
+
+      const healed = validateAndHeal(makeState());
+
+      expect(restoreFromHidden).toHaveBeenCalledWith("_garden-worker-bold-ash", expect.anything());
+      expect(healed.activePaneId).toBe("%37");
+      expect(healed.activePaneType).toBeNull();
+      expect(healed.activeWindowName).toBeNull();
     });
   });
 

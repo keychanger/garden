@@ -175,6 +175,21 @@ describe("parkToHidden", () => {
       expect(vi.mocked(renameWindowById)).toHaveBeenCalledWith("@7", "_stray-7");
       expect(vi.mocked(newDashboardWindowPaned)).toHaveBeenCalledWith("_garden-worker-bold-ash");
     });
+
+    it("clears later stale duplicates while preserving the live worker's window", () => {
+      vi.mocked(paneRunningOnlyShell).mockImplementation(id => id !== "%30");
+      vi.mocked(listSessionPanes).mockReturnValue([
+        pane("@0", "main", "%2", { panePath: "/Users/op" }),
+        pane("@7", "_garden-worker-bold-ash", "%30", { panePath: WORKTREE }),
+        pane("@8", "_garden-worker-bold-ash", "%31"),
+      ]);
+
+      parkToHidden("_garden-worker-bold-ash", makeState());
+
+      expect(killWindowById).toHaveBeenCalledExactlyOnceWith("@8");
+      expect(renameWindowById).not.toHaveBeenCalled();
+      expect(newDashboardWindowPaned).toHaveBeenCalledWith("_stray-p2");
+    });
   });
 
   it("does not create a duplicate when a live stale window cannot be quarantined", () => {
@@ -306,6 +321,19 @@ describe("swapDirect", () => {
       pane("@5", "_garden-worker-calm-bay", "%20", targetSize),
     ];
   }
+
+  it("uses the guarded parking fallback when another window already owns the park name", () => {
+    vi.mocked(listSessionPanes).mockReturnValue([
+      ...snapshot(),
+      pane("@7", "_garden-worker-bold-ash", "%30"),
+    ]);
+    const state = makeState();
+
+    expect(swapDirect("_garden-worker-bold-ash", "_garden-worker-calm-bay", state)).toBe(false);
+    expect(tmux).not.toHaveBeenCalled();
+    expect(renameWindowById).not.toHaveBeenCalled();
+    expect(state.activePaneId).toBe("%2");
+  });
 
   it("swaps panes and renames the swapped window by id", () => {
     vi.mocked(listSessionPanes).mockReturnValue(snapshot());
