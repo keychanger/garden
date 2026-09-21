@@ -180,6 +180,20 @@ export interface NewWorkerOptions {
   };
 }
 
+/**
+ * The ⌥n entry point. Its key binding discards the route's output, so a throw
+ * reaches the operator only as tmux's bare "returned 1"; name the failure in
+ * the status line instead.
+ */
+export function newWorkerFromHotkey(): void {
+  try {
+    newWorker();
+  } catch (err) {
+    tmuxDisplay(`New worker failed: ${err instanceof Error ? err.message : String(err)}`);
+    process.exitCode = 1;
+  }
+}
+
 export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const initialState = readDashState();
   const targetProject = opts.projectName ?? initialState.activeProject;
@@ -708,46 +722,83 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       // write) need the state lock; everything slow or failure-prone already
       // finished above, so the lock is held for tmux calls alone.
       withStateLock(() => {
-        const state = readDashState();
-        if (targetProject !== state.activeProject) {
-          const plots = plotsMap(gardenConfig);
-          const activePlotProjects = state.activePlot && plots[state.activePlot]
-            ? plots[state.activePlot].projects
-            : [];
-          if (!activePlotProjects.includes(targetProject)) {
-            for (const [plotName, plot] of Object.entries(plots)) {
-              if (plot.projects.includes(targetProject)) {
-                state.activePlot = plotName;
-                break;
+        // A dead right-slot id fails every park and swap below, and a failed
+        // swap never learns a replacement id, so spawning against it either
+        // rolls back or strands the new worker in a hidden window the operator
+        // cannot reach. Repair the slot first, exactly as the validate pass
+        // would on its next tick.
+        const state = healActivePaneInState(readDashState());
+        if (!state.activePaneId) {
+          writeDashState(state);
+          throw new Error("right slot pane is gone and could not be recreated");
+        }
+        let unpark: (() => void) | null = null;
+        try {
+          if (targetProject !== state.activeProject) {
+            const plots = plotsMap(gardenConfig);
+            const activePlotProjects = state.activePlot && plots[state.activePlot]
+              ? plots[state.activePlot].projects
+              : [];
+            if (!activePlotProjects.includes(targetProject)) {
+              for (const [plotName, plot] of Object.entries(plots)) {
+                if (plot.projects.includes(targetProject)) {
+                  state.activePlot = plotName;
+                  break;
+                }
               }
             }
+            swapVisibleToProject(targetProject, project, state);
           }
-          swapVisibleToProject(targetProject, project, state);
-        }
 
-        const rightSize = state.activePaneId ? getPaneSize(state.activePaneId) : null;
-        const parkName = parkNameFor(state);
-        parkToHidden(parkName, state);
+          const rightSize = getPaneSize(state.activePaneId);
+          const parkName = parkNameFor(state);
+          const beforePark = { type: state.activePaneType, window: state.activeWindowName };
+          const tempPaneId = parkToHidden(parkName, state);
+          if (tempPaneId) {
+            unpark = () => {
+              // Only while the park's placeholder still holds the slot: once
+              // the worker pane has swapped in, the rollback's window kill is
+              // what removes it.
+              if (state.activePaneId !== tempPaneId) return;
+              restoreFromHidden(parkName, state);
+              state.activePaneType = beforePark.type;
+              state.activeWindowName = beforePark.window;
+            };
+          }
 
-        const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
-          "sh", "-c", "exec sleep 86400");
-        if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-        tmuxWorkerCommand(
-          launchPlan,
-          "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
-        );
-        if (workerPaneId) setPaneLabel(workerPaneId, workerName);
-        restoreFromHidden(workerWindowName, state);
-        // Re-apply label after swap (swap-pane may not preserve pane options)
-        if (state.activePaneId) {
-          setPaneLabel(state.activePaneId, workerName);
-          setPaneVar(state.activePaneId, "garden_clock", "1");
-          setPaneProjectColor(state.activePaneId, targetProject);
+          const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
+            "sh", "-c", "exec sleep 86400");
+          if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
+          tmuxWorkerCommand(
+            launchPlan,
+            "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
+          );
+          if (workerPaneId) setPaneLabel(workerPaneId, workerName);
+          restoreFromHidden(workerWindowName, state);
+          // Re-apply label after swap (swap-pane may not preserve pane options)
+          if (state.activePaneId) {
+            setPaneLabel(state.activePaneId, workerName);
+            setPaneVar(state.activePaneId, "garden_clock", "1");
+            setPaneProjectColor(state.activePaneId, targetProject);
+          }
+          state.activePaneType = "worker";
+          state.activeWindowName = workerWindowName;
+          state.lastActiveWorker[targetProject] = workerWindowName;
+          writeDashState(state);
+        } catch (err) {
+          // Put back what the operator was looking at, then persist whatever
+          // the swaps actually left in tmux, so the next action does not
+          // inherit a pane id that no longer sits in the right slot.
+          try {
+            unpark?.();
+          } catch (restoreErr) {
+            log.warn("workers", "could not restore the parked pane after a failed spawn", {
+              data: { error: String(restoreErr) },
+            });
+          }
+          writeDashState(state);
+          throw err;
         }
-        state.activePaneType = "worker";
-        state.activeWindowName = workerWindowName;
-        state.lastActiveWorker[targetProject] = workerWindowName;
-        writeDashState(state);
         stateForRefresh = state;
       });
     }

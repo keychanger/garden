@@ -10,7 +10,7 @@ import { printHeader, handlePaneDied, handleTitleChanged } from "./header.js";
 import { handleClaudeHook } from "./hook-dispatcher.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
-import { newWorker, killPane, bounceActiveWorker, holdActiveWorker } from "./workers.js";
+import { newWorkerFromHotkey, killPane, bounceActiveWorker, holdActiveWorker } from "./workers.js";
 import {
   continueWorker, continueWorkerAfterMerge, continueWorkerAfterMergeIfStuck,
   continueWorkerIfStuck, deliverHandoffCallbacks, rearmContinueIfDrafting, seedWorker,
@@ -115,7 +115,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
 
   // Internal subcommands called by hotkeys
   if (sub === "_switch") return switchProject(args[1]);
-  if (sub === "_new-worker") { newWorker(); return; }
+  if (sub === "_new-worker") return newWorkerFromHotkey();
   if (sub === "_focus-worker") return focusWorker();
   if (sub === "_focus-shell") return focusShell();
   if (sub === "_focus-growhouse") return focusGrowhouse();

@@ -236,7 +236,7 @@ vi.mock("../src/rules.js", () => ({
 // --- Imports (after mocks) ---
 
 import {
-  newWorker, killPane, stopWorkerByName, bounceWorker, bounceActiveWorker,
+  newWorker, newWorkerFromHotkey, killPane, stopWorkerByName, bounceWorker, bounceActiveWorker,
   decideHold, holdWorker, releaseWorker, holdActiveWorker,
 } from "../src/dashboard/workers.js";
 import { showBeads, reopenBead, unassignBead } from "../src/dashboard/beads.js";
@@ -402,13 +402,6 @@ describe("newWorker", () => {
     expect(vi.mocked(resizeWindow)).toHaveBeenCalledWith(
       "_myproject-worker-bold-ash", 120, 50,
     );
-  });
-
-  it("skips resize when activePaneId is null", () => {
-    const state = makeState({ activePaneId: null });
-    vi.mocked(readDashState).mockReturnValue(state);
-    newWorker();
-    expect(vi.mocked(resizeWindow)).not.toHaveBeenCalled();
   });
 
   it("sets pane label on new pane and restores into slot", () => {
@@ -727,6 +720,76 @@ describe("newWorker", () => {
     expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "bold-ash");
     expect(vi.mocked(writeWorkerCleanupRequest)).not.toHaveBeenCalled();
     expect(vi.mocked(dispatchWorkerCleanup)).not.toHaveBeenCalled();
+  });
+
+  it("repairs a dead right-slot id before parking, so the new worker lands in view", () => {
+    // A failed spawn left state naming %36 after that pane died; the operator's
+    // next ⌥n swapped against it and rolled back until the watchdog healed it.
+    vi.mocked(readDashState).mockReturnValue(makeState({ activePaneId: "%36" }));
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    vi.mocked(paneExists).mockImplementation(id => id !== "%36");
+    vi.mocked(listSessionPanes).mockReturnValue([
+      { paneId: "%0", windowName: "main" },
+      { paneId: "%1", windowName: "main" },
+      { paneId: "%37", windowName: "main" },
+    ] as ReturnType<typeof listSessionPanes>);
+
+    expect(newWorker()).toBe("bold-ash");
+
+    const parkedState = vi.mocked(parkToHidden).mock.calls[0][1];
+    expect(parkedState.activePaneId).toBe("%37");
+    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
+  });
+
+  it("refuses to spawn when the right slot cannot be repaired, rather than strand the worker hidden", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activePaneId: "%36" }));
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    vi.mocked(paneExists).mockReturnValue(false);
+    vi.mocked(listSessionPanes).mockReturnValue([]);
+    vi.mocked(tmuxSplit).mockImplementationOnce(() => { throw new Error("fork failed"); });
+
+    expect(() => newWorker()).toThrow(/right slot pane is gone/);
+
+    expect(vi.mocked(parkToHidden)).not.toHaveBeenCalled();
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "bold-ash");
+  });
+
+  it("a failure after parking restores the parked pane and persists the slot tmux actually holds", () => {
+    const state = makeState({ activePaneId: "%2", activeWindowName: "_myproject-worker-swift-oak" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(parkToHidden).mockImplementationOnce((_name, s) => {
+      s.activePaneId = "%60";
+      s.activePaneType = null;
+      s.activeWindowName = null;
+      return "%60";
+    });
+    vi.mocked(restoreFromHidden)
+      .mockImplementationOnce(() => { throw new Error("tmux swap-pane failed"); })
+      .mockImplementationOnce((_name, s) => { s.activePaneId = "%2"; });
+
+    expect(() => newWorker()).toThrow(/swap-pane failed/);
+
+    expect(vi.mocked(restoreFromHidden)).toHaveBeenLastCalledWith("_myproject-worker-swift-oak", state);
+    expect(vi.mocked(writeDashState)).toHaveBeenCalledWith(expect.objectContaining({
+      activePaneId: "%2",
+      activePaneType: "worker",
+      activeWindowName: "_myproject-worker-swift-oak",
+    }));
+  });
+
+  it("⌥n names a spawn failure in the status line and exits non-zero", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(restoreFromHidden).mockImplementationOnce(() => {
+      throw new Error("tmux swap-pane failed: can't find pane: %36");
+    });
+
+    newWorkerFromHotkey();
+
+    expect(vi.mocked(tmuxDisplay)).toHaveBeenCalledWith(
+      "New worker failed: tmux swap-pane failed: can't find pane: %36",
+    );
+    expect(process.exitCode).toBe(1);
+    process.exitCode = undefined;
   });
 
   it("background handoff: bails (returns null) when target project is unknown, without touching state", () => {
