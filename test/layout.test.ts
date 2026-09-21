@@ -20,6 +20,10 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   paneRunningOnlyShell: vi.fn(() => true),
 }));
 
+vi.mock("../src/dashboard/registry.js", () => ({
+  readRegistry: vi.fn(() => ({ workers: {} })),
+}));
+
 vi.mock("../src/dashboard/log.js", () => ({
   log: {
     debug: vi.fn(),
@@ -36,6 +40,7 @@ import {
   killWindowById, paneRunningOnlyShell, type SessionPane,
 } from "../src/dashboard/tmux.js";
 import type { DashboardState } from "../src/dashboard/state.js";
+import { readRegistry } from "../src/dashboard/registry.js";
 
 function pane(windowId: string, windowName: string, paneId: string, extra: Partial<SessionPane> = {}): SessionPane {
   return { windowId, windowName, paneId, width: 129, height: 58, panePath: "/tmp", ...extra };
@@ -60,6 +65,7 @@ beforeEach(() => {
   vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
   vi.mocked(renameWindowById).mockReturnValue(true);
   vi.mocked(killWindowById).mockReturnValue(true);
+  vi.mocked(readRegistry).mockReturnValue({ workers: {} });
 });
 
 describe("parkToHidden", () => {
@@ -114,6 +120,61 @@ describe("parkToHidden", () => {
 
     expect(vi.mocked(killWindowById)).not.toHaveBeenCalled();
     expect(vi.mocked(renameWindowById)).toHaveBeenCalledWith("@7", "_stray-7");
+  });
+
+  describe("when the parked pane and the stale window both claim a worker", () => {
+    const WORKTREE = "/wt/garden/bold-ash";
+    beforeEach(() => {
+      vi.mocked(readRegistry).mockReturnValue({
+        workers: { garden: [{ name: "bold-ash", worktreePath: WORKTREE }] },
+      } as unknown as ReturnType<typeof readRegistry>);
+      vi.mocked(newDashboardWindowPaned).mockReturnValue("%10");
+    });
+
+    it("keeps the live agent's window and discards a bare shell parked over it", () => {
+      // The observed sequence: state credited an empty $HOME shell (%2) with
+      // the worker's name while the real agent (%30) sat parked under it.
+      // Quarantining the name-holder hid the live worker behind the shell.
+      vi.mocked(paneRunningOnlyShell).mockImplementation((id: string) => id === "%2");
+      vi.mocked(listSessionPanes).mockReturnValue([
+        pane("@0", "main", "%2", { panePath: "/Users/op" }),
+        pane("@7", "_garden-worker-bold-ash", "%30", { panePath: WORKTREE }),
+      ]);
+      const state = makeState();
+      parkToHidden("_garden-worker-bold-ash", state);
+
+      expect(vi.mocked(renameWindowById)).not.toHaveBeenCalled();
+      expect(vi.mocked(killWindowById)).not.toHaveBeenCalled();
+      expect(vi.mocked(newDashboardWindowPaned)).toHaveBeenCalledWith("_stray-p2");
+      expect(vi.mocked(tmux)).toHaveBeenCalledWith("swap-pane", "-s", "%2", "-t", "%10");
+      expect(vi.mocked(killWindowSafe)).toHaveBeenCalledWith("_stray-p2");
+      expect(state.activePaneId).toBe("%10");
+    });
+
+    it("quarantines a live parked pane that is not the worker instead of the worker", () => {
+      vi.mocked(paneRunningOnlyShell).mockReturnValue(false);
+      vi.mocked(listSessionPanes).mockReturnValue([
+        pane("@0", "main", "%2", { panePath: "/Users/op/elsewhere" }),
+        pane("@7", "_garden-worker-bold-ash", "%30", { panePath: `${WORKTREE}/src` }),
+      ]);
+      parkToHidden("_garden-worker-bold-ash", makeState());
+
+      expect(vi.mocked(renameWindowById)).not.toHaveBeenCalled();
+      expect(vi.mocked(newDashboardWindowPaned)).toHaveBeenCalledWith("_stray-p2");
+      expect(vi.mocked(killWindowSafe)).not.toHaveBeenCalled();
+    });
+
+    it("still quarantines the stale window when the parked pane is the worker", () => {
+      vi.mocked(paneRunningOnlyShell).mockReturnValue(false);
+      vi.mocked(listSessionPanes).mockReturnValue([
+        pane("@0", "main", "%2", { panePath: WORKTREE }),
+        pane("@7", "_garden-worker-bold-ash", "%30", { panePath: "/Users/op" }),
+      ]);
+      parkToHidden("_garden-worker-bold-ash", makeState());
+
+      expect(vi.mocked(renameWindowById)).toHaveBeenCalledWith("@7", "_stray-7");
+      expect(vi.mocked(newDashboardWindowPaned)).toHaveBeenCalledWith("_garden-worker-bold-ash");
+    });
   });
 
   it("does not create a duplicate when a live stale window cannot be quarantined", () => {

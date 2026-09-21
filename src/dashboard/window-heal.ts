@@ -26,7 +26,7 @@
 // panes claiming one worker is an operator decision; see
 // feedback: never auto-cleanup workers).
 import { isWorkerWindow, isParkingWindow, parseWorkerWindow, workerWindowName } from "./window-names.js";
-import { listSessionPanes, renameWindowById, type SessionPane } from "./tmux.js";
+import { listSessionPanes, renameWindowById, paneRunningOnlyShell, type SessionPane } from "./tmux.js";
 import { readRegistry, type WorkerRegistry } from "./registry.js";
 import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
@@ -110,6 +110,21 @@ function worktreeOwner(
     if (panePath === worktree || panePath.startsWith(worktree + "/")) return owner;
   }
   return null;
+}
+
+// Whether a pane is actually running the named worker: its cwd sits inside
+// that worker's worktree and its tty runs more than a bare shell. A window
+// NAME is only a claim — a misfile can hang a worker's name on an empty shell
+// while the real agent sits elsewhere — so code choosing between claimants
+// asks the pane. null when the name is not a registered worker's window with
+// a known worktree, i.e. there is nothing to check the pane against.
+export function paneHoldsWorker(pane: Pick<SessionPane, "paneId" | "panePath">, windowName: string): boolean | null {
+  const parsed = parseWorkerWindow(windowName);
+  if (!parsed) return null;
+  const entry = (readRegistry().workers[parsed.project] ?? []).find(e => e.name === parsed.worker);
+  if (!entry?.worktreePath) return null;
+  if (!worktreeOwner(pane.panePath, new Map([[entry.worktreePath, parsed]]))) return false;
+  return !paneRunningOnlyShell(pane.paneId);
 }
 
 // Apply the plan against live tmux. Returns the number of windows renamed.

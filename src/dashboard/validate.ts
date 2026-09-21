@@ -4,7 +4,7 @@ import path from "node:path";
 import { SESSIONS_DIR, loadConfig, getRightColumnPercent } from "../config.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock } from "./state.js";
 import { mutateRegistry, readRegistry, type WorkerRegistry } from "./registry.js";
-import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, killWindowSafe, tmuxSplit, setPaneTitle, setPaneLabel, tmux, disablePaneInput, lockPaneMouse, renameWindow } from "./tmux.js";
+import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, killWindowSafe, tmuxSplit, paneRunningOnlyShell, type SessionPane, setPaneTitle, setPaneLabel, tmux, disablePaneInput, lockPaneMouse, renameWindow } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
@@ -14,6 +14,7 @@ import { gardenWindowName, workerWindowName, parkingWindowName, shellWindowName 
 import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden, restoreFromHidden } from "./layout.js";
 import { addAlert } from "./alerts.js";
+import { paneHoldsWorker } from "./window-heal.js";
 import { HEADLESS_RUNS_DIR } from "../paths.js";
 import { DASHBOARD_SESSION, dashboardExists } from "../session.js";
 import {
@@ -255,7 +256,9 @@ const MAIN_WINDOW = "main";
  * someone rebuilds it from scratch.
  *
  * Repair in ascending order of disruption:
- *   1. Adopt the pane already sitting in the slot, when only the id drifted.
+ *   1. Adopt the pane already sitting in the slot, when only the id drifted —
+ *      dropping the worker identity state claims for it when the pane is not
+ *      running that worker, and swapping the worker back in over a bare shell.
  *   2. Recreate the slot, when its pane died and tmux reflowed the window
  *      without it, then swap the project's content back in.
  *   3. Null the slot out, when even the split fails — a caller that sees null
@@ -286,13 +289,28 @@ export function healActivePaneInState(state: DashboardState): DashboardState {
 
   const occupant = findRightSlotPane(healed);
   if (occupant) {
-    // The slot itself is intact and holds real content; only our record of
-    // which pane that is went stale. Adopting the id is the whole repair —
-    // refilling would swap out content the operator can see.
-    healed.activePaneId = occupant;
+    // The slot itself is intact; only our record of which pane that is went
+    // stale. Adopting the id is the whole repair — refilling would swap out
+    // content the operator can see.
+    healed.activePaneId = occupant.paneId;
     log.info("validate", "adopted the pane occupying the right slot", {
-      data: { staleId: state.activePaneId, paneId: occupant },
+      data: { staleId: state.activePaneId, paneId: occupant.paneId },
     });
+    // The id is adopted, but the identity state recorded with it is only a
+    // claim. Carried onto a pane that is not running that worker, the next park
+    // files it under the worker's window name and the real agent — parked
+    // under that same name — gets quarantined in its place (observed
+    // 2026-09-21: a fresh shell in $HOME adopted as a codex worker).
+    const claimed = healed.activeWindowName;
+    if (claimed && paneHoldsWorker(occupant, claimed) === false) {
+      healed.activePaneType = null;
+      healed.activeWindowName = null;
+      log.warn("validate", "adopted right-slot pane is not the worker state claimed", {
+        data: { paneId: occupant.paneId, claimed, panePath: occupant.panePath },
+      });
+      // A bare shell holds nothing worth showing, so put the worker back.
+      if (paneRunningOnlyShell(occupant.paneId)) refillRightSlot(healed, claimed);
+    }
     return healed;
   }
 
@@ -330,15 +348,14 @@ export function healActivePaneInState(state: DashboardState): DashboardState {
  * a pane dies tmux drops it from the layout entirely, so "no fourth pane" is
  * exactly the case that needs a new split.
  */
-function findRightSlotPane(state: DashboardState): string | null {
+function findRightSlotPane(state: DashboardState): SessionPane | null {
   const pinned = new Set(
     [state.statusPaneId, state.usagePaneId, state.gardenShellPaneId]
       .filter((id): id is string => !!id),
   );
-  const occupant = listSessionPanes()
+  return listSessionPanes()
     .filter(p => p.windowName === MAIN_WINDOW)
-    .find(p => !pinned.has(p.paneId));
-  return occupant ? occupant.paneId : null;
+    .find(p => !pinned.has(p.paneId)) ?? null;
 }
 
 /**
@@ -368,13 +385,14 @@ function recreateRightSlot(state: DashboardState): string | null {
  * repair leaves a usable dashboard rather than an empty shell the operator has
  * to navigate out of by hand. Preference order matches a project switch: the
  * parked pane, then the last worker the operator looked at, then any worker,
- * then the project shell.
+ * then the project shell. A worker window the slot was supposed to be showing
+ * (`claimed`) outranks all of them.
  */
-function refillRightSlot(state: DashboardState): void {
+function refillRightSlot(state: DashboardState, claimed?: string): void {
   const project = state.activeProject;
   if (!project) return;
 
-  const target = pickRefillTarget(project, state);
+  const target = pickRefillTarget(project, state, claimed);
   if (!target) return;
 
   const before = state.activePaneId;
@@ -391,7 +409,10 @@ function refillRightSlot(state: DashboardState): void {
 function pickRefillTarget(
   project: string,
   state: DashboardState,
+  claimed?: string,
 ): { window: string; type: "worker" | "shell" | null } | null {
+  if (claimed && windowExists(claimed)) return { window: claimed, type: "worker" };
+
   const parked = parkingWindowName(project);
   // The parking name carries no worker name, so its type is genuinely unknown
   // — same reasoning as the parked branch of swapVisibleToProject.

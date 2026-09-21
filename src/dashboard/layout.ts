@@ -4,6 +4,7 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, newDashboardWindowPaned, getFirstPaneId, killWindowSafe, paneExists, getPaneSize, resizeWindow, listSessionPanes, renameWindowById, resizeWindowById, killWindowById, paneRunningOnlyShell } from "./tmux.js";
 import type { DashboardState } from "./state.js";
 import { log } from "./log.js";
+import { paneHoldsWorker } from "./window-heal.js";
 
 /**
  * Park the visible right pane's content into a hidden window.
@@ -17,21 +18,35 @@ import { log } from "./log.js";
 // workers along with the stale temp. Kill only bare shells; quarantine anything
 // live under a _stray- name (no -worker- pattern, so the status pane and the
 // orphan-window alert ignore it) for the watchdog's window heal to re-file.
-function clearStaleWindows(windowName: string): boolean {
-  for (const pane of listSessionPanes()) {
+//
+// The desync can also run the other way: state credits the visible pane with a
+// worker's name it does not hold, while the real agent sits parked under that
+// name. Quarantining the holder then hides the live worker behind whatever was
+// being parked (observed 2026-09-21: an empty shell displaced a codex session).
+// So when the existing pane is running the worker in its worktree and the
+// incoming one is not, the incoming pane is the misfile.
+type StaleClear = "cleared" | "incoming-misfiled" | "failed";
+
+function clearStaleWindows(windowName: string, incomingPaneId: string): StaleClear {
+  const panes = listSessionPanes();
+  const incoming = panes.find(p => p.paneId === incomingPaneId);
+  for (const pane of panes) {
     if (pane.windowName !== windowName) continue;
     if (paneRunningOnlyShell(pane.paneId)) {
-      if (!killWindowById(pane.windowId)) return false;
-    } else {
-      if (!renameWindowById(pane.windowId, `_stray-${pane.windowId.replace(/^@/, "")}`)) {
-        return false;
-      }
-      log.warn("layout", "quarantined live pane under stale window name", {
-        data: { windowName, windowId: pane.windowId, panePath: pane.panePath },
-      });
+      if (!killWindowById(pane.windowId)) return "failed";
+      continue;
     }
+    if (incoming && paneHoldsWorker(pane, windowName) && paneHoldsWorker(incoming, windowName) === false) {
+      return "incoming-misfiled";
+    }
+    if (!renameWindowById(pane.windowId, `_stray-${pane.windowId.replace(/^@/, "")}`)) {
+      return "failed";
+    }
+    log.warn("layout", "quarantined live pane under stale window name", {
+      data: { windowName, windowId: pane.windowId, panePath: pane.panePath },
+    });
   }
-  return true;
+  return "cleared";
 }
 
 export function parkToHidden(windowName: string, state: DashboardState): string | null {
@@ -42,12 +57,15 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
 
   const visibleSize = getPaneSize(state.activePaneId);
 
-  if (!clearStaleWindows(windowName)) {
+  const cleared = clearStaleWindows(windowName, state.activePaneId);
+  if (cleared === "failed") {
     log.error("layout", "parkToHidden: could not clear stale window", { data: { windowName } });
     throw new Error(`Could not clear stale tmux window '${windowName}'`);
   }
+  const misfiledPaneId = cleared === "incoming-misfiled" ? state.activePaneId : null;
+  const parkName = misfiledPaneId ? `_stray-${misfiledPaneId.replace(/^%/, "p")}` : windowName;
 
-  const tempPaneId = newDashboardWindowPaned(windowName);
+  const tempPaneId = newDashboardWindowPaned(parkName);
   if (!tempPaneId) {
     log.error("layout", "parkToHidden: failed to get pane ID for new window");
     return null;
@@ -56,12 +74,22 @@ export function parkToHidden(windowName: string, state: DashboardState): string 
   // Pre-size the hidden window to match the visible slot so swap-pane
   // does not trigger a SIGWINCH reflow on the content being parked.
   if (visibleSize) {
-    resizeWindow(windowName, visibleSize.width, visibleSize.height);
+    resizeWindow(parkName, visibleSize.width, visibleSize.height);
   }
 
   // Swap: active content goes to hidden window, temp comes to right slot
   tmux("swap-pane", "-s", state.activePaneId, "-t", tempPaneId);
-  log.debug("layout", "parked to hidden", { data: { windowName } });
+  if (misfiledPaneId) {
+    const bareShell = paneRunningOnlyShell(misfiledPaneId);
+    if (bareShell) killWindowSafe(parkName);
+    log.warn("layout", bareShell
+      ? "discarded bare shell parked under a live worker's window name"
+      : "quarantined misfiled pane; the live worker kept its window name", {
+      data: { paneId: misfiledPaneId, windowName, parkName },
+    });
+  } else {
+    log.debug("layout", "parked to hidden", { data: { windowName } });
+  }
   state.activePaneId = tempPaneId;
   state.activePaneType = null;
   state.activeWindowName = null;

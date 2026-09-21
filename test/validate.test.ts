@@ -8,6 +8,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   listSessionPanes: vi.fn(() => []),
   killWindowSafe: vi.fn(),
   tmuxSplit: vi.fn(() => "%50"),
+  paneRunningOnlyShell: vi.fn(() => false),
   setPaneTitle: vi.fn(),
   setPaneLabel: vi.fn(),
   getPaneSize: vi.fn(() => null),
@@ -104,7 +105,7 @@ vi.mock("../src/session.js", () => ({
 import fs from "node:fs";
 import { validateAndHeal, sweepGhostEntries, healStatusPane, healActivePane, cleanContextFiles, cleanOrphanedReviewWindows } from "../src/dashboard/validate.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
-import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, tmuxSplit } from "../src/dashboard/tmux.js";
+import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, tmuxSplit, paneRunningOnlyShell } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry, mutateRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 import { restoreFromHidden } from "../src/dashboard/layout.js";
@@ -140,6 +141,7 @@ beforeEach(() => {
   vi.mocked(restoreFromHidden).mockImplementation(() => {});
   vi.mocked(readRegistry).mockReturnValue({ workers: {} });
   vi.mocked(dashboardExists).mockReturnValue(true);
+  vi.mocked(paneRunningOnlyShell).mockReturnValue(false);
 });
 
 describe("healActivePane", () => {
@@ -317,6 +319,64 @@ describe("validateAndHeal", () => {
     expect(healed.activePaneId).toBe("%7");
     expect(tmuxSplit).not.toHaveBeenCalled();
     expect(restoreFromHidden).not.toHaveBeenCalled();
+  });
+
+  describe("when state claims the slot holds a worker", () => {
+    const WORKTREE = "/wt/garden/bold-ash";
+    function slotWith(occupantPath: string) {
+      vi.mocked(paneExists).mockImplementation((id: string) => id !== "%2");
+      vi.mocked(readRegistry).mockReturnValue({
+        workers: { garden: [{ name: "bold-ash", worktreePath: WORKTREE }] },
+      } as unknown as ReturnType<typeof readRegistry>);
+      vi.mocked(listSessionPanes).mockReturnValue([
+        { windowId: "@0", windowName: "main", paneId: "%0", width: 40, height: 10, panePath: "/" },
+        { windowId: "@0", windowName: "main", paneId: "%3", width: 40, height: 5, panePath: "/" },
+        { windowId: "@0", windowName: "main", paneId: "%1", width: 40, height: 20, panePath: "/" },
+        { windowId: "@0", windowName: "main", paneId: "%37", width: 80, height: 35, panePath: occupantPath },
+      ]);
+    }
+
+    it("keeps the identity when the adopted pane is running that worker", () => {
+      slotWith(`${WORKTREE}/src`);
+
+      const healed = validateAndHeal(makeState());
+
+      expect(healed.activePaneId).toBe("%37");
+      expect(healed.activePaneType).toBe("worker");
+      expect(healed.activeWindowName).toBe("_garden-worker-bold-ash");
+      expect(restoreFromHidden).not.toHaveBeenCalled();
+    });
+
+    it("swaps the parked worker back in over an adopted bare shell", () => {
+      // The observed sequence: a fresh shell in $HOME took the slot while the
+      // real agent sat parked under the worker's own window name. Carrying the
+      // worker identity onto the shell made the next park file the shell under
+      // that name and quarantine the live agent as a stray.
+      slotWith("/Users/op");
+      vi.mocked(paneRunningOnlyShell).mockImplementation((id: string) => id === "%37");
+      vi.mocked(restoreFromHidden).mockImplementation((_win: string, st: DashboardState) => {
+        st.activePaneId = "%4";
+      });
+
+      const healed = validateAndHeal(makeState());
+
+      expect(restoreFromHidden).toHaveBeenCalledTimes(1);
+      expect(restoreFromHidden).toHaveBeenCalledWith("_garden-worker-bold-ash", expect.anything());
+      expect(healed.activePaneId).toBe("%4");
+      expect(healed.activePaneType).toBe("worker");
+      expect(healed.activeWindowName).toBe("_garden-worker-bold-ash");
+    });
+
+    it("drops the identity but keeps a live pane that is running something else", () => {
+      slotWith("/Users/op/elsewhere");
+
+      const healed = validateAndHeal(makeState());
+
+      expect(healed.activePaneId).toBe("%37");
+      expect(healed.activePaneType).toBeNull();
+      expect(healed.activeWindowName).toBeNull();
+      expect(restoreFromHidden).not.toHaveBeenCalled();
+    });
   });
 
   it("recreates the right slot full-height when its pane is gone from the layout", () => {
