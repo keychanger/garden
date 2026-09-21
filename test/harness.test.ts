@@ -868,6 +868,15 @@ describe("promptReady (harness boot probe)", () => {
     expect(getHarnessCore("codex").promptReady!(BOOTED)).toBe(true);
   });
 
+  // Codex 0.155.1 paints an ambient braille starfield across the empty composer
+  // row (burnt-mild-reed, 2026-09-21). An exact-match probe missed it and every
+  // handoff into Codex fell back to the 180s backstop again.
+  it("reports a booted Codex composer as ready through its braille starfield", async () => {
+    const { getHarnessCore } = await importCore();
+    const starfield = "› Ask Codex to do anything⡀    ⠈          ⠂   ⠁   ⠁            ⠄              ⠁";
+    expect(getHarnessCore("codex").promptReady!(`\n${starfield}\n`)).toBe(true);
+  });
+
   // The glyph alone would say "ready" here and the seed would be pasted into a
   // menu, where Enter picks a menu item and the briefing is lost to a retry.
   it("does not report a Codex startup dialog as ready", async () => {

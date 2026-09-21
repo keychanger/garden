@@ -43,6 +43,11 @@ export const CODEX_AWAITING_TASK = "awaiting task";
 // therefore degrades to the backstop, never to a misdirected paste.
 const CODEX_PROMPT_MARKER = "\u203a";
 const CODEX_COMPOSER_PLACEHOLDER = "Ask Codex to do anything";
+// Codex 0.155 draws an ambient braille starfield across the empty composer row
+// (`› Ask Codex to do anything⡀    ⠈   ⠂`), so the row is compared with the
+// braille block removed. No placeholder or menu text uses braille, so this
+// keeps the probe exactly as precise as before.
+const BRAILLE_PATTERNS = /[\u2800-\u28ff]/g;
 
 // Garden's lifecycle hooks for a Codex WORKER, injected into the launch command
 // as `-c` config overrides rather than a .codex/hooks.json file. Verified
@@ -380,7 +385,7 @@ export const codexCore: HarnessCore = {
   // says the same thing SessionStart does, only later.
   promptReady(paneText: string): boolean {
     return paneText.split("\n").some((line) => {
-      const trimmed = line.trim();
+      const trimmed = line.replace(BRAILLE_PATTERNS, "").trim();
       if (!trimmed.startsWith(CODEX_PROMPT_MARKER)) return false;
       return trimmed.slice(CODEX_PROMPT_MARKER.length).trim() === CODEX_COMPOSER_PLACEHOLDER;
     });
