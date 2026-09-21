@@ -752,19 +752,24 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
           const rightSize = getPaneSize(state.activePaneId);
           const parkName = parkNameFor(state);
-          const beforePark = { type: state.activePaneType, window: state.activeWindowName };
+          const beforePark = {
+            paneId: state.activePaneId,
+            type: state.activePaneType,
+            window: state.activeWindowName,
+            lastWorker: state.lastActiveWorker[targetProject],
+          };
           const tempPaneId = parkToHidden(parkName, state);
-          if (tempPaneId) {
-            unpark = () => {
-              // Only while the park's placeholder still holds the slot: once
-              // the worker pane has swapped in, the rollback's window kill is
-              // what removes it.
-              if (state.activePaneId !== tempPaneId) return;
-              restoreFromHidden(parkName, state);
-              state.activePaneType = beforePark.type;
-              state.activeWindowName = beforePark.window;
-            };
-          }
+          if (!tempPaneId) throw new Error("could not park the visible pane before spawning a worker");
+          unpark = () => {
+            restoreFromHidden(parkName, state);
+            if (state.activePaneId !== beforePark.paneId) {
+              throw new Error("could not restore the parked pane after a failed spawn");
+            }
+            state.activePaneType = beforePark.type;
+            state.activeWindowName = beforePark.window;
+            if (beforePark.lastWorker) state.lastActiveWorker[targetProject] = beforePark.lastWorker;
+            else delete state.lastActiveWorker[targetProject];
+          };
 
           const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
             "sh", "-c", "exec sleep 86400");
@@ -775,6 +780,9 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
           );
           if (workerPaneId) setPaneLabel(workerPaneId, workerName);
           restoreFromHidden(workerWindowName, state);
+          if (state.activePaneId !== workerPaneId) {
+            throw new Error("could not restore the new worker into the right slot");
+          }
           // Re-apply label after swap (swap-pane may not preserve pane options)
           if (state.activePaneId) {
             setPaneLabel(state.activePaneId, workerName);

@@ -294,6 +294,8 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(parkToHidden).mockReset();
+  vi.mocked(restoreFromHidden).mockReset();
   // Reset default mock return values
   vi.mocked(paneExists).mockReturnValue(true);
   vi.mocked(windowExists).mockReturnValue(true);
@@ -323,6 +325,20 @@ beforeEach(() => {
 // =============================================================================
 
 describe("newWorker", () => {
+  beforeEach(() => {
+    const parkedPanes = new Map<string, string>();
+    vi.mocked(parkToHidden).mockImplementation((name, state) => {
+      if (!state.activePaneId) return null;
+      parkedPanes.set(name, state.activePaneId);
+      state.activePaneId = "%60";
+      state.activePaneType = null;
+      state.activeWindowName = null;
+      return "%60";
+    });
+    vi.mocked(restoreFromHidden).mockImplementation((name, state) => {
+      state.activePaneId = parkedPanes.get(name) ?? "%10";
+    });
+  });
   it("shows error when no active project", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: null }));
     newWorker();
@@ -418,9 +434,9 @@ describe("newWorker", () => {
     // Should call setPaneLabel twice: once on the new pane, once on activePaneId after swap
     const calls = vi.mocked(setPaneLabel).mock.calls;
     expect(calls.length).toBe(2);
-    expect(calls[1]).toEqual(["%2", "bold-ash"]);
+    expect(calls[1]).toEqual(["%10", "bold-ash"]);
     // The now-visible worker pane gets a wall clock in its border.
-    expect(vi.mocked(setPaneVar)).toHaveBeenCalledWith("%2", "garden_clock", "1");
+    expect(vi.mocked(setPaneVar)).toHaveBeenCalledWith("%10", "garden_clock", "1");
   });
 
   it("adds worker to registry with correct fields", () => {
@@ -736,9 +752,26 @@ describe("newWorker", () => {
 
     expect(newWorker()).toBe("bold-ash");
 
-    const parkedState = vi.mocked(parkToHidden).mock.calls[0][1];
-    expect(parkedState.activePaneId).toBe("%37");
+    expect(getPaneSize).toHaveBeenCalledWith("%37");
+    expect(writeDashState).toHaveBeenCalledWith(expect.objectContaining({
+      activePaneId: "%10", activeWindowName: "_myproject-worker-bold-ash",
+    }));
     expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
+  });
+
+  it.each([null, "%36"])("recreates a missing right slot before spawning when its recorded id is %s", activePaneId => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activePaneId }));
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    vi.mocked(paneExists).mockImplementation(id => id !== "%36");
+    vi.mocked(windowExists).mockReturnValue(false);
+
+    expect(newWorker()).toBe("bold-ash");
+
+    expect(tmuxSplit).toHaveBeenCalled();
+    expect(getPaneSize).toHaveBeenCalledWith("%50");
+    expect(writeDashState).toHaveBeenCalledWith(expect.objectContaining({
+      activePaneId: "%10", activePaneType: "worker", activeWindowName: "_myproject-worker-bold-ash",
+    }));
   });
 
   it("refuses to spawn when the right slot cannot be repaired, rather than strand the worker hidden", () => {
@@ -775,6 +808,64 @@ describe("newWorker", () => {
       activePaneType: "worker",
       activeWindowName: "_myproject-worker-swift-oak",
     }));
+  });
+
+  it("refuses to create a worker when parking returns no placeholder", () => {
+    const state = makeState();
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(parkToHidden).mockReturnValueOnce(null);
+
+    expect(() => newWorker()).toThrow(/could not park/);
+
+    expect(newDashboardWindowPaned).not.toHaveBeenCalled();
+    expect(restoreFromHidden).not.toHaveBeenCalled();
+    expect(state.activePaneId).toBe("%2");
+    expect(state.activeWindowName).toBe("_myproject-worker-swift-oak");
+    expect(removeWorker).toHaveBeenCalledWith("myproject", "bold-ash");
+  });
+
+  it("rolls back when restoring the new worker silently does not swap", () => {
+    const state = makeState();
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(restoreFromHidden).mockImplementationOnce(() => {});
+
+    expect(() => newWorker()).toThrow(/could not restore the new worker/);
+
+    expect(state.activePaneId).toBe("%2");
+    expect(state.activeWindowName).toBe("_myproject-worker-swift-oak");
+    expect(removeWorker).toHaveBeenCalledWith("myproject", "bold-ash");
+    expect(recordWorkerCreated).not.toHaveBeenCalled();
+  });
+
+  it.each(["no-op", "throw"])("leaves the placeholder unidentified when rollback restore is a %s", failure => {
+    const state = makeState();
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(newDashboardWindowPaned).mockImplementationOnce(() => { throw new Error("spawn failed"); });
+    vi.mocked(restoreFromHidden).mockImplementationOnce(() => {
+      if (failure === "throw") throw new Error("restore failed");
+    });
+
+    expect(() => newWorker()).toThrow("spawn failed");
+
+    expect(writeDashState).toHaveBeenCalledWith(expect.objectContaining({
+      activePaneId: "%60", activePaneType: null, activeWindowName: null,
+    }));
+    expect(removeWorker).toHaveBeenCalledWith("myproject", "bold-ash");
+  });
+
+  it("restores the previous worker if state persistence fails after the new pane is visible", () => {
+    const state = makeState({ lastActiveWorker: { myproject: "_myproject-worker-swift-oak" } });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(writeDashState).mockImplementationOnce(() => { throw new Error("state write failed"); });
+
+    expect(() => newWorker()).toThrow("state write failed");
+
+    expect(restoreFromHidden).toHaveBeenLastCalledWith("_myproject-worker-swift-oak", state);
+    expect(writeDashState).toHaveBeenLastCalledWith(expect.objectContaining({
+      activePaneId: "%2", activePaneType: "worker", activeWindowName: "_myproject-worker-swift-oak",
+      lastActiveWorker: { myproject: "_myproject-worker-swift-oak" },
+    }));
+    expect(removeWorker).toHaveBeenCalledWith("myproject", "bold-ash");
   });
 
   it("⌥n names a spawn failure in the status line and exits non-zero", () => {
