@@ -491,6 +491,77 @@ describe("handleClaudeHook — core events", () => {
     expect(entry.blockedAt).toBeUndefined();
   });
 
+  // A `!` shell command typed into the pane (the usual answer to "run gcloud
+  // auth login") starts a new turn without firing UserPromptSubmit. The row
+  // kept reading `asking` while the worker carried on, and auto-continue
+  // stayed suppressed. The resumed turn's tool calls are the evidence instead.
+  it("stop stamps the end of a blocked turn", () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      blockedQuestion: "Run gcloud auth login?",
+      blockedAt: 123,
+    });
+    setCwd("garden", "bold-ash");
+    handleClaudeHook("stop");
+    expect(entries.garden.find(e => e.name === "bold-ash")!.blockedTurnEndedAt).toEqual(expect.any(Number));
+  });
+
+  it("stop does not stamp an unblocked worker or a Codex worker", () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
+    seedWorker("garden", "calm-oak", {
+      agentStatus: "working",
+      harness: "codex",
+      blockedQuestion: "Run gcloud auth login?",
+      blockedAt: 123,
+    });
+    setCwd("garden", "bold-ash");
+    handleClaudeHook("stop");
+    setCwd("garden", "calm-oak");
+    handleClaudeHook("stop");
+    expect(entries.garden.find(e => e.name === "bold-ash")!.blockedTurnEndedAt).toBeUndefined();
+    expect(entries.garden.find(e => e.name === "calm-oak")!.blockedTurnEndedAt).toBeUndefined();
+  });
+
+  it("a main-thread tool call after the blocked turn ended clears the block", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      blockedQuestion: "Run gcloud auth login?",
+      blockedAt: 123,
+      blockedTurnEndedAt: 456,
+    });
+    setCwd("garden", "bold-ash");
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.existsSync).mockImplementation(() => false);
+
+    handleClaudeHook("posttooluse");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.agentStatus).toBe("working");
+    expect(entry.blockedQuestion).toBeUndefined();
+    expect(entry.blockedAt).toBeUndefined();
+    expect(entry.blockedTurnEndedAt).toBeUndefined();
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-awaiting-input");
+  });
+
+  // The `garden blocked` call is itself a tool call in the turn that asks.
+  it("a tool call in the turn that asked keeps the block", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      blockedQuestion: "Run gcloud auth login?",
+      blockedAt: 123,
+    });
+    setCwd("garden", "bold-ash");
+    const fs = (await import("node:fs")).default;
+
+    handleClaudeHook("posttooluse");
+
+    expect(entries.garden.find(e => e.name === "bold-ash")!.blockedQuestion).toBe("Run gcloud auth login?");
+    expect(fs.unlinkSync).not.toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-awaiting-input");
+  });
+
   it("stop sets idle from any prior state", () => {
     seedWorker("garden", "bold-ash", { agentStatus: "working" });
     setCwd("garden", "bold-ash");

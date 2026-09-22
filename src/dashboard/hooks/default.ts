@@ -31,7 +31,7 @@ import {
   updateWorkerFieldsIf, type WorkerEntry,
 } from "../registry.js";
 import { getPaneTitle } from "../tmux.js";
-import { resolveWorkerActivity } from "../harness/core.js";
+import { DEFAULT_HARNESS, resolveWorkerActivity } from "../harness/core.js";
 import { CODEX_AWAITING_TASK } from "../harness/codex-core.js";
 import { maybeRefreshUsage } from "../usage.js";
 import { resolveGardenRunner } from "../runner.js";
@@ -231,7 +231,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt" | "blockedQuestion" | "blockedAt">>;
+  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt" | "blockedQuestion" | "blockedAt" | "blockedTurnEndedAt">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -427,18 +427,32 @@ const onPromptSubmitted: HookMethod = (ctx) => {
   // resume` refuses a pathless worker, leaving the operator no way to clear a row
   // that is asking them for an answer they already gave. Sharing one predicate
   // with the consumer makes that class of disagreement unrepresentable.
-  if ((ctx.workerInfo.entry.blockedQuestion !== undefined
-      || ctx.workerInfo.entry.blockedAt !== undefined)
-      && !isAwaitingInput(ctx.workerInfo.entry.worktreePath)) {
-    fields.blockedQuestion = undefined;
-    fields.blockedAt = undefined;
-  }
+  clearAnsweredBlock(ctx.workerInfo.entry, fields);
   applyAndLog(ctx, fields);
 };
 
+function clearAnsweredBlock(entry: WorkerEntry, fields: FieldsDelta): void {
+  if ((entry.blockedQuestion !== undefined || entry.blockedAt !== undefined)
+      && !isAwaitingInput(entry.worktreePath)) {
+    fields.blockedQuestion = undefined;
+    fields.blockedAt = undefined;
+    fields.blockedTurnEndedAt = undefined;
+  }
+}
+
 const onTurnEnded: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
-  applyAndLog(ctx, { agentStatus: "idle" });
+  const fields: FieldsDelta = { agentStatus: "idle" };
+  // Marks the end of the turn that asked, so a main-thread tool call after it
+  // can be read as the worker resuming (onToolActivity). claude-code only:
+  // Codex fires Stop mid-turn and keeps firing PostToolUse after it, so a
+  // stamp there would clear a question in the very turn that raised it.
+  const { entry } = ctx.workerInfo;
+  if (entry.blockedAt !== undefined && entry.blockedTurnEndedAt === undefined
+      && (entry.harness ?? DEFAULT_HARNESS) === DEFAULT_HARNESS) {
+    fields.blockedTurnEndedAt = Date.now();
+  }
+  applyAndLog(ctx, fields);
   // routeStopHookEnd reads the registry fresh — the applyAndLog above has
   // already written agentStatus="idle". See STATUS.md invariant 2 (review
   // entry) and invariant 4 (merged stickiness).
@@ -479,6 +493,15 @@ const onToolActivity: HookMethod = (ctx) => {
   const cs = ctx.workerInfo.entry.agentStatus;
   if (!isSubagentEvent(ctx)) {
     if (cs === "asking" || cs === "idle") fields.agentStatus = "working";
+    // The worker is running again after the turn that asked had ended, so it
+    // has its answer. Not every answer arrives as a prompt: a `!` shell command
+    // typed into the pane (`! gcloud auth login`, the fix a blocked worker most
+    // often asks for) starts a new turn without firing UserPromptSubmit, and
+    // the row kept reading `asking` while the worker went on with the task.
+    if (ctx.workerInfo.entry.blockedTurnEndedAt !== undefined) {
+      clearAwaitingInput(ctx.workerInfo.entry.worktreePath);
+      clearAnsweredBlock(ctx.workerInfo.entry, fields);
+    }
   } else {
     // A subagent completing a tool is proof the worker's background work
     // (Task agents, Workflow runs) is still executing even when the main

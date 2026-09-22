@@ -213,11 +213,16 @@ export interface WorkerEntry {
   // Orthogonal to prState by design: a worker can be blocked while `merged`,
   // or with no prState at all, so this is a field rather than a state. Cleared
   // by the operator's next prompt (hooks/default.ts onPromptSubmitted), which
-  // is also what clears the sentinel that gates auto-continue.
+  // is also what clears the sentinel that gates auto-continue, or by the
+  // worker resuming after the blocking turn ended (onToolActivity).
   blockedQuestion?: string;
   // Start of the current blocked episode. Rewording a standing question keeps
   // its elapsed time, while a later human gate starts a fresh timer.
   blockedAt?: number;
+  // Epoch ms when the turn that raised the current block ended (Stop hook).
+  // A main-thread tool call after it means the worker resumed, which clears the
+  // block even when no prompt fired — see hooks/default.ts onToolActivity.
+  blockedTurnEndedAt?: number;
   // Epoch ms when a mutating tool call (Edit/Write) completed on the worker
   // while its review was in flight (stamped by hooks/default.ts). The reviewer
   // shares the worker's worktree, so the tree under review is being rewritten;
@@ -778,7 +783,7 @@ const GUARDED_STRING_FIELDS = [
   "handoffRequestId", "blockedQuestion",
 ] as const;
 
-const GUARDED_NUMBER_FIELDS = ["continueSentAt", "titleGeneratedAt", "blockedAt"] as const;
+const GUARDED_NUMBER_FIELDS = ["continueSentAt", "titleGeneratedAt", "blockedAt", "blockedTurnEndedAt"] as const;
 
 function isWorkerRegistry(x: unknown): x is WorkerRegistry {
   if (!x || typeof x !== "object") return false;

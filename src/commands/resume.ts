@@ -43,6 +43,7 @@ export async function resume(args: string[]): Promise<void> {
     updateWorkerFields(project, workerName, {
       blockedQuestion: undefined,
       blockedAt: undefined,
+      blockedTurnEndedAt: undefined,
     });
     // Non-fatal for the same reason as blockWorker's: the unblock has already
     // landed in the registry, so a repaint that cannot reach tmux must not turn

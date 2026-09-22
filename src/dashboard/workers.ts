@@ -1491,7 +1491,7 @@ export function blockWorker(project: string, worker: string, question: string): 
   }
   const blockedAt = entry.blockedAt ?? Date.now();
   try {
-    updateWorkerFields(project, worker, { blockedQuestion: text, blockedAt });
+    updateWorkerFields(project, worker, { blockedQuestion: text, blockedAt, blockedTurnEndedAt: undefined });
   } catch (err) {
     clearAwaitingInput(entry.worktreePath);
     return {

@@ -55,6 +55,7 @@ vi.mock("../src/config.js", () => ({
 import { workerHookHandlers } from "../src/dashboard/hooks/default.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
+import { clearAwaitingInput } from "../src/dashboard/continue.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 import type { HookContext } from "../src/dashboard/workflows/types.js";
@@ -195,6 +196,20 @@ describe("onToolActivity — subagent tool calls never move agentStatus", () => 
   it("still self-heals a stale `idle` on the worker's own tool completion", () => {
     workerHookHandlers.onToolActivity(toolCtx({ agentStatus: "idle" }, "Read"));
     expect(statusWrites()).toEqual(["working"]);
+  });
+
+  // A background subagent can finish after the blocked turn ended; that is not
+  // the worker resuming, so the question and its sentinel stay.
+  it("keeps a blocked question when a subagent completes a tool after the turn ended", () => {
+    workerHookHandlers.onToolActivity(toolCtx({
+      agentStatus: "idle",
+      blockedQuestion: "Run gcloud auth login?",
+      blockedAt: 123,
+      blockedTurnEndedAt: 456,
+    }, "Bash", "a6159cebbfb14984c"));
+    expect(clearAwaitingInput).not.toHaveBeenCalled();
+    expect(vi.mocked(updateWorkerFields).mock.calls
+      .some(c => "blockedQuestion" in (c[2] as Record<string, unknown>))).toBe(false);
   });
 
   it("leaves other statuses alone whichever thread the tool ran on", () => {
