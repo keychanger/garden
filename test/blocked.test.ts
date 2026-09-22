@@ -50,6 +50,18 @@ async function readAlertMessages(): Promise<string[]> {
 describe("blockWorker", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it("re-blocking resets the ended-turn marker while preserving the question's elapsed time", async () => {
+    seedWorker({ blockedQuestion: "Which shape?", blockedAt: 123, blockedTurnEndedAt: 456 });
+    const { blockWorker } = await import("../src/dashboard/workers.js");
+
+    expect(blockWorker("proj", "alpha", "Still need a shape?").ok).toBe(true);
+
+    const entry = await readEntry();
+    expect(entry?.blockedQuestion).toBe("Still need a shape?");
+    expect(entry?.blockedAt).toBe(123);
+    expect(entry?.blockedTurnEndedAt).toBeUndefined();
+  });
+
   it("writes the human-gate sentinel and stamps the question", async () => {
     const { worktree } = seedWorker();
     const { blockWorker } = await import("../src/dashboard/workers.js");
@@ -249,6 +261,8 @@ describe("garden resume", () => {
     const { worktree } = seedWorker();
     const { blockWorker } = await import("../src/dashboard/workers.js");
     blockWorker("proj", "alpha", "Which shape?");
+    const { updateWorkerFields } = await import("../src/dashboard/registry.js");
+    updateWorkerFields("proj", "alpha", { blockedTurnEndedAt: 456 });
     const { resume } = await import("../src/commands/resume.js");
 
     const lines = await captureConsoleLog(() => resume(["alpha"]));
@@ -256,6 +270,7 @@ describe("garden resume", () => {
     expect(fs.existsSync(path.join(worktree, ".garden-awaiting-input"))).toBe(false);
     expect((await readEntry())?.blockedQuestion).toBeUndefined();
     expect((await readEntry())?.blockedAt).toBeUndefined();
+    expect((await readEntry())?.blockedTurnEndedAt).toBeUndefined();
     expect(lines.join("\n")).toContain("auto-continue will fire");
   });
 

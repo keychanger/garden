@@ -545,6 +545,45 @@ describe("handleClaudeHook — core events", () => {
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-awaiting-input");
   });
 
+  it("retries clearing a block without throttling or hiding the row change", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      blockedQuestion: "Run gcloud auth login?",
+      blockedAt: 123,
+      blockedTurnEndedAt: 456,
+    });
+    setCwd("garden", "bold-ash");
+    const fs = (await import("node:fs")).default;
+    let awaiting = true;
+    vi.mocked(fs.existsSync).mockImplementation(p =>
+      awaiting && String(p).endsWith(".garden-awaiting-input"));
+    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => {
+      throw Object.assign(new Error("denied"), { code: "EACCES" });
+    });
+
+    handleClaudeHook("posttooluse");
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.agentStatus).toBe("working");
+    expect(entry.blockedQuestion).toBe("Run gcloud auth login?");
+    expect(entry.blockedTurnEndedAt).toBe(456);
+    const transitionAt = entry.lastStateChangeAt;
+    vi.mocked(fs.unlinkSync).mockImplementationOnce(() => { awaiting = false; });
+    const header = await import("../src/dashboard/header.js");
+    const refresh = vi.spyOn(header, "refreshDashboard");
+
+    handleClaudeHook("posttooluse");
+    const repaints = refresh.mock.calls.length;
+    refresh.mockRestore();
+
+    expect(awaiting).toBe(false);
+    expect(entry.blockedQuestion).toBeUndefined();
+    expect(entry.blockedAt).toBeUndefined();
+    expect(entry.blockedTurnEndedAt).toBeUndefined();
+    expect(entry.lastStateChangeAt).toBe(transitionAt);
+    expect(repaints).toBe(1);
+  });
+
   // The `garden blocked` call is itself a tool call in the turn that asks.
   it("a tool call in the turn that asked keeps the block", async () => {
     seedWorker("garden", "bold-ash", {

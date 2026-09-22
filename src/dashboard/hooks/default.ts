@@ -259,6 +259,7 @@ function applyAndLog(
   // state change and always takes the full path below — the STATUS.md state
   // machine is untouched.
   const stateChanged = fields.agentStatus !== undefined || fields.prState !== undefined;
+  const blockCleared = "blockedQuestion" in fields;
   const now = Date.now();
   const activityUnset = ctx.workerInfo.entry.harness === "codex"
     && (!ctx.workerInfo.entry.task
@@ -272,7 +273,7 @@ function applyAndLog(
   const delegatingChanged = fields.subagentActivityAt !== undefined
     && isDelegating({ ...ctx.workerInfo.entry, subagentActivityAt: fields.subagentActivityAt }, now)
       !== isDelegating(ctx.workerInfo.entry, now);
-  if (!stateChanged && !activityUnset && !delegatingChanged
+  if (!stateChanged && !blockCleared && !activityUnset && !delegatingChanged
       && now - (ctx.workerInfo.entry.lastEventAt ?? 0) < HOOK_HEARTBEAT_MS) {
     return;
   }
@@ -365,7 +366,7 @@ function applyAndLog(
   // Skip the dashboard cascade when nothing visible changed — pretooluse and
   // posttooluse fire on every Claude tool call and dominate hook traffic, but
   // most don't flip agentStatus (the cs guards above narrow the writes).
-  if (stateChanged || taskChanged || delegatingChanged) refreshDashboard();
+  if (stateChanged || blockCleared || taskChanged || delegatingChanged) refreshDashboard();
 }
 
 // ---------------------------------------------------------------------------

@@ -77,6 +77,7 @@ describe("readRegistry", () => {
       { name: "w", titleGeneratedAt: "recent" },
       { name: "w", blockedQuestion: ["forged"] },
       { name: "w", blockedAt: "recent" },
+      { name: "w", blockedTurnEndedAt: "recent" },
       { name: "w", pendingHandoffCallbacks: "forged" },
       { name: "w", pendingHandoffCallbacks: ["valid", 42] },
     ]) {
@@ -97,6 +98,7 @@ describe("readRegistry", () => {
         titleGeneratedAt: 789,
         blockedQuestion: "Which shape?",
         blockedAt: 999,
+        blockedTurnEndedAt: 1000,
         pendingHandoffCallbacks: ["child settled"],
       }] },
     }));
@@ -108,6 +110,7 @@ describe("readRegistry", () => {
       titleGeneratedAt: 789,
       blockedQuestion: "Which shape?",
       blockedAt: 999,
+      blockedTurnEndedAt: 1000,
       pendingHandoffCallbacks: ["child settled"],
     });
   });
