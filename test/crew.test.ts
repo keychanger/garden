@@ -308,9 +308,11 @@ describe("stored crews", () => {
     expect(seats("all-claude")).toEqual(["fable", "opus", "fable"]);
     expect(seats("all-codex")).toEqual(["gpt-6-astra", "gpt-6-astra", "gpt-6-astra"]);
     for (const c of builtinCrews(store.value)) {
-      // Effort is the workflow's and the account's call, never the ladder's.
+      // The Claude builder pins "high" so an Opus builder never rides the
+      // account default rung; every other seat leaves effort to the workflow
+      // and harness defaults.
       expect(c.designer!.effort).toBeUndefined();
-      expect(c.worker.effort).toBeUndefined();
+      expect(c.worker.effort).toBe(c.worker.harness === "claude-code" ? "high" : undefined);
       expect(c.review.effort).toBeUndefined();
       expect(c.builtin).toBe(true);
     }

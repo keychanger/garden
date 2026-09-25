@@ -106,16 +106,21 @@ export function reviewerMembers(config: GardenConfig): CrewMember[] {
 // `claude-codex` designs on Fable, builds on Opus, and reviews on Codex's top
 // model. Codex runs Astra on every seat: it is what an unpinned Codex launch
 // takes (`DEFAULT_CODEX_MODEL`), so a crew-bound Codex worker runs the same
-// model as one spawned with no crew at all. Provider members carry no ladder:
-// their model vocabulary is the provider's own modelMap.
-const SEAT_MODELS: Record<string, { strong: string; middle: string }> = {
-  "claude-code": { strong: "fable", middle: "opus" },
+// model as one spawned with no crew at all. The Claude builder also pins
+// "high" effort, so an Opus builder does not ride whatever the account default
+// rung is; Codex's builder already gets DEFAULT_CODEX_EFFORT from launch
+// tuning. Provider members carry no ladder: their model vocabulary is the
+// provider's own modelMap.
+const SEAT_MODELS: Record<string, { strong: string; middle: string; middleEffort?: string }> = {
+  "claude-code": { strong: "fable", middle: "opus", middleEffort: "high" },
   codex: { strong: DEFAULT_CODEX_MODEL, middle: DEFAULT_CODEX_MODEL },
 };
 
 function seat(member: CrewMember, tier: "strong" | "middle"): CrewMember {
   const ladder = member.provider ? undefined : SEAT_MODELS[member.harness];
-  return ladder ? { ...member, model: ladder[tier] } : member;
+  if (!ladder) return member;
+  const effort = tier === "middle" ? ladder.middleEffort : undefined;
+  return { ...member, model: ladder[tier], ...(effort ? { effort } : {}) };
 }
 
 // The member that fills a crew's design seat. A stored crew that names no
@@ -152,9 +157,10 @@ export function findMember(name: string, config: GardenConfig): CrewMember | nul
 }
 
 // The generated builtin crews: (every member) x (every reviewer member), each
-// seat pinned by the member's harness ladder (SEAT_MODELS). Effort is left to
-// the workflow and account defaults — a generated namespace can express one
-// ladder per harness, not a rung per crew, which is what stored crews are for.
+// seat pinned by the member's harness ladder (SEAT_MODELS), including the
+// Claude builder's effort; other seats leave effort to the workflow and
+// account defaults — a generated namespace can express one ladder per
+// harness, not a rung per crew, which is what stored crews are for.
 export function builtinCrews(config: GardenConfig): CrewSpec[] {
   const crews: CrewSpec[] = [];
   for (const w of listMembers(config)) {
