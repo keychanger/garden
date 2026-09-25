@@ -117,6 +117,7 @@ function renderCodex(snap: CodexUsageSnapshot): string {
     const pct = `${String(Math.round(w.usedPercent)).padStart(3)}%`;
     rows.push(`${label}  ${pct}   resets ${formatDuration(resetsAtMs - Date.now())}`);
   }
+  if (snap.data.windows.length === 0) rows.push("no window reading yet");
   if (typeof snap.data.creditBalance === "number" && snap.data.creditBalance > 0) {
     rows.push(`credits $${snap.data.creditBalance.toFixed(2)}`);
   } else if (snap.data.creditsUnlimited) {

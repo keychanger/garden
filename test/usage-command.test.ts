@@ -66,6 +66,13 @@ describe("garden usage", () => {
     expect(text).not.toContain("91%");
   });
 
+  it("keeps the Codex section, with a placeholder, when the snapshot holds no window", async () => {
+    writeClaude();
+    writeCodex([]);
+    const text = await run(true);
+    expect(text).toMatch(/\n\ncodex\nno window reading yet\n\nfetched 5m ago$/);
+  });
+
   it("adds codex as a key beside the unchanged Claude fields when piped", async () => {
     writeClaude();
     writeCodex([{ windowMinutes: 10080, usedPercent: 91, resetsAt: 9_999_999_999 }]);

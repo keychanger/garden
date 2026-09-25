@@ -128,6 +128,8 @@ describe("codex usage meter", () => {
     expect(out).toContain("claude");
     expect(out).toContain("codex");
     expect(out).toContain("28%");
+    expect(out).toContain("no window reading yet");
+    expect(out).not.toContain("credits"); // a zero balance still carries no row
   });
 
   // Seeds a healthy Claude snapshot so the two-column path is reachable, then
@@ -887,10 +889,34 @@ process.exit(${exitCode});
       const { captureCodexUsageLatest, writeCodexUsage, readCodexUsage } =
         await import("../src/dashboard/codex-usage.js");
       writeCodexUsage({ windows: [{ windowMinutes: 10080, usedPercent: 99, resetsAt: nowS + 1000 }] });
-      captureCodexUsageLatest();
+      // The credits arrived, so the snapshot moved and the pane repaints once...
+      expect(captureCodexUsageLatest()).toBe(true);
       const snap = readCodexUsage()!;
       expect(snap.data.windows).toEqual([{ windowMinutes: 10080, usedPercent: 99, resetsAt: nowS + 1000 }]);
       expect(snap.data.creditBalance).toBe(0);
+      // ...and the same at-limit rollout on the next tick is a no-op.
+      expect(captureCodexUsageLatest()).toBe(false);
+    });
+
+    it("writes a windowless snapshot when an exhausted run is the first reading ever", async () => {
+      // No prior snapshot to borrow windows from: the credits-only reading is
+      // still worth keeping, since it is what makes the labeled Codex column
+      // appear at all (the renderer shows "no window reading yet" under it).
+      const dir = path.join(home, ".codex", "sessions", "2026", "09", "25");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "rollout-limited.jsonl"), JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          rate_limits: {
+            limit_id: "premium", primary: null, secondary: null,
+            credits: { has_credits: false, unlimited: false, balance: "0" },
+          },
+        },
+      }) + "\n");
+      const { captureCodexUsageLatest, readCodexUsage } = await import("../src/dashboard/codex-usage.js");
+      expect(captureCodexUsageLatest()).toBe(true);
+      expect(readCodexUsage()!.data).toEqual({ windows: [], creditBalance: 0, creditsUnlimited: false });
     });
 
     it("skips the write when the reading is unchanged (idle fleet never churns)", async () => {
