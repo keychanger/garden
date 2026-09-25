@@ -243,8 +243,14 @@ export function captureCodexUsageLatest(confirmedSince?: number): boolean {
   for (const rollout of findNewestRollouts(MAX_ROLLOUTS_TRIED)) {
     const reading = readCodexRateLimits(rollout);
     if (!reading) continue; // no populated reading in this one — try the next newest
-    const { data, reportedAt } = reading;
+    const { reportedAt } = reading;
     const prior = readCodexUsage();
+    // A run cut off at the quota limit reports credits but null windows. That
+    // says nothing about the windows, so keep the last ones: dropping them hid
+    // the at-limit bar and its reset timer exactly when the operator needs them.
+    const data = reading.data.windows.length === 0 && prior
+      ? { ...reading.data, windows: prior.data.windows }
+      : reading.data;
     if (prior && JSON.stringify(prior.data) === JSON.stringify(data)) {
       if (confirmedSince !== undefined && reportedAt >= confirmedSince) writeCodexUsage(data);
       return false;

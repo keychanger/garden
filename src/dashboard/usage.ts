@@ -1334,7 +1334,7 @@ function computeMeterFit(paneWidth: number | undefined): { barWidth: number; sho
 // dominating the visual top of the pane.
 export function renderUsagePane(nowMs: number = Date.now(), paneWidth?: number): string {
   const codexSnap = readCodexUsage();
-  if (!codexSnap || codexSnap.data.windows.length === 0) {
+  if (!codexSnap) {
     return finalizePane(["", ...buildClaudeLines(nowMs, paneWidth)]);
   }
 
@@ -1457,6 +1457,7 @@ function renderCodexColumn(
   // "credits" (7 chars) is one wider than LABEL_WIDTH, so it overflows the
   // shared column instead of padding to it — harmless since this row has no
   // bar to keep aligned with the window rows above it.
+  if (data.windows.length === 0) lines.push(dim("no window reading yet"));
   if (typeof data.creditBalance === "number" && data.creditBalance > 0) {
     lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim(`$${data.creditBalance.toFixed(2)}`)}`);
   } else if (data.creditsUnlimited) {

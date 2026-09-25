@@ -113,6 +113,23 @@ describe("codex usage meter", () => {
     expect(out).toContain("28%");
   });
 
+  it("keeps both labeled columns when the Codex snapshot has no windows", async () => {
+    const now = Date.now();
+    const iso = (m: number) => new Date(now + m).toISOString();
+    fs.writeFileSync(path.join(sessions, "claude-usage.json"), JSON.stringify({
+      fetchedAt: iso(0), dataAt: iso(0),
+      data: { fiveHour: { pct: 28, resetsAt: iso(4 * 3600e3) }, weekly: { pct: 20, resetsAt: iso(34 * 3600e3) }, sonnet: null },
+    }));
+    fs.writeFileSync(path.join(sessions, "codex-usage.json"), JSON.stringify({
+      capturedAt: now, data: { windows: [], creditBalance: 0, creditsUnlimited: false },
+    }));
+    const { renderUsagePane } = await import("../src/dashboard/usage.js");
+    const out = renderUsagePane(now, 120);
+    expect(out).toContain("claude");
+    expect(out).toContain("codex");
+    expect(out).toContain("28%");
+  });
+
   // Seeds a healthy Claude snapshot so the two-column path is reachable, then
   // whatever Codex data the test needs.
   function seedClaude(now: number) {
@@ -848,6 +865,32 @@ process.exit(${exitCode});
       const { captureCodexUsageLatest, readCodexUsage } = await import("../src/dashboard/codex-usage.js");
       expect(captureCodexUsageLatest()).toBe(false);
       expect(readCodexUsage()).toBeNull();
+    });
+
+    it("keeps the prior windows when an exhausted run reports only credits", async () => {
+      // Observed at the quota limit: the newest rollouts carry primary/secondary
+      // null with a "0" credit balance. That is a reading (credits), but it says
+      // nothing about the windows, so the at-limit bar and its reset timer stay.
+      const nowS = Math.floor(Date.now() / 1000);
+      const dir = path.join(home, ".codex", "sessions", "2026", "09", "25");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "rollout-limited.jsonl"), JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          rate_limits: {
+            limit_id: "premium", primary: null, secondary: null,
+            credits: { has_credits: false, unlimited: false, balance: "0" },
+          },
+        },
+      }) + "\n");
+      const { captureCodexUsageLatest, writeCodexUsage, readCodexUsage } =
+        await import("../src/dashboard/codex-usage.js");
+      writeCodexUsage({ windows: [{ windowMinutes: 10080, usedPercent: 99, resetsAt: nowS + 1000 }] });
+      captureCodexUsageLatest();
+      const snap = readCodexUsage()!;
+      expect(snap.data.windows).toEqual([{ windowMinutes: 10080, usedPercent: 99, resetsAt: nowS + 1000 }]);
+      expect(snap.data.creditBalance).toBe(0);
     });
 
     it("skips the write when the reading is unchanged (idle fleet never churns)", async () => {
