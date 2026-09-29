@@ -974,7 +974,9 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
       renderBacklog();
     }, RESIZE_REDRAW_DEBOUNCE_MS);
   };
-  if (isTTY) process.stdout.on("resize", onResize);
+  // Raw rows are never fitted to a width, so a redraw there would only cost
+  // the scrollback.
+  if (isTTY && opts.mode === "pretty") process.stdout.on("resize", onResize);
 
   // Move cursor back to the start of the previous render and clear each of
   // its lines so a multi-line entry can be rewritten in place when it repeats.
