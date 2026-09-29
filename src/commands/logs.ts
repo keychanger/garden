@@ -934,19 +934,47 @@ function printEntries(entries: LogEntry[], filters: Filters, opts: RenderOptions
   }
 }
 
+// Home the cursor, clear the screen, and drop the scrollback (ED 3) so a
+// redraw replaces everything the pane holds instead of stacking under it.
+const CLEAR_SCREEN_AND_SCROLLBACK = "\x1b[H\x1b[2J\x1b[3J";
+
+// A border drag delivers a burst of resizes; redraw once it settles.
+const RESIZE_REDRAW_DEBOUNCE_MS = 150;
+
 async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
   let lastSize = 0;
-  try {
-    lastSize = fs.statSync(LOG_FILE).size;
-  } catch { /* file doesn't exist yet */ }
-
-  const lines = readLogLines();
-  const entries = lines.map(parseLine).filter((e): e is LogEntry => e !== null);
-  printEntries(entries, filters, opts, false);
-
   let prevKey = "";
   let repeatCount = 0;
   let prevLineCount = 1;
+
+  // Every row is wrapped to the pane width at the moment it is printed, and a
+  // date rule spans that width exactly, so a pane that narrows afterward holds
+  // lines wider than itself and the terminal re-wraps them to column 0. Only a
+  // re-render can fit them to the new width, so a resize redraws the backlog.
+  const renderBacklog = () => {
+    try {
+      lastSize = fs.statSync(LOG_FILE).size;
+    } catch { lastSize = 0; }
+    resetDateRuleState();
+    const entries = readLogLines().map(parseLine).filter((e): e is LogEntry => e !== null);
+    printEntries(entries, filters, opts, false);
+    prevKey = "";
+    repeatCount = 0;
+    prevLineCount = 1;
+  };
+
+  renderBacklog();
+
+  let redrawTimer: NodeJS.Timeout | null = null;
+  const onResize = () => {
+    if (redrawTimer) clearTimeout(redrawTimer);
+    redrawTimer = setTimeout(() => {
+      redrawTimer = null;
+      process.stdout.write(CLEAR_SCREEN_AND_SCROLLBACK);
+      renderBacklog();
+    }, RESIZE_REDRAW_DEBOUNCE_MS);
+  };
+  if (isTTY) process.stdout.on("resize", onResize);
 
   // Move cursor back to the start of the previous render and clear each of
   // its lines so a multi-line entry can be rewritten in place when it repeats.
@@ -1019,6 +1047,8 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
   await new Promise<void>((resolve) => {
     const cleanup = () => {
       clearInterval(poll);
+      if (redrawTimer) clearTimeout(redrawTimer);
+      process.stdout.off("resize", onResize);
       if (prevKey) process.stdout.write("\n");
       resolve();
     };
