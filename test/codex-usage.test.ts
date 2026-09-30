@@ -205,12 +205,13 @@ describe("codex usage meter", () => {
     const nowS = Math.floor(now / 1000);
     seedCodex({
       windows: [{ windowMinutes: 43200, usedPercent: 17, resetsAt: nowS + 1_000_000 }],
-      creditBalance: 12.5,
+      creditBalance: 1250,
     }, now);
     const { renderUsagePane } = await import("../src/dashboard/usage.js");
     const out = renderUsagePane(now, 120);
     expect(out).toContain("credits");
-    expect(out).toContain("$12.50");
+    expect(out).toContain("1250");
+    expect(out).not.toContain("$");
   });
 
   it("omits the credit footer for a zero Codex balance", async () => {
@@ -256,7 +257,7 @@ describe("codex usage meter", () => {
     const { renderUsagePane } = await import("../src/dashboard/usage.js");
     const out = renderUsagePane(now, 120);
     expect(out).toContain("unlimited");
-    expect(out).not.toContain("$0.00");
+    expect(out).not.toContain("\x1b[2m0\x1b[0m");
   });
 
   it("stays single-column when the pane is too narrow for a second column", async () => {

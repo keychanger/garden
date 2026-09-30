@@ -1452,14 +1452,14 @@ function renderCodexColumn(
     lines.push(`${label}  ${bar}  ${pctText}${resetPart}`);
   }
   // A zero balance is the steady state for a subscription account with no
-  // pay-as-you-go credits — a permanent "$0.00" row carries no information, so
+  // pay-as-you-go credits — a permanent "0" row carries no information, so
   // the footer only appears once there is a balance to watch.
   // "credits" (7 chars) is one wider than LABEL_WIDTH, so it overflows the
   // shared column instead of padding to it — harmless since this row has no
   // bar to keep aligned with the window rows above it.
   if (data.windows.length === 0) lines.push(dim("no window reading yet"));
   if (typeof data.creditBalance === "number" && data.creditBalance > 0) {
-    lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim(`$${data.creditBalance.toFixed(2)}`)}`);
+    lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim(String(Math.round(data.creditBalance)))}`);
   } else if (data.creditsUnlimited) {
     lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim("unlimited")}`);
   }

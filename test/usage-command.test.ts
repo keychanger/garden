@@ -102,7 +102,7 @@ describe("garden usage", () => {
   });
 
   it.each([
-    { creditBalance: 12.5, creditsUnlimited: false, expected: "credits $12.50" },
+    { creditBalance: 1250, creditsUnlimited: false, expected: "credits 1250" },
     { creditBalance: 0, creditsUnlimited: true, expected: "credits unlimited" },
     { creditBalance: 0, creditsUnlimited: false, expected: null },
   ])("renders the credit footer for $creditBalance / unlimited=$creditsUnlimited", async ({ expected, ...credits }) => {

@@ -119,7 +119,7 @@ function renderCodex(snap: CodexUsageSnapshot): string {
   }
   if (snap.data.windows.length === 0) rows.push("no window reading yet");
   if (typeof snap.data.creditBalance === "number" && snap.data.creditBalance > 0) {
-    rows.push(`credits $${snap.data.creditBalance.toFixed(2)}`);
+    rows.push(`credits ${Math.round(snap.data.creditBalance)}`);
   } else if (snap.data.creditsUnlimited) {
     rows.push(`credits unlimited`);
   }
