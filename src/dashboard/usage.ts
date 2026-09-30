@@ -1454,15 +1454,15 @@ function renderCodexColumn(
   // A zero balance is the steady state for a subscription account with no
   // pay-as-you-go credits — a permanent "0" row carries no information, so
   // the footer only appears once there is a balance to watch.
-  // "credits" (7 chars) is one wider than LABEL_WIDTH, so it overflows the
-  // shared column instead of padding to it — harmless since this row has no
-  // bar to keep aligned with the window rows above it.
+  // "credits" (7 chars) is one wider than LABEL_WIDTH, so it pads to the whole
+  // label gutter instead: the value then starts at the bars' left edge rather
+  // than one cell past it.
   if (data.windows.length === 0) lines.push(dim("no window reading yet"));
   const credits = typeof data.creditBalance === "number" ? Math.round(data.creditBalance) : 0;
   if (credits > 0) {
-    lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim(String(credits))}`);
+    lines.push(`${"credits".padEnd(LABEL_WIDTH + 2)}${dim(String(credits))}`);
   } else if (data.creditsUnlimited) {
-    lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim("unlimited")}`);
+    lines.push(`${"credits".padEnd(LABEL_WIDTH + 2)}${dim("unlimited")}`);
   }
   return lines;
 }

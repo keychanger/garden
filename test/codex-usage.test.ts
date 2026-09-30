@@ -214,6 +214,23 @@ describe("codex usage meter", () => {
     expect(out).not.toContain("$");
   });
 
+  it("starts the credit balance at the bars' left edge", async () => {
+    const now = Date.now();
+    seedClaude(now);
+    const nowS = Math.floor(now / 1000);
+    seedCodex({
+      windows: [{ windowMinutes: 43200, usedPercent: 17, resetsAt: nowS + 1_000_000 }],
+      creditBalance: 1250,
+    }, now);
+    const { renderUsagePane } = await import("../src/dashboard/usage.js");
+    const visible = renderUsagePane(now, 120).split("\n")
+      .map((line) => line.replace(/\x1b\[[0-9;]*[A-Za-z]/g, ""));
+    const barLine = visible.find((line) => line.includes("30d"))!;
+    const creditLine = visible.find((line) => line.includes("credits"))!;
+    const barOffset = barLine.indexOf("█", barLine.indexOf("30d")) - barLine.indexOf("30d");
+    expect(creditLine.indexOf("1250") - creditLine.indexOf("credits")).toBe(barOffset);
+  });
+
   it("omits the credit footer for a zero Codex balance", async () => {
     const now = Date.now();
     seedClaude(now);
