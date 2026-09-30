@@ -118,8 +118,9 @@ function renderCodex(snap: CodexUsageSnapshot): string {
     rows.push(`${label}  ${pct}   resets ${formatDuration(resetsAtMs - Date.now())}`);
   }
   if (snap.data.windows.length === 0) rows.push("no window reading yet");
-  if (typeof snap.data.creditBalance === "number" && snap.data.creditBalance > 0) {
-    rows.push(`credits ${Math.round(snap.data.creditBalance)}`);
+  const credits = typeof snap.data.creditBalance === "number" ? Math.round(snap.data.creditBalance) : 0;
+  if (credits > 0) {
+    rows.push(`credits ${credits}`);
   } else if (snap.data.creditsUnlimited) {
     rows.push(`credits unlimited`);
   }

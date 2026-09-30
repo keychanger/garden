@@ -1458,8 +1458,9 @@ function renderCodexColumn(
   // shared column instead of padding to it — harmless since this row has no
   // bar to keep aligned with the window rows above it.
   if (data.windows.length === 0) lines.push(dim("no window reading yet"));
-  if (typeof data.creditBalance === "number" && data.creditBalance > 0) {
-    lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim(String(Math.round(data.creditBalance)))}`);
+  const credits = typeof data.creditBalance === "number" ? Math.round(data.creditBalance) : 0;
+  if (credits > 0) {
+    lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim(String(credits))}`);
   } else if (data.creditsUnlimited) {
     lines.push(`${"credits".padEnd(LABEL_WIDTH)}  ${dim("unlimited")}`);
   }

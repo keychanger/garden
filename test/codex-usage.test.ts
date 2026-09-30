@@ -228,6 +228,18 @@ describe("codex usage meter", () => {
     expect(out).toContain("30d");
   });
 
+  it("omits the credit footer for a balance that rounds to zero credits", async () => {
+    const now = Date.now();
+    seedClaude(now);
+    const nowS = Math.floor(now / 1000);
+    seedCodex({
+      windows: [{ windowMinutes: 43200, usedPercent: 17, resetsAt: nowS + 1_000_000 }],
+      creditBalance: 0.4,
+    }, now);
+    const { renderUsagePane } = await import("../src/dashboard/usage.js");
+    expect(renderUsagePane(now, 120)).not.toContain("credits");
+  });
+
   it("renders 'unlimited' for an unlimited Codex credit balance", async () => {
     const now = Date.now();
     seedClaude(now);
