@@ -853,7 +853,7 @@ function taintedEmpty(): WorkerRegistry {
   return empty;
 }
 
-function isTaintedRegistry(registry: WorkerRegistry): boolean {
+export function isTaintedRegistry(registry: WorkerRegistry): boolean {
   return (registry as unknown as Record<PropertyKey, unknown>)[REGISTRY_TAINT] === true;
 }
 

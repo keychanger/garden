@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { CONTROL_REPORTS_DIR, HEADLESS_RUNS_DIR } from "../paths.js";
+import { CONTROL_DIR, CONTROL_REPORTS_DIR, HEADLESS_RUNS_DIR } from "../paths.js";
 
 const SAFE_ARTIFACT_PART = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
@@ -32,6 +32,20 @@ export function ciFixResultPath(project: string, worker: string): string {
 
 export function holisticFindingsPath(project: string, worker: string): string {
   return path.join(CONTROL_REPORTS_DIR, `holistic-findings-${artifactStem(project, worker)}.md`);
+}
+
+// Garden's Claude Code settings (hooks, sandbox, status line), passed to every
+// Claude launch with `--settings`. Kept outside the worktree so a repo that
+// commits its own .claude/settings.json is never overwritten, and outside every
+// worker sandbox so a worker cannot edit its own sandbox.
+export const CLAUDE_SETTINGS_DIR = path.join(CONTROL_DIR, "claude-settings");
+
+// One settings file per directory Claude runs in (a worktree, or a project
+// checkout on the legacy path). The installer and every launch command derive
+// the path from the same directory, so they cannot disagree about it.
+export function claudeSettingsPath(runtimeDir: string): string {
+  const digest = createHash("sha256").update(path.resolve(runtimeDir)).digest("hex");
+  return path.join(CLAUDE_SETTINGS_DIR, `${digest}.json`);
 }
 
 export function headlessArtifactNames(project: string, worker: string): string[] {

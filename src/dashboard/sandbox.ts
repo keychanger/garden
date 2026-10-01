@@ -23,7 +23,7 @@ export interface SandboxConfig {
 
 // Domains every garden-spawned Claude session needs. The Anthropic block
 // stays unconditional even when the project's workers run on a provider:
-// the reviewer/resolver/ci-fix agents share the worktree's settings.json
+// the reviewer/resolver/ci-fix agents share the worker's settings file
 // and always run on the first-party Anthropic path (see workerEnvPrefix /
 // claudeEnvPrefix in claude-env.ts). github/npm cover git pushes and
 // installs during review checks. The git remote host and the provider's

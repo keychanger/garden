@@ -9,12 +9,12 @@
 // (preReviewSha, transitionState, alerts), schedule timeout wake-ups via
 // `onLaunched`, and pass the result file's contents to `parseLastLineVerdict`.
 import fs from "node:fs";
-import path from "node:path";
 import type { ProjectConfig } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { newDashboardWindow, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
 import { getHarnessCore } from "./harness/core.js";
 import { claudeCodeAdapter } from "./harness/claude-code.js";
+import { claudeSettingsPath } from "./headless-paths.js";
 import type { HeadlessLaunchPlan } from "./harness/types.js";
 
 export interface HeadlessAgentLaunchOptions {
@@ -54,8 +54,10 @@ export interface HeadlessAgentLaunchResult {
 export function launchHeadlessAgent(
   opts: HeadlessAgentLaunchOptions,
 ): HeadlessAgentLaunchResult {
-  if (opts.launchPlan.harness === "claude-code"
-    && !fs.existsSync(path.join(opts.cwd, ".claude", "settings.json"))) {
+  // A reviewer shares the worker's settings file; install only when it is
+  // missing, since Claude refuses to start without it and a rewrite here would
+  // replace the worker's own (provider-specific) sandbox with the project's.
+  if (opts.launchPlan.harness === "claude-code" && !fs.existsSync(claudeSettingsPath(opts.cwd))) {
     claudeCodeAdapter.installRuntimeConfig(opts.cwd, opts.project);
   }
 
@@ -78,6 +80,7 @@ export function launchHeadlessAgent(
     resultFile: opts.resultFile,
     launchPlan: opts.launchPlan,
     inlineEnv,
+    settingsFile: claudeSettingsPath(opts.cwd),
   });
   const cmd = `${agentCmd}; [ -p ${escapedFifo} ] && (echo > ${escapedFifo}) 2>/dev/null`;
 

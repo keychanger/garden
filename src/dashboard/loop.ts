@@ -207,7 +207,7 @@ export function loopAutoContinueAfterMerge(
     return false;
   }
 
-  // Refresh hook config so a rebuilt garden's settings.json takes effect on
+  // Refresh hook config so a rebuilt garden's settings take effect on
   // the cold respawn (mirrors bounceWorker's installRuntimeConfig call).
   // Under the worker's own backend, matching the respawn env below — a refresh
   // that reverted the sandbox to the project's provider would leave the loop's
@@ -220,6 +220,8 @@ export function loopAutoContinueAfterMerge(
         projectName, project.path, branchName, entry.baseBranch,
         workerCommandOpts,
       ),
+      ultracode: launchPlan.ultracode,
+      beforeLaunch: true,
     },
   );
 
@@ -240,6 +242,7 @@ export function loopAutoContinueAfterMerge(
     {
       ...workerCommandOpts,
       launchPlan,
+      worktreePath: wtPath,
     },
   );
   updateWorkerFields(projectName, workerName, {

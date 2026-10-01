@@ -3,10 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig, getRightColumnPercent } from "../config.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock } from "./state.js";
-import { mutateRegistry, readRegistry, type WorkerRegistry } from "./registry.js";
+import { isTaintedRegistry, mutateRegistry, readRegistry, type WorkerRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, killWindowSafe, tmuxSplit, paneRunningOnlyShell, type SessionPane, setPaneTitle, setPaneLabel, tmux, disablePaneInput, lockPaneMouse, renameWindow } from "./tmux.js";
 import { log } from "./log.js";
-import { worktreeExists, removeWorktree, pruneWorktrees } from "./git.js";
+import { worktreeExists, removeWorktree, pruneWorktrees, worktreePath } from "./git.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
 import { createGardenGrowhouseWindow, createShellWindow, USAGE_PANE_HEIGHT } from "./create.js";
 import { resolveGardenRunner } from "./runner.js";
@@ -18,6 +18,8 @@ import { paneHoldsWorker } from "./window-heal.js";
 import { HEADLESS_RUNS_DIR } from "../paths.js";
 import { DASHBOARD_SESSION, dashboardExists } from "../session.js";
 import {
+  CLAUDE_SETTINGS_DIR,
+  claudeSettingsPath,
   headlessArtifactNames,
   isHeadlessArtifactName,
 } from "./headless-paths.js";
@@ -598,6 +600,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
 
   // Clean stale context files
   cleanContextFiles();
+  cleanClaudeSettingsFiles();
 
   // Restart per-project pollers if not running. Read a fresh snapshot for the
   // read-only consumers below (poller restart, orphaned-window cleanup) so they
@@ -665,6 +668,48 @@ export function cleanContextFiles(): void {
       log.info("validate", "removed stale headless artifact", { data: { file } });
     }
   } catch { /* sessions dir might not exist */ }
+}
+
+// A settings file outlives its worker otherwise: the worktree that used to
+// hold it is removed, but the file lives in the control tree. Kept for every
+// registered project checkout and worker worktree; the age floor covers a
+// worker whose bootstrap wrote the file before its registry entry landed, since
+// Claude refuses to start when the file is missing.
+const CLAUDE_SETTINGS_GRACE_MS = 60 * 60 * 1000;
+
+export function cleanClaudeSettingsFiles(): void {
+  let files: string[];
+  try {
+    files = fs.readdirSync(CLAUDE_SETTINGS_DIR);
+  } catch {
+    return;
+  }
+  const keep = new Set<string>();
+  try {
+    for (const project of Object.values(loadConfig().projects)) {
+      keep.add(path.basename(claudeSettingsPath(project.path)));
+    }
+    const registry = readRegistry();
+    if (isTaintedRegistry(registry)) return;
+    for (const [projectName, entries] of Object.entries(registry.workers)) {
+      for (const entry of entries) {
+        keep.add(path.basename(claudeSettingsPath(worktreePath(projectName, entry.name))));
+        if (entry.worktreePath) keep.add(path.basename(claudeSettingsPath(entry.worktreePath)));
+      }
+    }
+  } catch {
+    return; // Without the full keep-set, deleting anything could strand a live worker.
+  }
+  const now = Date.now();
+  for (const file of files) {
+    if (keep.has(file)) continue;
+    const full = path.join(CLAUDE_SETTINGS_DIR, file);
+    try {
+      if (now - fs.statSync(full).mtimeMs < CLAUDE_SETTINGS_GRACE_MS) continue;
+      fs.unlinkSync(full);
+      log.info("validate", "removed stale claude settings file", { data: { file } });
+    } catch { /* vanished or unreadable; the next validate retries */ }
+  }
 }
 
 export function cleanOrphanedReviewWindows(registry: WorkerRegistry): void {

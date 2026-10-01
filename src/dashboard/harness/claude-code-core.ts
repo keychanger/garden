@@ -14,13 +14,6 @@ import type { WorkerEntry } from "../registry.js";
 import { shellEscape, pasteAndSubmit } from "../tmux.js";
 import type { AgentCommandOptions, HarnessCore, HeadlessCommandOptions } from "./types.js";
 
-// The non-effort half of the ultracode preset: enable Claude Code's
-// dynamic-workflow keyword trigger (the standing "ultracode is on" opt-in).
-// Delivered as an extra `--settings` source rather than baked into the
-// generated .claude/settings.json, so garden's hook/sandbox/permissions
-// generator stays worker-agnostic. Effort is set alongside via `--effort max`.
-const ULTRACODE_SETTINGS_JSON = '{"ultracodeKeywordTrigger":"on"}';
-
 // `claude -p` error prefix (`API Error: <5xx|429|529> ...`) or the JSON error
 // types Anthropic emits (`overloaded_error`, `rate_limit_error`). The match
 // is anchored to line-start and a fixed error-code set so a reviewer who
@@ -39,6 +32,14 @@ function isTransientError(output: string): boolean {
     if (/"type"\s*:\s*"(overloaded_error|rate_limit_error|api_error)"/.test(line)) return true;
   }
   return false;
+}
+
+// Garden's hooks, sandbox, and status line come from a settings file outside
+// the worktree (installRuntimeConfig writes it), layered over whatever
+// .claude/settings.json the repo itself commits. Claude Code refuses to start
+// when the file is missing, so every launch path installs before launching.
+function settingsFlag(settingsFile: string): string {
+  return `--settings ${shellEscape(settingsFile)}`;
 }
 
 // A session/usage-quota cutoff — the operator's rolling window is exhausted and
@@ -107,12 +108,10 @@ export const claudeCodeCore: HarnessCore = {
     const modelFlag = plan.model ? ` --model ${shellEscape(plan.model)}` : "";
     // Ultracode preset: max effort plus the dynamic-workflow keyword trigger.
     // `--effort max` is the session-effort flag; `ultracodeKeywordTrigger` has
-    // no dedicated flag, so it rides in via `--settings <json>` (an additional
-    // settings source Claude Code merges over .claude/settings.json). The
-    // paired Opus pin arrives through `plan.model`, not here.
-    const ultracodeFlags = plan.ultracode
-      ? ` --effort max --settings ${shellEscape(ULTRACODE_SETTINGS_JSON)}`
-      : "";
+    // no dedicated flag and is written into garden's settings file by
+    // installRuntimeConfig, since only the last `--settings` flag takes effect
+    // (verified 2.1.286). The paired Opus pin arrives through `plan.model`.
+    const ultracodeFlags = plan.ultracode ? " --effort max" : "";
     // General reasoning-effort rung (low/medium/high/xhigh). Ultracode already
     // fixes `--effort max`, so it wins and effort is suppressed to avoid a
     // duplicate flag. Absent effort renders nothing — byte-identical to the
@@ -122,7 +121,7 @@ export const claudeCodeCore: HarnessCore = {
       ? `--resume ${shellEscape(opts.sessionId)}`
       : `--session-id ${shellEscape(opts.sessionId)}`;
     return `${plan.envPrefix}claude --rc --permission-mode auto${modelFlag}${effortFlag}${ultracodeFlags} ${sessionFlag} `
-      + `--append-system-prompt-file ${shellEscape(opts.contextFile)}`;
+      + `${settingsFlag(opts.settingsFile)} --append-system-prompt-file ${shellEscape(opts.contextFile)}`;
   },
 
   // The one-shot print mode: prompt on stdin, final answer (and any error
@@ -142,6 +141,7 @@ export const claudeCodeCore: HarnessCore = {
     // reported FAILED on a sound branch. acceptEdits grants exactly the file
     // edits inside the worktree that the review contract already assumes.
     return `${opts.inlineEnv}${plan.envPrefix}claude -p --permission-mode acceptEdits${modelFlag}${effortFlag}`
+      + ` ${settingsFlag(opts.settingsFile)}`
       + ` < ${shellEscape(opts.promptFile)} > ${shellEscape(opts.resultFile)} 2>&1`;
   },
 

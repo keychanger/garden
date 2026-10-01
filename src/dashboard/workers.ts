@@ -1222,7 +1222,7 @@ export function stopWorkerByName(projectName: string, workerName: string): void 
 
 // Kill and restart the Claude process in a worker's pane via `claude --resume`.
 // The pane, pane ID, worktree, and registry entry all stay put; only the Claude
-// process is replaced, which forces a fresh read of .claude/settings.json
+// process is replaced, which forces a fresh read of garden's settings file
 // (hook config, permission allowlist) and drops any transient session state
 // that's interrupting the operator (e.g., stuck in plan mode with no cycle back
 // to auto). Works on both visible and parked workers — we resolve the pane by
@@ -1264,7 +1264,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
     effort: entry.effort,
   });
 
-  // Rewrite .claude/settings.json so bounce picks up hook/sandbox
+  // Rewrite garden's settings file so bounce picks up hook/sandbox
   // changes from a rebuilt garden. buildWorktreeResumeCommand doesn't do
   // this on its own (unlike buildResumeCommand); the attach-time resume
   // path in ensureDashboard() calls it for the same reason.
@@ -1276,7 +1276,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
     : undefined;
   // entry.model carries the default/grow per-worker pin; trellis vines
   // resolve their model per iteration, not on bounce.
-  const resumeOpts: WorktreeCommandOptions = { launchPlan };
+  const resumeOpts: WorktreeCommandOptions = { launchPlan, worktreePath: entry.worktreePath };
   if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
   if (entry.workflow === "grow" && entry.grow) {
     resumeOpts.grow = {
@@ -1294,6 +1294,8 @@ export function bounceWorker(projectName: string, workerName: string): void {
         rulesText: buildWorktreeContextText(
           projectName, projectInfo.path, entry.branchName, baseBranch, resumeOpts,
         ),
+        ultracode: launchPlan.ultracode,
+        beforeLaunch: true,
       },
     );
   }

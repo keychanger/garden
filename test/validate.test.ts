@@ -23,6 +23,7 @@ vi.mock("../src/dashboard/registry.js", () => {
   return {
     readRegistry,
     writeRegistry,
+    isTaintedRegistry: vi.fn(() => false),
     updateWorkerFields: vi.fn(),
     // Mirror the real mutateRegistry: read (via the mocked readRegistry so a
     // test's mockReturnValue still applies), run the caller's mutation, and
@@ -88,6 +89,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   worktreeExists: vi.fn(() => true),
   removeWorktree: vi.fn(),
   pruneWorktrees: vi.fn(),
+  worktreePath: vi.fn((project: string, worker: string) => `/worktrees/${project}/${worker}`),
 }));
 
 vi.mock("../src/dashboard/alerts.js", () => ({
@@ -103,10 +105,12 @@ vi.mock("../src/session.js", () => ({
 }));
 
 import fs from "node:fs";
-import { validateAndHeal, sweepGhostEntries, healStatusPane, healActivePane, cleanContextFiles, cleanOrphanedReviewWindows } from "../src/dashboard/validate.js";
+import path from "node:path";
+import { validateAndHeal, sweepGhostEntries, healStatusPane, healActivePane, cleanContextFiles, cleanClaudeSettingsFiles, cleanOrphanedReviewWindows } from "../src/dashboard/validate.js";
+import { CLAUDE_SETTINGS_DIR, claudeSettingsPath } from "../src/dashboard/headless-paths.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, tmuxSplit, paneRunningOnlyShell } from "../src/dashboard/tmux.js";
-import { readRegistry, writeRegistry, mutateRegistry } from "../src/dashboard/registry.js";
+import { readRegistry, writeRegistry, mutateRegistry, isTaintedRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 import { restoreFromHidden } from "../src/dashboard/layout.js";
 import { dashboardExists } from "../src/session.js";
@@ -893,6 +897,51 @@ describe("cleanContextFiles", () => {
       `${HEADLESS_RUNS_DIR}/myproject-live-worker-ci-fix-result.txt.stderr`,
     );
     expect(unlink).not.toHaveBeenCalledWith(`${HEADLESS_RUNS_DIR}/operator-note.txt`);
+  });
+});
+
+describe("cleanClaudeSettingsFiles", () => {
+  const live = path.basename(claudeSettingsPath("/worktrees/garden/live-worker"));
+  const checkout = path.basename(claudeSettingsPath("/tmp/garden"));
+  const removed = path.basename(claudeSettingsPath("/worktrees/garden/removed-worker"));
+  const fresh = path.basename(claudeSettingsPath("/worktrees/garden/spawning-worker"));
+  const HOUR = 60 * 60 * 1000;
+
+  beforeEach(() => {
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
+      String(directory) === CLAUDE_SETTINGS_DIR ? [live, checkout, removed, fresh] : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
+    vi.spyOn(fs, "statSync").mockImplementation((file) => ({
+      mtimeMs: String(file).endsWith(fresh) ? Date.now() : Date.now() - 2 * HOUR,
+    }) as fs.Stats);
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [{ name: "live-worker", sessionId: "s", task: "" }] },
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(isTaintedRegistry).mockReturnValue(false);
+  });
+
+  it("removes a removed worker's file, keeping live workers, project checkouts, and files still in their grace period", () => {
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    cleanClaudeSettingsFiles();
+
+    // Claude refuses to start without its --settings file, so a kept file is
+    // the difference between a worker resuming and failing to launch.
+    expect(unlink.mock.calls.map(c => path.basename(String(c[0])))).toEqual([removed]);
+  });
+
+  it("removes nothing when the registry could not be read", () => {
+    vi.mocked(isTaintedRegistry).mockReturnValue(true);
+    vi.mocked(readRegistry).mockReturnValue({ workers: {} });
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    cleanClaudeSettingsFiles();
+
+    expect(unlink).not.toHaveBeenCalled();
   });
 });
 

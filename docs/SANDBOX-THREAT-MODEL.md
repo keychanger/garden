@@ -20,9 +20,11 @@ Garden is not defending against a malicious operator, nor against a compromised 
 Two trust levels matter:
 
 - **Sandboxed** — worker agents, and the headless reviewer/resolver/ci-fix agents on the
-  claude-code path, run inside the OS sandbox Claude Code configures from the worktree's
-  `.claude/settings.json` (Seatbelt on macOS, bubblewrap on Linux) — the headless
-  `claude -p` runs in the worktree and inherits that config. A Codex worker runs inside
+  claude-code path, run inside the OS sandbox Claude Code configures from garden's
+  settings file under `~/.garden/control/claude-settings/`, passed with `--settings`
+  (Seatbelt on macOS, bubblewrap on Linux) — the headless `claude -p` gets the
+  worker's file. The repo's own `.claude/settings.json` merges in and can widen the
+  sandbox; that is the repo owner's committed config, at the trust level of its hooks. A Codex worker runs inside
   Codex's own `workspace-write` sandbox. The Codex *review family* is the exception and
   is not in this tier — see residuals.
 - **Unsandboxed** — the poller, watchdog, and the operator's own shell run with the

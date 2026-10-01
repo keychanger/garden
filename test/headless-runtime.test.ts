@@ -4,6 +4,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { launchHeadlessAgent } from "../src/dashboard/headless-agent.js";
+import { claudeSettingsPath } from "../src/dashboard/headless-paths.js";
 import { resolveHeadlessLaunchPlan } from "../src/dashboard/launch-plan.js";
 import { newDashboardWindow } from "../src/dashboard/tmux.js";
 
@@ -24,7 +25,7 @@ beforeEach(() => {
   fs.mkdirSync(cwd);
   execFileSync("git", ["init", "-q", cwd]);
   execFileSync("git", ["-C", cwd, "remote", "add", "origin", "git@example.org:team/project.git"]);
-  settingsPath = path.join(cwd, ".claude", "settings.json");
+  settingsPath = claudeSettingsPath(cwd);
 });
 
 afterEach(() => {
@@ -75,11 +76,13 @@ describe("headless runtime repair", () => {
 
       expect(newDashboardWindow).toHaveBeenCalledOnce();
       expect(vi.mocked(newDashboardWindow).mock.calls[0][5]).toContain("--permission-mode acceptEdits");
+      expect(vi.mocked(newDashboardWindow).mock.calls[0][5]).toContain(`--settings ${settingsPath}`);
+      expect(fs.existsSync(path.join(cwd, ".claude", "settings.json"))).toBe(false);
     },
   );
 
   it("preserves an existing worker's Claude runtime settings", () => {
-    fs.mkdirSync(path.dirname(settingsPath));
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
     const existing = '{"sandbox":{"enabled":true},"permissions":{"deny":["Bash(custom:*)"]}}\n';
     fs.writeFileSync(settingsPath, existing);
 
@@ -97,9 +100,15 @@ describe("headless runtime repair", () => {
   });
 
   it("does not launch when missing settings cannot be installed", () => {
+    // Claude refuses to start without its --settings file, so a failed install
+    // must stop the launch rather than spawn a reviewer that exits at once.
+    fs.rmSync(path.dirname(settingsPath), { recursive: true, force: true });
     fs.writeFileSync(path.dirname(settingsPath), "not a directory");
-
-    expect(() => launchHeadlessAgent(options())).toThrow();
-    expect(newDashboardWindow).not.toHaveBeenCalled();
+    try {
+      expect(() => launchHeadlessAgent(options())).toThrow();
+      expect(newDashboardWindow).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(path.dirname(settingsPath), { force: true });
+    }
   });
 });

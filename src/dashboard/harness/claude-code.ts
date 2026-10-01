@@ -2,7 +2,7 @@
 // implementation of HarnessAdapter. The light half (command dialect,
 // prompt delivery, transient-error shapes, transcript reading) lives in
 // claude-code-core.ts; this module adds the one heavyweight method —
-// installRuntimeConfig, the .claude/settings.json + skills + excludes
+// installRuntimeConfig, the garden settings file + skills + excludes
 // installer — and must only be imported by CLI-bundle modules (create,
 // workers, loop). See harness/core.ts for the why.
 //
@@ -18,12 +18,14 @@ import { execFileSync } from "node:child_process";
 import type { ProjectConfig } from "../../config.js";
 import { atomicWriteFile } from "../atomic-write.js";
 import { getRemoteHost } from "../git.js";
+import { claudeSettingsPath } from "../headless-paths.js";
+import { log } from "../log.js";
 import { resolveHookRunner, hookCompileCachePrefix, resolveNodeBin } from "../runner.js";
 import { buildSandboxConfig, type SandboxConfig } from "../sandbox.js";
 import { shellEscape } from "../tmux.js";
 import { installClaudeSkills } from "../skills.js";
 import { claudeCodeCore } from "./claude-code-core.js";
-import type { HarnessAdapter } from "./types.js";
+import type { HarnessAdapter, RuntimeInstallOptions } from "./types.js";
 
 // The status line: model, reasoning effort, and remaining context window,
 // painted under the composer for the life of the session. Claude Code renders
@@ -69,7 +71,12 @@ export function statusLineCommand(targetDir: string): string {
   return `${shellEscape(resolveNodeBin())} ${shellEscape(script)}`;
 }
 
-export function buildSettingsJson(hookRunner: string, sandbox: SandboxConfig, statusLineCmd: string): string {
+export function buildSettingsJson(
+  hookRunner: string,
+  sandbox: SandboxConfig,
+  statusLineCmd: string,
+  opts: { ultracode?: boolean } = {},
+): string {
   // The hook commands are written into JSON and ultimately executed by Claude
   // Code as shell commands. The hook runner targets the minimal dist/hook.js
   // bundle (resolveHookRunner) so each per-tool-call fire parses only the
@@ -118,6 +125,9 @@ export function buildSettingsJson(hookRunner: string, sandbox: SandboxConfig, st
     },
     sandbox,
     statusLine: { type: "command", command: statusLineCmd },
+    // The non-effort half of the ultracode preset (the dynamic-workflow
+    // keyword trigger); the launch command adds `--effort max`.
+    ...(opts.ultracode ? { ultracodeKeywordTrigger: "on" } : {}),
     permissions: {
       // Every subcommand of a compound bash call must match a rule, so tmux chains like `tmux ... | head` still prompt without tail-utility allowances.
       allow: [
@@ -144,29 +154,83 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
   });
 }
 
-// Write to settings.json, not settings.local.json — Claude Code auto-edits the latter (permission approvals) and clobbers our hooks.
-// Atomic write: Claude reads settings.json on SessionStart and on every --resume, so a partial file would break hook config silently.
-// Mode 0o444 (read-only): defense-in-depth against an agent self-disabling
-// its own sandbox. The worktree itself is writable by the worker (that's
-// the point of the sandbox's allowWrite root), so a determined process can
-// chmod the file before editing — but auto-mode's classifier escalates a
-// chmod, and installRuntimeConfig is invoked on every refresh/bounce, so
-// any tampering is rewritten on the next cycle. This makes the path of
-// least resistance "ask the operator" rather than "edit the file."
-function installRuntimeConfig(targetDir: string, project: ProjectConfig): void {
+// Garden's settings live outside the worktree and reach Claude through
+// `--settings` (see claudeSettingsPath), not in .claude/settings.json: a repo
+// that commits its own settings file would otherwise see it overwritten, show
+// it as modified, and never pass the clean-tree review gate. Claude Code merges
+// the two, so the repo's permissions, env, and hooks also keep applying.
+// Atomic write: Claude reads the file on SessionStart and on every --resume,
+// so a partial file would break hook config silently. Mode 0o444 and a
+// directory outside every worker sandbox: the agent cannot edit its own
+// sandbox, and installRuntimeConfig rewrites the file on every refresh/bounce.
+function installRuntimeConfig(targetDir: string, project: ProjectConfig, runtime?: RuntimeInstallOptions): void {
   const sandbox = sandboxForTarget(targetDir, project);
-  const json = buildSettingsJson(resolveHookRunner(), sandbox, statusLineCommand(targetDir));
-  const settingsPath = path.join(targetDir, ".claude", "settings.json");
-  // atomicWriteFile preserves the mode through tmp→rename. If the file
-  // already exists with a different mode (operator chmod, agent
-  // tampering), the rename replaces it with the read-only version.
-  atomicWriteFile(settingsPath, json, { mode: 0o444 });
-  // 0o555 for the same reason settings.json is 0o444: the status line is a
-  // command garden bakes into settings.json, so the script it points at is part
+  const json = buildSettingsJson(resolveHookRunner(), sandbox, statusLineCommand(targetDir), {
+    ultracode: runtime?.ultracode,
+  });
+  atomicWriteFile(claudeSettingsPath(targetDir), json, { mode: 0o444 });
+  // 0o555 for the same reason the settings file is 0o444: the status line is a
+  // command garden bakes into those settings, so the script it points at is part
   // of the same trust boundary and is rewritten on every refresh/bounce.
   atomicWriteFile(path.join(targetDir, ".claude", STATUS_LINE_FILENAME), STATUS_LINE_SCRIPT, { mode: 0o555 });
   installClaudeSkills(targetDir);
   ensureWorktreeExcludes(targetDir);
+  if (runtime?.beforeLaunch) retireWorktreeSettings(targetDir);
+}
+
+// Earlier builds wrote garden's settings into <dir>/.claude/settings.json.
+// Launched with `--settings`, Claude would load that copy as project settings
+// too and fire every hook twice, so the copy goes before the launch: deleted
+// when untracked, or restored from git when garden overwrote a tracked file.
+// Recognized by garden's own SessionStart hook command, so a settings file
+// the operator wrote is never touched.
+// A failure here only costs duplicate hook events, so it is logged rather than
+// allowed to block the launch.
+function retireWorktreeSettings(targetDir: string): void {
+  const rel = path.join(".claude", "settings.json");
+  const file = path.join(targetDir, rel);
+  let content: string;
+  try {
+    content = fs.readFileSync(file, "utf-8");
+  } catch {
+    return;
+  }
+  if (!isGardenSettings(content)) return;
+  try {
+    if (!isTracked(targetDir, rel)) {
+      fs.rmSync(file, { force: true });
+      return;
+    }
+    // A worker may have hidden the overwritten file with skip-worktree, the
+    // workaround before this fix; checkout skips such a path, so clear it first.
+    execFileSync("git", ["-C", targetDir, "update-index", "--no-skip-worktree", "--", rel], { stdio: "pipe" });
+    execFileSync("git", ["-C", targetDir, "checkout", "--", rel], { stdio: "pipe" });
+  } catch (err) {
+    log.warn("workers", "old garden settings.json not retired; hooks may double", {
+      data: { dir: targetDir, error: String(err) },
+    });
+  }
+}
+
+function isTracked(dir: string, rel: string): boolean {
+  try {
+    execFileSync("git", ["-C", dir, "ls-files", "--error-unmatch", "--", rel], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const GARDEN_SESSIONSTART_HOOK = /(?:hook\.js|hook-entry\.ts|_claude-hook)'? sessionstart$/;
+
+function isGardenSettings(content: string): boolean {
+  try {
+    const settings = JSON.parse(content) as { hooks?: { SessionStart?: { hooks?: { command?: unknown }[] }[] } };
+    return (settings.hooks?.SessionStart ?? []).some(group =>
+      (group.hooks ?? []).some(hook => typeof hook.command === "string" && GARDEN_SESSIONSTART_HOOK.test(hook.command)));
+  } catch {
+    return false;
+  }
 }
 
 // Heal `.git/info/exclude` for existing worktrees. The bootstrap script

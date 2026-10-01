@@ -153,8 +153,8 @@ export function launchHeadlessAgent(
 **Contract**:
 
 Before the launch sequence, Claude headless agents restore a missing
-`.claude/settings.json` with the Claude runtime installer and the supplied project
-config. This gives resurrected Codex worktrees the sandbox needed for autonomous
+garden settings file (`claudeSettingsPath(cwd)`, passed with `--settings`) with the
+Claude runtime installer and the supplied project config. This gives resurrected Codex worktrees the sandbox needed for autonomous
 review commands. Existing settings are preserved; installation failure aborts
 launch. Codex headless agents keep their own launch-time permission policy.
 
@@ -1186,8 +1186,8 @@ Implementation: `trellisAutoContinueAfterMerge` in
 `continueWorkerAfterMerge`). It stops the Claude process and dispatches
 a fresh seed prompt via the same delayed-subprocess mechanism the
 default uses. The pane stays alive throughout — only the Claude session
-is reset, so tmux layout, environment variables, and the worktree's
-`.claude/settings.json` are unchanged. The interrupt-recovery
+is reset, so tmux layout, environment variables, and the worker's
+settings file are unchanged. The interrupt-recovery
 auto-continue (default workflow's "continue from where you left off"
 after a session crash) does not apply to trellis: an interrupted
 vine restarts via the same fresh-context mechanism on the next push
@@ -2359,7 +2359,7 @@ export function loopAutoContinueAfterMerge(
 `loopAutoContinueAfterMerge` runs the workflow-agnostic sequence:
 
 1. Resolve the worker's pane (active-pane fast path → window-name fallback).
-2. Refresh `.claude/settings.json` via the worker's harness adapter (`getHarness(entry.harness).installRuntimeConfig`).
+2. Refresh garden's settings file via the worker's harness adapter (`getHarness(entry.harness).installRuntimeConfig`).
 3. Generate a fresh `sessionId` and persist before respawn (concurrent
    reads see the new value).
 4. Build the worker command via `buildWorktreeWorkerCommand` with the

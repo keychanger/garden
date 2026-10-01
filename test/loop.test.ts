@@ -333,11 +333,12 @@ describe("loopAutoContinueAfterMerge", () => {
     expect(result).toBe(true);
     expect(paneHasBlockingOperatorDraft).toHaveBeenCalledWith("%9", entry);
 
-    // installRuntimeConfig fired before the respawn so settings.json is fresh.
+    // installRuntimeConfig fired before the respawn so the settings are fresh,
+    // told a launch follows so it may retire an older build's worktree copy.
     expect(vi.mocked(getHarness)().installRuntimeConfig).toHaveBeenCalledWith(
       "/tmp/wt/myproject/bold-ash",
       expect.objectContaining({ path: "/tmp/projects/myproject" }),
-      { rulesText: "rules" },
+      { rulesText: "rules", ultracode: undefined, beforeLaunch: true },
     );
 
     // updateWorkerFields includes a fresh sessionId (different from the old)

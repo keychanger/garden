@@ -2478,7 +2478,7 @@ describe("bounceWorker", () => {
 
     expect(vi.mocked(buildWorktreeResumeCommand)).toHaveBeenCalledWith(
       "myproject", "/repo/myproject", "swift-oak", "swift-oak", "sess-abc", "main",
-      { launchPlan: expect.objectContaining({ harness: "claude-code", role: "worker" }) },
+      { launchPlan: expect.objectContaining({ harness: "claude-code", role: "worker" }), worktreePath: "/wt/swift-oak" },
     );
     const respawnCall = vi.mocked(tmux).mock.calls.find(c => c[0] === "respawn-pane");
     expect(respawnCall).toBeDefined();
@@ -2524,12 +2524,12 @@ describe("bounceWorker", () => {
     );
   });
 
-  it("reinstalls claude hooks so settings.json picks up rebuild changes", () => {
+  it("reinstalls claude hooks so the settings pick up rebuild changes", () => {
     bounceWorker("myproject", "swift-oak");
 
     expect(vi.mocked(getHarness)().installRuntimeConfig).toHaveBeenCalledWith(
       "/wt/swift-oak", expect.objectContaining({ path: "/repo/myproject" }),
-      { rulesText: "rules" },
+      { rulesText: "rules", ultracode: undefined, beforeLaunch: true },
     );
   });
 
@@ -2544,7 +2544,7 @@ describe("bounceWorker", () => {
 
     expect(vi.mocked(buildWorktreeResumeCommand)).toHaveBeenCalledWith(
       "myproject", "/repo/myproject", "swift-oak", "swift-oak", "sess-abc", "develop",
-      { launchPlan: expect.objectContaining({ harness: "claude-code", role: "worker" }) },
+      { launchPlan: expect.objectContaining({ harness: "claude-code", role: "worker" }), worktreePath: "/wt/swift-oak" },
     );
     expect(vi.mocked(resolveBaseBranch)).not.toHaveBeenCalled();
   });

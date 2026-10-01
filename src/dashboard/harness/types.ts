@@ -72,6 +72,11 @@ export interface AgentCommandOptions {
    *  The adapter owns the delivery mechanism — a flag for Claude Code,
    *  an AGENTS.md or prompt prefix for harnesses without one. */
   contextFile: string;
+  /** Garden's Claude settings file for this launch: claudeSettingsPath() of
+   *  the directory installRuntimeConfig was run against (the worktree, or the
+   *  project checkout on the legacy path). Claude Code loads it via
+   *  `--settings`; other harnesses ignore it. */
+  settingsFile: string;
   /** Validated identity/backend/policy tuple for this launch. */
   launchPlan: WorkerLaunchPlan;
   /** Absolute path to the worktree's shared git common dir (`<main>/.git`).
@@ -93,6 +98,8 @@ export interface HeadlessCommandOptions {
   launchPlan: HeadlessLaunchPlan;
   /** Inline env assignments (e.g. `GARDEN_REVIEWER=1 `), pre-escaped. */
   inlineEnv: string;
+  /** See AgentCommandOptions.settingsFile. */
+  settingsFile: string;
 }
 
 // What a harness can signal. turnEnd is typed `true`: a harness without a
@@ -206,6 +213,18 @@ export interface HarnessCore {
   readRunningModel?(entry: WorkerEntry): string | null;
 }
 
+export interface RuntimeInstallOptions {
+  /** Composed worker rules, for a harness whose rules channel is a file. */
+  rulesText?: string;
+  /** The launch's ultracode preset, for a harness that carries part of it
+   *  in its runtime config rather than on the command line. */
+  ultracode?: boolean;
+  /** The caller launches the agent right after this install. Only then is it
+   *  safe to retire config an older garden build left for a process started
+   *  the old way: a live worker from that build may still depend on it. */
+  beforeLaunch?: boolean;
+}
+
 export interface HarnessAdapter extends HarnessCore {
   /** Write the harness's runtime config into the worktree: hook/event
    *  registration, sandbox, permissions, bundled skills — whatever the
@@ -214,6 +233,6 @@ export interface HarnessAdapter extends HarnessCore {
   installRuntimeConfig(
     worktree: string,
     project: ProjectConfig,
-    runtime?: { rulesText?: string },
+    runtime?: RuntimeInstallOptions,
   ): void;
 }

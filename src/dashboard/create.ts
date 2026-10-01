@@ -27,7 +27,7 @@ import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./poller.js";
 import { startUsagePoller } from "./usage-poller.js";
 import { startWatchdog } from "./watchdog.js";
-import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost, getGitCommonDir } from "./git.js";
+import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost, getGitCommonDir, worktreePath } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
 import { resolveGardenRunner, resolveHookRunner } from "./runner.js";
 import { buildSandboxConfig } from "./sandbox.js";
@@ -48,6 +48,7 @@ import { getHarness } from "./harness/index.js";
 import { resolveWorkerLaunchPlan } from "./launch-plan.js";
 import type { WorkerLaunchPlan } from "./harness/types.js";
 import { buildSettingsJson, statusLineCommand, STATUS_LINE_FILENAME, STATUS_LINE_SCRIPT } from "./harness/claude-code.js";
+import { claudeSettingsPath } from "./headless-paths.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
 const DASHBOARD_COLS = 250;
@@ -125,7 +126,7 @@ export function ensureDashboard(): void {
     // npm-link'd global), self-healing across worktree churn.
     try { setupKeybindings(resolveGardenRunner()); } catch { /* best effort */ }
 
-    // Re-install per-worker hooks (.claude/settings.json + the pre-push
+    // Re-install per-worker hooks (garden's Claude settings file + the pre-push
     // poll-trigger hook) for the same reason: they bake the gardenRunner path
     // at worker create time. If that path lived in a worktree that has since
     // been cleaned up, every Stop / UserPromptSubmit / PreToolUse hook exits
@@ -174,6 +175,7 @@ export function ensureDashboard(): void {
                   getWorkerBaseBranch(entry, proj.path),
                   runtimeRulesOpts,
                 ),
+                ultracode: launchPlan.ultracode,
               },
             );
           } catch (err) {
@@ -590,9 +592,11 @@ export function buildWorkerCommand(projectName: string, projectPath: string, ses
   // rewrite the operator's own tracked instructions and mark them
   // skip-worktree — invisible in `git status` by construction. Rules delivery
   // belongs to the worktree paths.
-  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject);
+  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject, {
+    ultracode: launchPlan.ultracode, beforeLaunch: true,
+  });
   const agentCmd = harness.buildAgentCommand({
-    sessionId, resume: false, contextFile, launchPlan,
+    sessionId, resume: false, contextFile, settingsFile: claudeSettingsPath(projectPath), launchPlan,
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${agentCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
@@ -614,9 +618,11 @@ export function buildResumeCommand(
   // No rulesText — same reason as buildWorkerCommand: this installs into the
   // project checkout, where a repo-file rules channel would clobber the
   // operator's own AGENTS.md behind skip-worktree.
-  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject);
+  harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject, {
+    ultracode: launchPlan.ultracode, beforeLaunch: true,
+  });
   const agentCmd = harness.buildAgentCommand({
-    sessionId, resume: true, contextFile, launchPlan,
+    sessionId, resume: true, contextFile, settingsFile: claudeSettingsPath(projectPath), launchPlan,
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${agentCmd}; ${exitHook}; clear; echo "Worker exited. ⌥x to close, ⌥n for new, ⌥s for shell."; exec $SHELL`;
@@ -630,6 +636,12 @@ export {
 } from "./worker-effort.js";
 
 export interface WorktreeCommandOptions {
+  /** The worker's worktree, when the caller already holds it (the entry's
+   *  recorded path). The launch command loads garden's settings from the
+   *  file keyed on this directory, so it must name the directory
+   *  installRuntimeConfig was run against. Absent = the canonical
+   *  worktreePath(project, worker). */
+  worktreePath?: string;
   /** Pre-resolved launch identity. Production launch boundaries pass this so
    *  command rendering, runtime install, and tmux credential injection consume
    *  the same validated tuple. Direct builder callers may omit it. */
@@ -717,6 +729,7 @@ export function buildWorktreeWorkerCommand(
   const launchPlan = commandLaunchPlan(project, opts, false);
   const agentCmd = getHarness(launchPlan.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, launchPlan,
+    settingsFile: claudeSettingsPath(opts?.worktreePath ?? worktreePath(projectName, workerName)),
     worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
   });
   return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
@@ -849,19 +862,23 @@ export function buildWorktreeBootstrapScript(
   const project = resolveProjectForHooks(projectName, projectPath);
   const launchPlan = commandLaunchPlan(project, opts, false);
   // The bootstrap inlines the Claude Code runtime config in shell form
-  // (settings.json + skills layout below) — this whole script is the
+  // (status line + skills layout below) — this whole script is the
   // claude-code dialect today. A second harness adds an adapter method
   // that renders its own bootstrap config section (docs/MULTI-MODEL.md
   // "Layer 3"); until then the adapter's internals are imported directly.
+  // Garden's settings file sits outside the worktree (claudeSettingsPath), so
+  // it is written now rather than by the script: it needs no worktree to exist.
   // Same project view the launch env below is built from: a worker whose build
   // member named a backend must get that backend's inference host in its egress
   // allowlist, not the project's.
-  const settingsJson = buildSettingsJson(resolveHookRunner(), buildSandboxConfig({
-    worktreePath: wtPath,
-    project: launchPlan.runtimeProject,
-    remoteHost: getRemoteHost(project.path),
-  }), statusLineCommand(wtPath));
-  const settingsJsonLit = shellEscape(settingsJson);
+  if (launchPlan.harness === "claude-code") {
+    const settingsJson = buildSettingsJson(resolveHookRunner(), buildSandboxConfig({
+      worktreePath: wtPath,
+      project: launchPlan.runtimeProject,
+      remoteHost: getRemoteHost(project.path),
+    }), statusLineCommand(wtPath), { ultracode: launchPlan.ultracode });
+    atomicWriteFile(claudeSettingsPath(wtPath), settingsJson, { mode: 0o444 });
+  }
   const statusLineScriptLit = shellEscape(STATUS_LINE_SCRIPT);
   const statusLineFilenameLit = shellEscape(STATUS_LINE_FILENAME);
   const doneSkillLit = shellEscape(DONE_SKILL_CONTENT);
@@ -886,7 +903,7 @@ export function buildWorktreeBootstrapScript(
   const plannerSkillDirnameLit = shellEscape(PLANNER_SKILL_DIRNAME);
   const plannerSkillFilenameLit = shellEscape(PLANNER_SKILL_FILENAME);
   const agentCmd = getHarness(launchPlan.harness).buildAgentCommand({
-    sessionId, resume: false, contextFile, launchPlan,
+    sessionId, resume: false, contextFile, settingsFile: claudeSettingsPath(wtPath), launchPlan,
     worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
   });
 
@@ -896,7 +913,7 @@ export function buildWorktreeBootstrapScript(
   const branchLit = shellEscape(branchName);
   const workerLit = shellEscape(workerName);
 
-  // The inline config below is the claude-code dialect (.claude/settings.json +
+  // The inline config below is the claude-code dialect (status line +
   // skills). For a Codex worker it is inert (Codex ignores .claude/), so rather
   // than fork the whole bootstrap we leave it and ADD the Codex runtime after
   // worktree setup: directory-trust + the composed rules as AGENTS.md (hooks
@@ -933,8 +950,7 @@ export GARDEN_BASE_BRANCH="$BASE"
 ${beadsEnvExports(projectName, workerName)}
 
 # Atomically write stdin to a destination via tmp+rename so concurrent readers
-# (Claude on SessionStart / --resume reading .claude/settings.json) never see
-# a partial file.
+# (Claude on SessionStart / --resume) never see a partial file.
 atomic_write() {
   _aw_dest="$1"
   _aw_tmp="\${_aw_dest}.tmp.$$"
@@ -1069,15 +1085,11 @@ _gh_leaked=$(git -C ${wtPathLit} config --local --get core.hooksPath 2>/dev/null
 case "$_gh_leaked" in *.garden-hooks) git -C ${wtPathLit} config --local --unset core.hooksPath 2>/dev/null || true ;; esac
 git -C ${wtPathLit} config --worktree core.hooksPath ${hooksDirLit}
 
-# Install Claude Code hooks — settings.json (not .local.json, which Claude Code auto-edits and would clobber).
-# chmod 444: defense-in-depth so an agent can't trivially edit its own
-# sandbox without first chmod'ing — installRuntimeConfig rewrites this on
-# every refresh/bounce anyway, so tampering doesn't survive long.
+# Garden's hooks and sandbox reach Claude via --settings (written before this
+# script ran), so the repo's own .claude/settings.json is left untouched.
 mkdir -p ${wtPathLit}/.claude
-printf '%s' ${settingsJsonLit} | atomic_write ${wtPathLit}/.claude/settings.json
-chmod 444 ${wtPathLit}/.claude/settings.json
 
-# The status-line script settings.json points at (model / effort / context left).
+# The status-line script garden's settings point at (model / effort / context left).
 printf '%s' ${statusLineScriptLit} | atomic_write ${wtPathLit}/.claude/${statusLineFilenameLit}
 chmod 555 ${wtPathLit}/.claude/${statusLineFilenameLit}
 
@@ -1170,7 +1182,7 @@ export function respawnWorkerWindow(
   const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
   // entry.model: default/grow per-worker pin; trellis resolves per
   // iteration, so vines never carry it.
-  const resumeOpts: WorktreeCommandOptions = { launchPlan };
+  const resumeOpts: WorktreeCommandOptions = { launchPlan, worktreePath: entry.worktreePath };
   if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
   if (entry.workflow === "grow" && entry.grow) {
     resumeOpts.grow = {
@@ -1190,6 +1202,8 @@ export function respawnWorkerWindow(
           projectName, projectConfig.path, entry.branchName ?? entry.name,
           baseBranch, resumeOpts,
         ),
+        ultracode: launchPlan.ultracode,
+        beforeLaunch: true,
       },
     );
   }
@@ -1265,6 +1279,7 @@ export function buildWorktreeResumeCommand(
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
   const claudeCmd = getHarness(launchPlan.harness).buildAgentCommand({
     sessionId, resume: true, contextFile, launchPlan,
+    settingsFile: claudeSettingsPath(opts?.worktreePath ?? worktreePath(projectName, workerName)),
     worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;

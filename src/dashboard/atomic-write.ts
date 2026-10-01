@@ -3,8 +3,8 @@
 // readers see partial or empty contents. Atomic rename is the only way to make
 // a file's complete final contents appear to readers in one filesystem op.
 // Used for every file that another process might read concurrently with a
-// write — registry, state, config, rendered status caches, and per-worker
-// .claude/settings.json that Claude itself reads on SessionStart and resume.
+// write — registry, state, config, rendered status caches, and the per-worker
+// Claude settings file that Claude itself reads on SessionStart and resume.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -50,8 +50,8 @@ export function atomicWriteFile(
     // unclean shutdown. Skipped when durable === false for throwaway repaint
     // caches whose next event rebuilds them. Wrapped and swallowed because
     // fsync is genuinely optional here: it can be unavailable on some
-    // filesystems, EACCES on a read-only-mode tmp file (e.g. 0o444
-    // settings.json), or stubbed out under a partial fs mock — none of which
+    // filesystems, EACCES on a read-only-mode tmp file (e.g. the 0o444
+    // Claude settings file), or stubbed out under a partial fs mock — none of which
     // should fail the write.
     if (opts?.durable !== false) {
       try {

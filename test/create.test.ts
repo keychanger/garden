@@ -170,6 +170,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   resolveBaseBranch: vi.fn(() => "main"),
   getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   getRemoteHost: vi.fn(() => "github.com"),
+  worktreePath: vi.fn((project: string, worker: string) => `/worktrees/${project}/${worker}`),
 }));
 
 vi.mock("../src/dashboard/window-names.js", async () => {
@@ -179,6 +180,7 @@ vi.mock("../src/dashboard/window-names.js", async () => {
 
 import fs from "node:fs";
 import { claudeCodeAdapter } from "../src/dashboard/harness/claude-code.js";
+import { claudeSettingsPath } from "../src/dashboard/headless-paths.js";
 import {
   createShellWindow,
   createLogsWindow,
@@ -212,18 +214,25 @@ beforeEach(() => {
 describe("claude-code adapter installRuntimeConfig", () => {
   // Moved from create.ts onto the harness adapter (docs/MULTI-MODEL.md
   // "Layer 3"); the behavioral contract is unchanged.
-  it("writes hooks JSON to .claude/settings.json", () => {
+  it("writes hooks JSON to garden's settings file outside the worktree, never the repo's .claude/settings.json", () => {
     process.argv[1] = "/usr/local/bin/garden";
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
-    expect(fs.mkdirSync).toHaveBeenCalledWith(
-      expect.stringContaining(".claude"),
-      { recursive: true },
-    );
-    // atomicWriteFile renames the tmp file onto the final settings.json path.
+    // atomicWriteFile renames the tmp file onto the final settings path.
     expect(fs.renameSync).toHaveBeenCalledWith(
-      expect.stringMatching(/\.claude\/settings\.json\.[0-9a-f-]+\.tmp$/),
-      expect.stringMatching(/\.claude\/settings\.json$/),
+      expect.stringContaining(`${claudeSettingsPath("/repo/myproject")}.`),
+      claudeSettingsPath("/repo/myproject"),
     );
+    const renameTargets = vi.mocked(fs.renameSync).mock.calls.map(c => String(c[1]));
+    expect(renameTargets).not.toContain("/repo/myproject/.claude/settings.json");
+  });
+
+  it("enables the ultracode keyword trigger only for an ultracode launch", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
+    expect(JSON.parse(settingsJsonContent()).ultracodeKeywordTrigger).toBeUndefined();
+    vi.mocked(fs.writeFileSync).mockClear();
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" }, { ultracode: true });
+    expect(JSON.parse(settingsJsonContent()).ultracodeKeywordTrigger).toBe("on");
   });
 
   it("does not write to settings.local.json (Claude Code auto-edits it)", () => {
@@ -234,11 +243,11 @@ describe("claude-code adapter installRuntimeConfig", () => {
     expect(renameTargets.every(p => !p.endsWith("settings.local.json"))).toBe(true);
   });
 
-  // Find the writeFileSync call whose tmp path corresponds to settings.json.
+  // Find the writeFileSync call whose tmp path corresponds to the settings file.
   function settingsJsonContent(): string {
     const writes = vi.mocked(fs.writeFileSync).mock.calls;
-    const call = writes.find(c => /\.claude\/settings\.json\.[0-9a-f-]+\.tmp$/.test(String(c[0])));
-    if (!call) throw new Error("settings.json write not found");
+    const call = writes.find(c => String(c[0]).startsWith(`${claudeSettingsPath("/repo/myproject")}.`));
+    if (!call) throw new Error("settings file write not found");
     return String(call[1]);
   }
 
@@ -314,8 +323,7 @@ describe("claude-code adapter installRuntimeConfig", () => {
   it("pre-allows tmux plus read-only tail utilities so compound tmux chains don't escalate, and leaves defaultMode to the launch flag", () => {
     process.argv[1] = "/usr/local/bin/garden";
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
-    const written = vi.mocked(fs.writeFileSync).mock.calls[0][1] as string;
-    const parsed = JSON.parse(written);
+    const parsed = JSON.parse(settingsJsonContent());
     expect(parsed.permissions).toEqual({
       allow: [
         "Bash(tmux:*)",
@@ -741,18 +749,24 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toContain('dashboard _bootstrap-alert myproject "$BASE"');
   });
 
-  it("writes Claude hooks to .claude/settings.json, not settings.local.json", () => {
+  it("writes Claude hooks to garden's settings file and launches with it, leaving the repo's settings files alone", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(
       "myproject", "/repo/myproject", "bold-ash", "bold-ash",
       "session-123", "/wt/myproject/bold-ash", "main",
     );
+    const settingsFile = claudeSettingsPath("/wt/myproject/bold-ash");
+    const settingsWrite = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => String(c[0]).startsWith(`${settingsFile}.`),
+    );
+    expect(JSON.parse(String(settingsWrite![1])).hooks.SessionStart).toBeDefined();
     const call = vi.mocked(fs.writeFileSync).mock.calls.find(
       c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
     );
     expect(call).toBeDefined();
     const script = call![1] as string;
-    expect(script).toContain("/.claude/settings.json");
+    expect(script).toContain(`--settings ${settingsFile}`);
+    expect(script).not.toContain("/.claude/settings.json");
     expect(script).not.toContain("/.claude/settings.local.json");
   });
 

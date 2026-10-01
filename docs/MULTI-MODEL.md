@@ -186,7 +186,7 @@ Distilled from the audit, in descending order of how load-bearing they are:
    Reviewer, resolver, and ci-fix all ride this.
 4. **Permission auto-approval + sandbox.** Garden does not implement its
    own sandbox: `sandbox.ts` builds a config object that is serialized
-   into `.claude/settings.json` and *Claude Code* enforces it
+   into garden's Claude settings file (passed with `--settings`) and *Claude Code* enforces it
    (Seatbelt/bubblewrap). A foreign harness must bring its own equivalent
    (or run unsandboxed, which is unacceptable for autonomous workers).
 5. **System-prompt/rules injection** at session start
@@ -415,7 +415,7 @@ What changes to consume this:
   safety net that makes cheap or experimental worker models safe to try:
   a DeepSeek worker reviewed by an Opus reviewer fails safe.
 - `sandbox.ts` keeps the Anthropic domains unconditionally — the
-  reviewer shares the worktree's settings.json — and unions in the
+  reviewer shares the worker's settings file — and unions in the
   provider's `baseUrl` host plus declared `egressHosts` for
   provider-backed projects (DeepSeek adds `api.deepseek.com`; a local
   Ollama adds `localhost`).
@@ -554,7 +554,7 @@ Notes pinned down by the audit:
   with no following `response_item` heals a stale `working` worker to `idle`.
   Both paths are driven by rollout filesystem writes; no timer scans sessions.
 - **`installRuntimeConfig` owns the config-file dialect**:
-  `.claude/settings.json` + `.claude/skills/` for Claude;
+  garden's `--settings` file + `.claude/skills/` for Claude;
   `CODEX_HOME/config.toml` directory-trust + `AGENTS.md` for Codex
   (rules text written to `AGENTS.md`; skills folded into the rules text
   when `capabilities.skills` is false; the lifecycle hooks ride `-c` launch
