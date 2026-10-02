@@ -348,4 +348,21 @@ describe("background task tracking", () => {
     workerHookHandlers.onSessionStart(hookCtx("sessionstart", { backgroundTasks: pending }, { source: "compact" }));
     expect(writtenBackgroundTasks()).toEqual([]);
   });
+
+  it("lands the reset even inside the heartbeat window — a bounce mid-turn resumes within seconds", () => {
+    // The last scan predates a launch the now-dead process made (the record
+    // written in beforeEach). A resume SessionStart preserves agentStatus and
+    // flips no display, so without the bypass the heartbeat throttle would drop
+    // this write and the next Stop's scan would revive that launch as a
+    // pending task with no decay.
+    const stale = { transcriptPath: transcript, offset: 0, pending: [] };
+    workerHookHandlers.onSessionStart(hookCtx(
+      "sessionstart",
+      { agentStatus: "idle", backgroundTasks: stale, lastEventAt: Date.now() - 1_000 },
+      { source: "resume" },
+    ));
+    expect(writtenBackgroundTasks()).toEqual([
+      { transcriptPath: transcript, offset: fs.statSync(transcript).size, pending: [] },
+    ]);
+  });
 });

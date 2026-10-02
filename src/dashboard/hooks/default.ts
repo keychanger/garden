@@ -271,10 +271,15 @@ function applyAndLog(
   // is not just liveness: it must beat the throttle AND repaint, because the
   // first subagent event after Stop is the only carrier of the idle→working
   // flip. Steady-state stamps (already delegating) stay throttled.
-  const delegatingChanged = fields.subagentActivityAt !== undefined
-    && isDelegating({ ...ctx.workerInfo.entry, subagentActivityAt: fields.subagentActivityAt }, now)
+  const delegatingChanged = (fields.subagentActivityAt !== undefined || "backgroundTasks" in fields)
+    && isDelegating({ ...ctx.workerInfo.entry, ...fields }, now)
       !== isDelegating(ctx.workerInfo.entry, now);
-  if (!stateChanged && !blockCleared && !activityUnset && !delegatingChanged
+  // A background-task reset (SessionStart on resume, which preserves agentStatus)
+  // must land even inside the heartbeat window: a bounce mid-turn arrives within
+  // seconds of the last tool event, and a dropped reset lets the next Stop scan
+  // revive launches the dead process made — with no freshness window to decay.
+  const backgroundReset = "backgroundTasks" in fields;
+  if (!stateChanged && !blockCleared && !activityUnset && !delegatingChanged && !backgroundReset
       && now - (ctx.workerInfo.entry.lastEventAt ?? 0) < HOOK_HEARTBEAT_MS) {
     return;
   }

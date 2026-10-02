@@ -828,6 +828,14 @@ function isWorkerRegistry(x: unknown): x is WorkerRegistry {
         const stamp = entry.ciNoRuns as Record<string, unknown>;
         if (typeof stamp.sha !== "string" || typeof stamp.since !== "number") return false;
       }
+      if (entry.backgroundTasks !== undefined) {
+        if (!entry.backgroundTasks || typeof entry.backgroundTasks !== "object") return false;
+        const scan = entry.backgroundTasks as Record<string, unknown>;
+        if (typeof scan.transcriptPath !== "string" || typeof scan.offset !== "number"
+            || !Array.isArray(scan.pending) || !scan.pending.every(id => typeof id === "string")) {
+          return false;
+        }
+      }
     }
   }
   return true;

@@ -80,6 +80,13 @@ describe("readRegistry", () => {
       { name: "w", blockedTurnEndedAt: "recent" },
       { name: "w", pendingHandoffCallbacks: "forged" },
       { name: "w", pendingHandoffCallbacks: ["valid", 42] },
+      // isDelegating reads `.pending.length` on every status bake; a forged
+      // shape here would crash the renderer rather than mislabel a row.
+      { name: "w", backgroundTasks: "forged" },
+      { name: "w", backgroundTasks: { transcriptPath: "/t.jsonl", offset: 0 } },
+      { name: "w", backgroundTasks: { transcriptPath: "/t.jsonl", offset: "0", pending: [] } },
+      { name: "w", backgroundTasks: { transcriptPath: 1, offset: 0, pending: [] } },
+      { name: "w", backgroundTasks: { transcriptPath: "/t.jsonl", offset: 0, pending: ["b1", 2] } },
     ]) {
       fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [bad] } }));
       expect(readRegistry()).toEqual({ workers: {} });
@@ -100,6 +107,7 @@ describe("readRegistry", () => {
         blockedAt: 999,
         blockedTurnEndedAt: 1000,
         pendingHandoffCallbacks: ["child settled"],
+        backgroundTasks: { transcriptPath: "/t.jsonl", offset: 42, pending: ["b13krek0m"] },
       }] },
     }));
     expect(readRegistry().workers.proj[0]).toMatchObject({
@@ -112,6 +120,7 @@ describe("readRegistry", () => {
       blockedAt: 999,
       blockedTurnEndedAt: 1000,
       pendingHandoffCallbacks: ["child settled"],
+      backgroundTasks: { transcriptPath: "/t.jsonl", offset: 42, pending: ["b13krek0m"] },
     });
   });
 });
