@@ -110,17 +110,25 @@ export function codexStderrSidecar(resultFile: string): string {
 //   - writable_roots — garden's shared extra roots beyond cwd + /tmp. Mirrors
 //     the HOME-based entries of sandbox.ts DEFAULT_ALLOW_WRITE (npm/cache/
 //     registry writes during checks), the resolved beads store for an intake
-//     project, plus the worktree's shared git common dir (worktreeGitDir). A
+//     project, plus the linked worktree's git dirs (worktreeGitDirs). A
 //     garden worker runs in a *linked* worktree whose real git dir is the main
-//     checkout's `.git` — outside cwd — so without that root a Codex worker
+//     checkout's `.git` — outside cwd — so without those roots a Codex worker
 //     could not commit or push (claude-code's sandbox auto-grants the git dir;
-//     Codex workspace-write does not). The HOME roots are constant across
-//     workers; the bead and git roots are per-project.
+//     Codex workspace-write does not). The worktree's own admin dir
+//     (`.git/worktrees/<name>`, holding HEAD and the index) must be granted
+//     by its exact path, not only through the common dir above it: from
+//     0.160.0 Codex resolves the cwd's `.git` pointer and carves its target
+//     out of every broader writable root as read-only, exempting only a path
+//     that is itself an explicit entry. Granting just the common dir left
+//     `git add` denied on `index.lock` (verified against the 0.160.0 source,
+//     protocol/src/permissions.rs get_writable_roots_with_cwd_impl). The HOME
+//     roots are constant across workers; the bead and git roots are
+//     per-project and per-worker.
 // Every dynamic value is shell-escaped: the result is spliced into the launch
 // command string.
 function codexSandboxFlags(
   project: AgentCommandOptions["launchPlan"]["runtimeProject"],
-  worktreeGitDir?: string,
+  worktreeGitDirs: string[] = [],
 ): string {
   const home = process.env.HOME || os.homedir();
   const writableRoots = [
@@ -129,7 +137,7 @@ function codexSandboxFlags(
     path.join(home, ".garden", "sessions"),
   ];
   if (project.beadIntake) writableRoots.push(resolveBeadsDir(project));
-  if (worktreeGitDir) writableRoots.push(worktreeGitDir);
+  writableRoots.push(...worktreeGitDirs);
   // The launch plan already validated and canonicalized these roots; keeping
   // validation there lets the hook bundle discard its filesystem closure.
   writableRoots.push(...(project.sandboxWriteRoots ?? []));
@@ -279,7 +287,7 @@ export const codexCore: HarnessCore = {
       ? ` -c ${shellEscape(`model_reasoning_effort=${plan.effort}`)}`
       : "";
     const trust = "--dangerously-bypass-hook-trust";
-    const sandbox = codexSandboxFlags(plan.runtimeProject, opts.worktreeGitDir);
+    const sandbox = codexSandboxFlags(plan.runtimeProject, opts.worktreeGitDirs);
     const hooks = codexHookFlags(resolveHookRunner());
     const statusLine = codexStatusLineFlag();
     return opts.resume

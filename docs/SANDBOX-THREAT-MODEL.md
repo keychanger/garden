@@ -100,7 +100,10 @@ reads or runs.
   - **No per-domain egress** — `network_access` is a boolean; the `sandboxDomains`
     allowlist is not enforced. A compromised Codex worker can reach any host.
   - **A broad git-dir write grant** — the worker gets the shared git common dir
-    (`<main>/.git`) writable so it can commit/push from a linked worktree. That grant
+    (`<main>/.git`) writable so it can commit/push from a linked worktree, plus the
+    worktree's own `<main>/.git/worktrees/<name>` by exact path (Codex 0.160+ protects
+    that resolved gitdir from broader grants; it sits inside the common dir, so naming it
+    widens nothing). That grant
     still includes `hooks/` and `config`, so a Codex worker can write `<main>/.git/hooks/*`
     (which the main checkout now runs, post git-hook isolation) or repoint `core.hooksPath`
     via `config`. Narrowing the grant to exclude `hooks/`/`config` is pending validation

@@ -418,24 +418,26 @@ describe("codex adapter dialect", () => {
     expect(resumed).toContain("-c model_reasoning_effort=high");
   });
 
-  it("adds the worktree git common dir to the sandbox writable roots", async () => {
+  it("adds the worktree's git dirs to the sandbox writable roots", async () => {
     const { getHarnessCore } = await importCore();
     // A linked worktree's git store lives at the main checkout's .git, outside
     // cwd — Codex workspace-write must be granted it or the worker cannot
     // commit/push (claude-code's sandbox auto-grants it; Codex's does not).
+    // The worktree's own admin dir is named separately: Codex 0.160+ carves it
+    // out of the broader common-dir grant unless it is an explicit root.
     const withGit = getHarnessCore("codex").buildAgentCommand({
       sessionId: "", resume: false, contextFile: "/ignored", settingsFile: "/ignored",
       launchPlan: workerPlan("codex"),
-      worktreeGitDir: "/Users/x/proj/.git",
+      worktreeGitDirs: ["/Users/x/proj/.git", "/Users/x/proj/.git/worktrees/w"],
     });
-    expect(withGit).toContain('"/Users/x/proj/.git"');
+    expect(withGit).toContain('"/Users/x/proj/.git", "/Users/x/proj/.git/worktrees/w"]');
     expect(withGit).toContain("sandbox_workspace_write.writable_roots=[");
     // Absent when no git dir is threaded (e.g. the ad-hoc project-dir launch).
     const withoutGit = getHarnessCore("codex").buildAgentCommand({
       sessionId: "", resume: false, contextFile: "/ignored", settingsFile: "/ignored",
       launchPlan: workerPlan("codex"),
     });
-    expect(withoutGit).not.toContain("/.git\"");
+    expect(withoutGit).not.toContain("/.git");
   });
 
   it("adds the project's configured sandboxWriteRoots to fresh and resumed launches", async () => {
@@ -444,10 +446,10 @@ describe("codex adapter dialect", () => {
     const fresh = getHarnessCore("codex").buildAgentCommand({
       sessionId: "", resume: false, contextFile: "/ignored", settingsFile: "/ignored",
       launchPlan: workerPlan("codex", { runtimeProject }),
-      worktreeGitDir: "/Users/x/proj/.git",
+      worktreeGitDirs: ["/Users/x/proj/.git", "/Users/x/proj/.git/worktrees/w"],
     });
-    // Appended after the defaults and the git common dir, which stay granted.
-    expect(fresh).toContain('/.garden/sessions", "/Users/x/proj/.git", "/opt/creds/gcloud"]');
+    // Appended after the defaults and the git dirs, which stay granted.
+    expect(fresh).toContain('/.garden/sessions", "/Users/x/proj/.git", "/Users/x/proj/.git/worktrees/w", "/opt/creds/gcloud"]');
     // A bounce resumes through the same renderer, so the grant survives it.
     const resumed = getHarnessCore("codex").buildAgentCommand({
       sessionId: "019f-abc", resume: true, contextFile: "/ignored", settingsFile: "/ignored",

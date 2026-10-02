@@ -335,9 +335,11 @@ launch now renders Codex's own `workspace-write` sandbox instead
 sandbox_workspace_write.network_access=true -c
 sandbox_workspace_write.writable_roots=[...]`. cwd and `/tmp` are writable by
 default; the extra roots mirror the HOME-based entries of `sandbox.ts`
-`DEFAULT_ALLOW_WRITE`, **plus the worktree's shared git common dir**
-(`AgentCommandOptions.worktreeGitDir`, resolved via `getGitCommonDir`). That
-last root is load-bearing: a garden worker runs in a *linked* worktree whose
+`DEFAULT_ALLOW_WRITE`, **plus the worktree's git dirs**
+(`AgentCommandOptions.worktreeGitDirs`: the common dir via `getGitCommonDir`
+and the worktree's own admin dir via `getWorktreeAdminDir` — Codex 0.160+
+carves the latter read-only out of the common-dir grant unless it is named
+explicitly). Those roots are load-bearing: a garden worker runs in a *linked* worktree whose
 git store lives at the main checkout's `.git`, outside cwd — Codex
 `workspace-write` does not auto-grant it (Claude Code's sandbox does), so
 without it a Codex worker could not `git commit`/`push`. The reviewer's

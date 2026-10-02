@@ -27,7 +27,7 @@ import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./poller.js";
 import { startUsagePoller } from "./usage-poller.js";
 import { startWatchdog } from "./watchdog.js";
-import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost, getGitCommonDir, worktreePath } from "./git.js";
+import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost, getGitCommonDir, getWorktreeAdminDir, worktreePath } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
 import { resolveGardenRunner, resolveHookRunner } from "./runner.js";
 import { buildSandboxConfig } from "./sandbox.js";
@@ -727,10 +727,11 @@ export function buildWorktreeWorkerCommand(
   );
   const project = resolveProjectForHooks(projectName, projectPath);
   const launchPlan = commandLaunchPlan(project, opts, false);
+  const wtPath = opts?.worktreePath ?? worktreePath(projectName, workerName);
   const agentCmd = getHarness(launchPlan.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, launchPlan,
-    settingsFile: claudeSettingsPath(opts?.worktreePath ?? worktreePath(projectName, workerName)),
-    worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
+    settingsFile: claudeSettingsPath(wtPath),
+    worktreeGitDirs: codexWorktreeGitDirs(launchPlan.harness, projectPath, wtPath),
   });
   return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
@@ -773,13 +774,16 @@ function commandLaunchPlan(
   });
 }
 
-// The worktree git common dir a Codex worker's sandbox must be able to write
-// (its git store sits outside the worktree cwd — see AgentCommandOptions
-// .worktreeGitDir). Resolved from the project's main checkout so it works
-// before the worktree exists; only for the codex harness (skips the git spawn
-// on the hot claude-code path). Other harnesses ignore the field.
-function codexWorktreeGitDir(harness: string | undefined, projectPath: string): string | undefined {
-  return harness === "codex" ? (getGitCommonDir(projectPath) ?? undefined) : undefined;
+// The git dirs a Codex worker's sandbox must be able to write: the common dir
+// and this worktree's own admin dir, both outside the worktree cwd (see
+// AgentCommandOptions.worktreeGitDirs). Resolved from the project's main
+// checkout so it works before the worktree exists; only for the codex harness
+// (skips the git spawn on the hot claude-code path). Other harnesses ignore
+// the field.
+function codexWorktreeGitDirs(harness: string | undefined, projectPath: string, wtPath: string): string[] | undefined {
+  if (harness !== "codex") return undefined;
+  const commonDir = getGitCommonDir(projectPath);
+  return commonDir ? [commonDir, getWorktreeAdminDir(wtPath, commonDir)] : undefined;
 }
 
 // Resolve a ProjectConfig for the harness adapter installRuntimeConfig calls. Callers of buildWorkerCommand
@@ -904,7 +908,7 @@ export function buildWorktreeBootstrapScript(
   const plannerSkillFilenameLit = shellEscape(PLANNER_SKILL_FILENAME);
   const agentCmd = getHarness(launchPlan.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, settingsFile: claudeSettingsPath(wtPath), launchPlan,
-    worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
+    worktreeGitDirs: codexWorktreeGitDirs(launchPlan.harness, projectPath, wtPath),
   });
 
   const base = baseBranch ?? "main";
@@ -1276,11 +1280,12 @@ export function buildWorktreeResumeCommand(
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
   const launchPlan = commandLaunchPlan(project, opts, true);
+  const wtPath = opts?.worktreePath ?? worktreePath(projectName, workerName);
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
   const claudeCmd = getHarness(launchPlan.harness).buildAgentCommand({
     sessionId, resume: true, contextFile, launchPlan,
-    settingsFile: claudeSettingsPath(opts?.worktreePath ?? worktreePath(projectName, workerName)),
-    worktreeGitDir: codexWorktreeGitDir(launchPlan.harness, projectPath),
+    settingsFile: claudeSettingsPath(wtPath),
+    worktreeGitDirs: codexWorktreeGitDirs(launchPlan.harness, projectPath, wtPath),
   });
   const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
   return `${identityExports} ${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;

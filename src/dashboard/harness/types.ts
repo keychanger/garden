@@ -79,14 +79,15 @@ export interface AgentCommandOptions {
   settingsFile: string;
   /** Validated identity/backend/policy tuple for this launch. */
   launchPlan: WorkerLaunchPlan;
-  /** Absolute path to the worktree's shared git common dir (`<main>/.git`).
-   *  A harness whose sandbox does not auto-grant the git dir (Codex
-   *  workspace-write) adds it to its writable roots so the worker can
-   *  commit/push — the git store sits outside the worktree cwd. claude-code
-   *  ignores it (its sandbox layer grants the git dir automatically). Absent
-   *  when the caller has no worktree context (e.g. the ad-hoc project-dir
-   *  launch) or the harness does not need it. */
-  worktreeGitDir?: string;
+  /** Absolute paths of the git dirs a linked worktree writes through: the
+   *  shared common dir (`<main>/.git`: objects, refs) and the worktree's own
+   *  admin dir (`<main>/.git/worktrees/<name>`: HEAD, index). A harness whose
+   *  sandbox does not auto-grant the git dir (Codex workspace-write) adds them
+   *  to its writable roots so the worker can commit/push — both sit outside
+   *  the worktree cwd. claude-code ignores it (its sandbox layer grants the
+   *  git dir automatically). Absent when the caller has no worktree context
+   *  (e.g. the ad-hoc project-dir launch) or the harness does not need it. */
+  worktreeGitDirs?: string[];
 }
 
 export interface HeadlessCommandOptions {

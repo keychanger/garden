@@ -1218,8 +1218,8 @@ function git(cwd: string, ...args: string[]): string {
 
 // Absolute path to the repo's shared git common dir (`<main>/.git`) — the
 // object store and refs every linked worktree writes through. A worktree's own
-// git dir (HEAD/index/logs) lives under it at `worktrees/<name>/`, so this one
-// path covers all of a worker's git writes. Resolved from the main checkout so
+// git dir (HEAD/index/logs) lives under it at `worktrees/<name>/` — see
+// getWorktreeAdminDir for why a sandbox grants that one separately. Resolved from the main checkout so
 // it works before a worktree exists; returns null if git can't resolve it.
 // Used to grant a Codex worker's workspace-write sandbox access to its git
 // storage, which sits OUTSIDE the worktree cwd (claude-code's sandbox
@@ -1231,4 +1231,19 @@ export function getGitCommonDir(repoPath: string): string | null {
   } catch {
     return null;
   }
+}
+
+// A linked worktree's own admin dir under the common dir (HEAD, index), read
+// from its `.git` pointer file exactly as Codex resolves it, so a sandbox grant
+// names the same path Codex protects. Before the worktree exists (a fresh
+// spawn builds its launch command first), this is where `git worktree add`
+// puts it: `<common>/worktrees/<basename>`.
+export function getWorktreeAdminDir(wtPath: string, commonDir: string): string {
+  try {
+    const pointer = fs.readFileSync(path.join(wtPath, ".git"), "utf-8").trim();
+    if (pointer.startsWith("gitdir:")) return path.resolve(wtPath, pointer.slice("gitdir:".length).trim());
+  } catch {
+    // Not created yet: fall through to git's default name.
+  }
+  return path.join(commonDir, "worktrees", path.basename(wtPath));
 }
