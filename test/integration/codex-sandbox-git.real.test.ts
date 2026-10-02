@@ -61,6 +61,7 @@ describe("codex worker sandbox: git in a linked worktree", () => {
 
   afterAll(() => {
     fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(probeHome, { recursive: true, force: true });
   });
 
   it("grants the common dir and the worktree's own admin dir, fresh and resumed", () => {
@@ -87,9 +88,10 @@ describe("codex worker sandbox: git in a linked worktree", () => {
     ], { encoding: "utf-8", env: { ...process.env, CODEX_HOME: codexHome }, timeout: 60_000 });
   }
 
+  const probeHome = fs.mkdtempSync(path.join(os.tmpdir(), "codex-probe-"));
   const probe = spawnSync("codex", ["sandbox", "-C", os.tmpdir(), "--", "/usr/bin/true"], {
     encoding: "utf-8",
-    env: { ...process.env, CODEX_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "codex-probe-")) },
+    env: { ...process.env, CODEX_HOME: probeHome },
     timeout: 60_000,
   });
   const sandboxAvailable = probe.error === undefined && probe.status === 0;
