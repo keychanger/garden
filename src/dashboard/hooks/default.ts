@@ -34,6 +34,7 @@ import { getPaneTitle } from "../tmux.js";
 import { DEFAULT_HARNESS, resolveWorkerActivity } from "../harness/core.js";
 import { CODEX_AWAITING_TASK } from "../harness/codex-core.js";
 import { maybeRefreshUsage } from "../usage.js";
+import { backgroundTaskBaseline, scanBackgroundTasks } from "../background-tasks.js";
 import { resolveGardenRunner } from "../runner.js";
 import type { HookContext, HookMethod, WorkflowHookHandlers } from "../workflows/types.js";
 
@@ -231,7 +232,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt" | "blockedQuestion" | "blockedAt" | "blockedTurnEndedAt">>;
+  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt" | "blockedQuestion" | "blockedAt" | "blockedTurnEndedAt" | "backgroundTasks">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -391,6 +392,12 @@ const onSessionStart: HookMethod = (ctx) => {
   } else {
     fields.agentStatus = "ready";
   }
+  // Compaction happens inside a live process, whose background tasks run on;
+  // every other start is a new process that holds none.
+  const transcriptPath = claudeTranscriptPath(ctx);
+  if (source !== "compact" && transcriptPath) {
+    fields.backgroundTasks = backgroundTaskBaseline(transcriptPath);
+  }
   const extraLog = source ? { source } : undefined;
   applyAndLog(ctx, fields, extraLog);
 };
@@ -453,6 +460,8 @@ const onTurnEnded: HookMethod = (ctx) => {
       && (entry.harness ?? DEFAULT_HARNESS) === DEFAULT_HARNESS) {
     fields.blockedTurnEndedAt = Date.now();
   }
+  const transcriptPath = claudeTranscriptPath(ctx);
+  if (transcriptPath) fields.backgroundTasks = scanBackgroundTasks(transcriptPath, entry.backgroundTasks);
   applyAndLog(ctx, fields);
   // routeStopHookEnd reads the registry fresh — the applyAndLog above has
   // already written agentStatus="idle". See STATUS.md invariant 2 (review
@@ -464,6 +473,15 @@ const onTurnEnded: HookMethod = (ctx) => {
   // watchdog tick (codex-usage.ts captureCodexUsageLatest), since the headless
   // reviewer/resolver/ci-fix roles spend Codex quota without firing any hook.
 };
+
+// Background-task tracking reads Claude Code's transcript shapes; Codex has
+// no equivalent records (background-tasks.ts).
+function claudeTranscriptPath(ctx: HookContext): string | undefined {
+  const { entry } = ctx.workerInfo!;
+  if ((entry.harness ?? DEFAULT_HARNESS) !== DEFAULT_HARNESS) return undefined;
+  const tp = ctx.input.transcript_path;
+  return typeof tp === "string" && tp ? tp : entry.transcriptPath;
+}
 
 // Fed by both Notification and the PreToolUse matchers (AskUserQuestion /
 // ExitPlanMode) — the two wire events signal the same condition.

@@ -173,6 +173,12 @@ describe("resolveWorkerStatus", () => {
       lastStateChangeAt: now - 60_000, subagentActivityAt: now - 5_000,
     }, now)).toBe("reviewing");
   });
+
+  it("derives working for an idle worker whose last turn left a background task running", () => {
+    const backgroundTasks = { transcriptPath: "/t.jsonl", offset: 1, pending: ["b13krek0m"] };
+    expect(resolveWorkerStatus({ agentStatus: "idle", backgroundTasks })).toBe("working");
+    expect(resolveWorkerStatus({ agentStatus: "idle", prState: "done", backgroundTasks })).toBe("done");
+  });
 });
 
 describe("worker deduplication", () => {

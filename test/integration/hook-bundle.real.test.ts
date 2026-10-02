@@ -22,8 +22,10 @@ import path from "node:path";
 // crew design seat landed (crew.ts reaches the hook via usage.ts's
 // codexInFleet; the measured bundle was 127.9KB, 129 bytes under the old
 // ceiling) — a retained state-handler graph is ~120KB, so 4KB of headroom
-// still cannot hide one.
-const HOOK_BUNDLE_CEILING_BYTES = 132 * 1024;
+// still cannot hide one. Raised to 136KB when the Stop hook began tracking
+// background tasks (background-tasks.ts, a node:fs leaf, ~1.9KB): the bundle
+// had grown to 131.8KB, 164 bytes under the old ceiling.
+const HOOK_BUNDLE_CEILING_BYTES = 136 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

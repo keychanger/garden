@@ -4,6 +4,9 @@
 // These tests pin the hook-side trigger conditions: mutating tools only,
 // reviewing state only, stamped once.
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -291,5 +294,58 @@ describe("onTurnEnded — owed handoff callbacks", () => {
     workerHookHandlers.onTurnEnded?.(ctx);
 
     expect(dispatchOwedHandoffCallbacks).toHaveBeenCalledWith("myproject", "bold-ash");
+  });
+});
+
+// The Stop hook records background tasks the transcript shows still running so
+// an idle row renders `working bg` (background-tasks.ts, isDelegating).
+describe("background task tracking", () => {
+  let transcript: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-hook-bg-"));
+    transcript = path.join(dir, "sess-1.jsonl");
+    fs.writeFileSync(transcript, JSON.stringify({
+      type: "user",
+      message: { role: "user", content: [{ type: "tool_result", content: "running" }] },
+      toolUseResult: { backgroundTaskId: "b13krek0m" },
+    }) + "\n");
+  });
+
+  function hookCtx(event: string, entry: Partial<WorkerEntry>, input: Record<string, unknown> = {}): HookContext {
+    const ctx = toolCtx(entry);
+    return { ...ctx, event, input: { transcript_path: transcript, ...input } } as HookContext;
+  }
+
+  function writtenBackgroundTasks(): unknown[] {
+    return vi.mocked(updateWorkerFields).mock.calls
+      .map(c => c[2] as Record<string, unknown>)
+      .filter(f => "backgroundTasks" in f)
+      .map(f => f.backgroundTasks);
+  }
+
+  it("records a pending background command at turn end", () => {
+    workerHookHandlers.onTurnEnded?.(hookCtx("stop", {}));
+    expect(writtenBackgroundTasks()).toEqual([
+      { transcriptPath: transcript, offset: fs.statSync(transcript).size, pending: ["b13krek0m"] },
+    ]);
+  });
+
+  it("skips a Codex worker, whose transcript has no such records", () => {
+    workerHookHandlers.onTurnEnded?.(hookCtx("stop", { harness: "codex" }));
+    expect(writtenBackgroundTasks()).toEqual([]);
+  });
+
+  it("resets at a process start but keeps tasks across compaction", () => {
+    const pending = { transcriptPath: transcript, offset: 0, pending: ["b13krek0m"] };
+    workerHookHandlers.onSessionStart(hookCtx("sessionstart", { backgroundTasks: pending }, { source: "resume" }));
+    expect(writtenBackgroundTasks()).toEqual([
+      { transcriptPath: transcript, offset: fs.statSync(transcript).size, pending: [] },
+    ]);
+
+    vi.clearAllMocks();
+    workerHookHandlers.onSessionStart(hookCtx("sessionstart", { backgroundTasks: pending }, { source: "compact" }));
+    expect(writtenBackgroundTasks()).toEqual([]);
   });
 });

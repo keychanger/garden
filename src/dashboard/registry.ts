@@ -14,6 +14,7 @@ import { atomicWriteFile } from "./atomic-write.js";
 import { withFileLock } from "./file-lock.js";
 import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
+import type { BackgroundTaskScan } from "./background-tasks.js";
 
 // agentStatus is written by Claude Code hooks, the tmux pane-died handler, and
 // the operator `hold` action (which writes "paused"). prState is written by
@@ -179,6 +180,12 @@ export interface WorkerEntry {
   // when the stamp flips the derived display — that write goes through
   // immediately so the row repaints the moment the condition is known.
   subagentActivityAt?: number;
+  // Background tasks (run_in_background Bash, async Agents) the worker's
+  // transcript shows launched and not yet finished, as of its last Stop — plus
+  // where that scan stopped reading. claude-code only; written by the Stop hook
+  // and reset at process start (background-tasks.ts). A non-empty set renders
+  // an idle worker as `working bg` (isDelegating below).
+  backgroundTasks?: BackgroundTaskScan;
   // Epoch ms when the worker was created (set in addWorker). Acts as the floor
   // for a brand-new worker's freshness before its first hook fires, so a
   // just-made worker sorts fresh instead of sinking to the bottom. Optional
@@ -697,21 +704,26 @@ export function isWorkerStale(entry: WorkerEntry, now: number = Date.now()): boo
 // the main thread, whose own events bump lastStateChangeAt past the stamp.
 export const SUBAGENT_ACTIVE_WINDOW_MS = 30 * 60_000;
 
-// An idle worker whose subagents are demonstrably still running: the last
-// subagent tool event postdates the main thread's park (lastStateChangeAt —
-// stamped by the Stop that wrote `idle`) and is fresh. The display layer
-// renders this as `working` with a dim `bg` tag (resolveWorkerStatus /
-// stateCell in commands/status.ts) so a worker waiting on its background
-// Workflow/Task agents doesn't read as finished. Display derivation ONLY:
+// An idle worker still running work the harness will wake it for: a background
+// task its last Stop left pending (background-tasks.ts), or subagents that are
+// demonstrably still running — the last subagent tool event postdates the main
+// thread's park (lastStateChangeAt — stamped by the Stop that wrote `idle`) and
+// is fresh. The display layer renders this as `working` with a dim `bg` tag
+// (resolveWorkerStatus / stateCell in commands/status.ts) so a worker waiting
+// on its background commands or Workflow/Task agents doesn't read as finished. Display derivation ONLY:
 // agentStatus stays `idle`, no state-machine edge moves, and the poller's
 // isWorkerClaudeWorking is unaffected. `asking` is deliberately excluded —
 // a blocked-on-operator row keeps its yellow flag regardless of subagent
 // activity (the original reason subagent events never move agentStatus).
 export function isDelegating(
-  entry: { agentStatus?: string; subagentActivityAt?: number; lastStateChangeAt?: number } | undefined,
+  entry: {
+    agentStatus?: string; subagentActivityAt?: number; lastStateChangeAt?: number;
+    backgroundTasks?: BackgroundTaskScan;
+  } | undefined,
   now: number = Date.now(),
 ): boolean {
   if (!entry || entry.agentStatus !== "idle") return false;
+  if ((entry.backgroundTasks?.pending.length ?? 0) > 0) return true;
   if (entry.subagentActivityAt === undefined) return false;
   if ((entry.lastStateChangeAt ?? 0) >= entry.subagentActivityAt) return false;
   return now - entry.subagentActivityAt < SUBAGENT_ACTIVE_WINDOW_MS;

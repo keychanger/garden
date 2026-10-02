@@ -1093,6 +1093,20 @@ describe("isDelegating", () => {
     expect(isDelegating(mkEntry({ name: "a", agentStatus: "idle" }), now)).toBe(false);
     expect(isDelegating(undefined, now)).toBe(false);
   });
+
+  it("is true for an idle worker whose last Stop left a background task pending, however old", async () => {
+    // A benchmark watcher can legitimately run for hours, so unlike the
+    // subagent stamp this carries no freshness window.
+    const { isDelegating } = await importRegistry();
+    const backgroundTasks = { transcriptPath: "/t.jsonl", offset: 10, pending: ["b13krek0m"] };
+    expect(isDelegating(mkEntry({
+      name: "a", agentStatus: "idle", lastStateChangeAt: now - 6 * 3_600_000, backgroundTasks,
+    }), now)).toBe(true);
+    expect(isDelegating(mkEntry({ name: "a", agentStatus: "asking", backgroundTasks }), now)).toBe(false);
+    expect(isDelegating(mkEntry({
+      name: "a", agentStatus: "idle", backgroundTasks: { ...backgroundTasks, pending: [] },
+    }), now)).toBe(false);
+  });
 });
 
 describe("resolveResumeAgentStatus", () => {

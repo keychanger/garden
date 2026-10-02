@@ -23,6 +23,7 @@ import { deriveCrew, workerMemberName, projectWorkerMemberName, projectWorkerMod
 import { unreadAlertCountsByProject } from "../dashboard/alerts.js";
 import { readIntakeStatus } from "../dashboard/intake-paths.js";
 import { pinnedModel } from "../dashboard/model-drift.js";
+import type { BackgroundTaskScan } from "../dashboard/background-tasks.js";
 import type { GardenConfig, ProjectConfig } from "../config.js";
 
 // Display states from STATUS.md. These are the only values the renderer ever
@@ -717,7 +718,7 @@ function padEndVisible(s: string, width: number): string {
 export function resolveWorkerStatus(
   entry: {
     agentStatus?: string; prState?: string; subagentActivityAt?: number;
-    lastStateChangeAt?: number; blockedQuestion?: string;
+    lastStateChangeAt?: number; blockedQuestion?: string; backgroundTasks?: BackgroundTaskScan;
   } | undefined,
   now: number = Date.now(),
 ): WorkerStatus {

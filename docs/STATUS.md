@@ -67,7 +67,8 @@ state in that situation is `asking`.
 ### Delegated background work (`working bg`)
 
 A worker can end its turn while background work it launched — Task
-subagents, background Workflow runs — is still executing. Claude Code
+subagents, background Workflow runs, a `run_in_background` command — is
+still executing. Claude Code
 fires `Stop` when the main thread finishes its response, so
 `agentStatus` is honestly `idle`; but the harness re-invokes the worker
 when the background work completes, and to the operator the worker is
@@ -107,6 +108,31 @@ The stamp's flip write — the first subagent event after `Stop` —
 bypasses the heartbeat throttle and triggers a repaint, because it is
 the only carrier of the idle→`working bg` change; steady-state stamps
 stay throttled as ordinary heartbeats.
+
+A background **command** fires no hook while it runs, so its evidence is
+the transcript, read at the one moment it matters: the `Stop` that
+parks the worker. Claude Code records each launch (a tool result whose
+`toolUseResult` carries `backgroundTaskId`, or `isAsync` + `agentId` for
+an async Agent) and each end (a `<task-notification>` with a `<status>`,
+or a `TaskStop` call, which emits no notification). The Stop hook scans
+what the transcript appended since its previous scan and stores the
+launched-but-unended ids with the scan's byte offset in
+`backgroundTasks` (`background-tasks.ts`); `isDelegating` renders an
+`idle` worker with a non-empty set as `working bg`. The same three
+properties hold — `agentStatus` stays `idle`, `asking` is excluded, and
+the display self-clears: a finished task starts a new turn whose `Stop`
+rescans without it. There is no freshness window, because a benchmark
+watcher legitimately runs for hours; instead the set is reset to empty
+by every `SessionStart` except `compact`, since a new process holds no
+background tasks (compaction happens inside a live one). A task running
+when the process dies is therefore never revived by a later scan.
+
+Any harness-tracked background command counts, including a dev server
+left running across turns: it is running, and its exit would wake the
+worker. Processes the agent detaches itself (`nohup … &`) are invisible
+to the harness and are not tracked. Monitor watches are not tracked
+either: their events carry no `<status>`, so nothing in the transcript
+marks one ended. claude-code only — Codex records no such lifecycle.
 
 ### Operator hold (paused)
 
@@ -719,8 +745,8 @@ clock. Update the list above when you do.
 ## Detection machinery
 
 The status of every worker is two fields in the registry: `agentStatus`
-and `prState` (plus one display-only stamp, `subagentActivityAt` — see
-"Delegated background work"). There are exactly five writers and one
+and `prState` (plus two display-only inputs, `subagentActivityAt` and
+`backgroundTasks` — see "Delegated background work"). There are exactly five writers and one
 reader. There is
 no `pgrep`, no marker file, no activity-text parsing, no fallback poll.
 
@@ -734,6 +760,8 @@ Claude process and call `garden dashboard _claude-hook <event>`:
 
 - `SessionStart` → branches on the hook input's `source` field:
   - `startup` or `clear` → `agentStatus = "ready"` (fresh context).
+  - Every source except `compact` also resets `backgroundTasks` to an
+    empty set starting at the transcript's current end (claude-code).
   - `resume` or `compact` → **preserve** the existing `agentStatus`; the
     hook writes nothing (self-healing only a missing value to `idle`).
     SessionStart *does* fire on `--resume` (source=`resume`), so this is
@@ -753,7 +781,8 @@ Claude process and call `garden dashboard _claude-hook <event>`:
 - `UserPromptSubmit` → `agentStatus = "working"`. Also clears `prState`
   if it equals `merged` or `done` (this is the only place either is
   cleared).
-- `Stop` → `agentStatus = "idle"`. If commits ahead of base exist AND the
+- `Stop` → `agentStatus = "idle"`, plus a `backgroundTasks` rescan of
+  the transcript (claude-code; see "Delegated background work"). If commits ahead of base exist AND the
   worktree is clean (`git status --porcelain` empty — no tracked or
   untracked changes), also sets `pendingReviewAt = Date.now()` and pokes
   the project's poller FIFO so review begins immediately. A dirty tree
@@ -950,8 +979,8 @@ question derives `asking` over them because operator attention is more urgent;
 combine function.
 
 The reader carries two derived branches: `blockedQuestion` → `asking` as shown
-above, and an `idle` worker that `isDelegating` (live subagent activity — see
-"Delegated background work") → `working`. Registry values are untouched; both
+above, and an `idle` worker that `isDelegating` (live subagent activity or a
+pending background task — see "Delegated background work") → `working`. Registry values are untouched; both
 derivations live entirely in this one reader.
 
 ### Hook → display pipeline
