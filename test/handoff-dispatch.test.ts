@@ -131,13 +131,16 @@ describe("waitForHandoffResponse", () => {
     const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
     const reqFile = path.join(reqDir, `${id}.req.json`);
     const respFile = resultPath(id);
-    setTimeout(() => { fs.unlinkSync(reqFile); }, 50);
+    // Claimed before the wait starts and a generous processing window: neither
+    // half may depend on a timer firing inside the 200ms claim window, which a
+    // loaded CI runner's event loop can overshoot.
+    fs.unlinkSync(reqFile);
     setTimeout(() => {
       fs.mkdirSync(path.dirname(respFile), { recursive: true });
       fs.writeFileSync(respFile, JSON.stringify({ workerName: "slow-oak", completedAt: 1 }));
     }, 400);
 
-    const resp = await waitForHandoffResponse(id, 200, 1_000);
+    const resp = await waitForHandoffResponse(id, 200, 10_000);
     expect(resp?.workerName).toBe("slow-oak");
   });
 });
