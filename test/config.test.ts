@@ -900,8 +900,6 @@ describe("sandboxAllowLocalBinding project config key", () => {
   });
 
   // An explicitly-persisted `false` must read back as false, not "(not set)".
-  // It is a security toggle: the read-back is how an operator confirms the
-  // deny is off deliberately rather than never configured.
   it("reads back an explicit false as false, not as unset", async () => {
     const { config } = await setup();
     const lines: string[] = [];

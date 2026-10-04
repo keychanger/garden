@@ -35,7 +35,8 @@ export function holisticFindingsPath(project: string, worker: string): string {
 }
 
 // Garden's Claude Code settings (hooks, sandbox, status line), passed to every
-// Claude launch with `--settings`. Kept outside the worktree so a repo that
+// interactive Claude launch with `--settings` (a headless launch generates its
+// own `<promptFile>.settings.json` sidecar). Kept outside the worktree so a repo that
 // commits its own .claude/settings.json is never overwritten, and outside every
 // worker sandbox so a worker cannot edit its own sandbox.
 export const CLAUDE_SETTINGS_DIR = path.join(CONTROL_DIR, "claude-settings");

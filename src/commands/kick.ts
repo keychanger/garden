@@ -6,6 +6,13 @@ import { tryGetProject } from "../config.js";
 import { output } from "../output.js";
 import { resolveWorkerArg } from "./resolve-worker.js";
 
+// Failing reasons where the worker's *code* is fine and the failure is on the
+// reviewer side — Anthropic API blip, reviewer crashed mid-stream, reviewer
+// went off-rails without emitting a verdict, reviewer killed by the wall-clock
+// cap before it could emit one. For these, `kick` re-queues the review without
+// requiring new commits. A FAILED verdict is re-queued only on the explicit
+// --retry-review; everything else (trellis-flagged, iteration-budget, ci)
+// needs new commits or the specific workflow command — kick should refuse.
 const REVIEW_SIDE_FAILING_REASONS: ReadonlySet<FailingReason> = new Set<FailingReason>([
   "unparseable-verdict",
   "transient-review",
@@ -103,8 +110,9 @@ export async function kick(args: string[]): Promise<void> {
       unparseableRetryCount: undefined,
     });
     triggerProjectPoll(project);
-    output({ project, worker: workerName, reviewQueued: true, recoveredFrom: failingReason },
-      () => `Kicked ${project}/${workerName} — recovered from failing (${failingReason}), review re-queued.`);
+    const recoveredFrom = failingReason ?? "code";
+    output({ project, worker: workerName, reviewQueued: true, recoveredFrom },
+      () => `Kicked ${project}/${workerName} — recovered from failing (${recoveredFrom}), review re-queued.`);
     return;
   }
 

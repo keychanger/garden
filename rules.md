@@ -126,18 +126,17 @@ in `<project>/.garden/rules.md` can extend or override these.
 
 ## Error handling
 
-- If a reviewer cannot complete checks because of its sandbox or test environment,
-  repair that environment first. Inspect `garden review <worker>`, then use
-  `garden kick <worker> --retry-review` for a failed default-workflow review.
-  This queues a fresh full review; it does not certify the branch. Do not create
-  empty commits, bypass checks, or manually mark the review passed to recover.
-
 - When you encounter an error, read it carefully and fix the root cause.
 - If a fix does not resolve the error, try a different approach.
 - If you hit the same error twice after attempting fixes, stop and explain the full
   error and what you tried.
 - Do not retry the same action hoping for a different result.
 - Do not disable checks, skip tests, or suppress errors to make something pass.
+- If a reviewer cannot complete checks because of its sandbox or test environment,
+  repair that environment first. Inspect `garden review <worker>`, then use
+  `garden kick <worker> --retry-review` for a failed default-workflow review.
+  This queues a fresh full review; it does not certify the branch. Do not create
+  empty commits, bypass checks, or manually mark the review passed to recover.
 
 ## Security
 
