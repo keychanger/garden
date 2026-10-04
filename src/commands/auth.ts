@@ -43,8 +43,8 @@ function handleStatus(): void {
     },
   );
 
-  // Providers are API-key-backed: no expiry, no Keychain, no displacement
-  // semantics. Presence is reported for both the hidden tmux launch vault
+  // Providers are API-key-backed: no expiry, no Keychain, no account
+  // identity. Presence is reported for both the hidden tmux launch vault
   // and this shell — they diverge when the
   // key was exported after the dashboard started, which is exactly the
   // failure an operator would be here to debug.
