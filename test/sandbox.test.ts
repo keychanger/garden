@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, it, expect } from "vitest";
+import os from "node:os";
+import { describe, it, expect, vi } from "vitest";
 import { buildSandboxConfig } from "../src/dashboard/sandbox.js";
 
 describe("buildSandboxConfig", () => {
@@ -23,6 +24,34 @@ describe("buildSandboxConfig", () => {
     expect(cfg.filesystem.allowWrite).toContain("/wt/alpha");
     expect(cfg.filesystem.allowWrite).toContain("~/.npm");
     expect(cfg.filesystem.allowWrite).toContain("/tmp");
+  });
+
+  it("grants the canonical OS temporary directory, including symlinked macOS paths", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "garden-temp-test-"));
+    const target = path.join(root, "temp");
+    const alias = path.join(root, "alias");
+    fs.mkdirSync(target);
+    fs.symlinkSync(target, alias);
+    const spy = vi.spyOn(os, "tmpdir").mockReturnValue(alias);
+    try {
+      const cfg = buildSandboxConfig({ worktreePath: "/wt", project: { path: "/repo" }, remoteHost: null });
+      expect(cfg.filesystem.allowWrite).toContain(fs.realpathSync(target));
+      expect(cfg.filesystem.allowWrite).toContain(fs.realpathSync("/tmp"));
+    } finally {
+      spy.mockRestore();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("enables local test servers only for projects that opt in", () => {
+    for (const value of [undefined, false, true]) {
+      const cfg = buildSandboxConfig({
+        worktreePath: "/wt", project: { path: "/repo", sandboxAllowLocalBinding: value }, remoteHost: null,
+      });
+      expect(cfg.network.allowLocalBinding).toBe(value === true);
+      expect(cfg.enabled).toBe(true);
+      expect(cfg.network.allowedDomains).not.toContain("*");
+    }
   });
 
   // The convert path's primary DX is `/grow N` typed inside a worker pane,

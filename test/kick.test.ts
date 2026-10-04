@@ -81,7 +81,7 @@ describe("kick command", () => {
       expect.objectContaining({ pendingReviewAt: expect.any(Number) }),
     );
     expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
-    expect(lines.join("\n")).toContain("Kicked myproject/bold-ash");
+    expect(JSON.parse(lines.join("\n"))).toEqual({ project: "myproject", worker: "bold-ash", reviewQueued: true });
   });
 
   it("errors when no worker name is given", async () => {
@@ -179,7 +179,7 @@ describe("kick command", () => {
       }),
     );
     expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
-    expect(lines.join("\n")).toContain("recovered from failing (unparseable-verdict)");
+    expect(JSON.parse(lines.join("\n"))).toMatchObject({ reviewQueued: true, recoveredFrom: "unparseable-verdict" });
   });
 
   it("recovers a failing worker whose reason is transient-review", async () => {
@@ -209,7 +209,7 @@ describe("kick command", () => {
       }),
     );
     expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
-    expect(lines.join("\n")).toContain("recovered from failing (transient-review)");
+    expect(JSON.parse(lines.join("\n"))).toMatchObject({ reviewQueued: true, recoveredFrom: "transient-review" });
   });
 
   it("recovers a failing worker whose reason is quota", async () => {
@@ -242,7 +242,7 @@ describe("kick command", () => {
       }),
     );
     expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
-    expect(lines.join("\n")).toContain("recovered from failing (quota)");
+    expect(JSON.parse(lines.join("\n"))).toMatchObject({ reviewQueued: true, recoveredFrom: "quota" });
   });
 
   it("recovers a failing worker whose reason is review-timeout", async () => {
@@ -270,7 +270,7 @@ describe("kick command", () => {
       }),
     );
     expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
-    expect(lines.join("\n")).toContain("recovered from failing (review-timeout)");
+    expect(JSON.parse(lines.join("\n"))).toMatchObject({ reviewQueued: true, recoveredFrom: "review-timeout" });
   });
 
   it("refuses to recover a failing worker whose reason is 'code'", async () => {
@@ -287,6 +287,46 @@ describe("kick command", () => {
     await expect(kick(["bold-ash"])).rejects.toThrow(/is in state 'failing'.*failingReason='code'/s);
     expect(updateWorkerFields).not.toHaveBeenCalled();
     expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
+  it("explicitly retries a failed default review without marking it passed", async () => {
+    registryMock._setEntries("myproject", [makeWorker({
+      prState: "failing", failingReason: "code", failingSha: "abc123", agentStatus: "idle",
+      lastReview: { verdict: "failed", at: 1, body: "Tests blocked by sandbox", tipSha: "abc123" },
+    })]);
+    await captureConsoleLog(() => kick(["bold-ash", "--retry-review"]));
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      prState: "working", failingSha: undefined, pendingReviewAt: expect.any(Number),
+    }));
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      lastReview: expect.anything(),
+    }));
+    expect(triggerProjectPoll).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { prState: "working" },
+    { failingReason: "ci" },
+    { workflow: "trellis" },
+    { lastReview: undefined },
+    { lastReview: { verdict: "failed", at: 1, body: "Old failure", tipSha: "old-sha" } },
+    { agentStatus: "working" },
+    { agentStatus: "asking" },
+  ] satisfies Partial<WorkerEntry>[])("refuses an unsafe explicit review retry: %j", async override => {
+    registryMock._setEntries("myproject", [makeWorker({
+      prState: "failing", failingReason: "code", failingSha: "abc123", agentStatus: "idle",
+      lastReview: { verdict: "failed", at: 1, body: "Tests blocked", tipSha: "abc123" },
+      ...override,
+    })]);
+    await expect(kick(["bold-ash", "--retry-review"])).rejects.toThrow();
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
+  it("rejects misspelled retry options", async () => {
+    registryMock._setEntries("myproject", [makeWorker()]);
+    await expect(kick(["bold-ash", "--retry-reveiw"])).rejects.toThrow(/Usage/);
+    expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
   it("recovers a failing worker even when agentStatus is stuck on 'working'", async () => {

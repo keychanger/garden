@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+vi.mock("../src/dashboard/harness/claude-code.js", () => ({
+  installHeadlessSettings: vi.fn(),
+}));
+
 vi.mock("node:fs", () => ({
   default: {
     existsSync: vi.fn(() => true),

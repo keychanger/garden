@@ -1,11 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { execSync, execFileSync, spawn } from "node:child_process";
-import { claudeCodeAdapter } from "../src/dashboard/harness/claude-code.js";
+import { claudeCodeAdapter, installHeadlessSettings } from "../src/dashboard/harness/claude-code.js";
 
 vi.mock("../src/dashboard/harness/claude-code.js", async importOriginal => {
   const actual = await importOriginal<typeof import("../src/dashboard/harness/claude-code.js")>();
   return {
     ...actual,
+    installHeadlessSettings: vi.fn(),
     claudeCodeAdapter: { ...actual.claudeCodeAdapter, installRuntimeConfig: vi.fn() },
   };
 });
@@ -398,8 +399,9 @@ describe("poll — working state", () => {
 
     poll("myproject");
 
-    expect(claudeCodeAdapter.installRuntimeConfig).toHaveBeenCalledWith(
+    expect(installHeadlessSettings).toHaveBeenCalledWith(
       "/tmp/wt/myproject/bold-ash", expect.objectContaining(project),
+      expect.stringContaining("review-prompt.txt.settings.json"),
     );
     expect(newDashboardWindow).toHaveBeenCalledWith(
       "_myproject-review-bold-ash",

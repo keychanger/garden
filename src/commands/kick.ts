@@ -3,15 +3,9 @@ import { triggerProjectPoll } from "../dashboard/poller.js";
 import { getCommitSummary, getWorkerBaseBranch } from "../dashboard/git.js";
 import { recordOperatorAction } from "../dashboard/telemetry.js";
 import { tryGetProject } from "../config.js";
+import { output } from "../output.js";
 import { resolveWorkerArg } from "./resolve-worker.js";
 
-// Failing reasons where the worker's *code* is fine and the failure is on the
-// reviewer side — Anthropic API blip, reviewer crashed mid-stream, reviewer
-// went off-rails without emitting a verdict, reviewer killed by the wall-clock
-// cap before it could emit one. For these, `kick` re-queues the review without
-// requiring new commits. For everything else (code failure, trellis-flagged,
-// iteration-budget, ci), new commits or the specific workflow command are the
-// right recovery — kick should refuse.
 const REVIEW_SIDE_FAILING_REASONS: ReadonlySet<FailingReason> = new Set<FailingReason>([
   "unparseable-verdict",
   "transient-review",
@@ -21,25 +15,35 @@ const REVIEW_SIDE_FAILING_REASONS: ReadonlySet<FailingReason> = new Set<FailingR
 
 export async function kick(args: string[]): Promise<void> {
   const arg = args[0];
-  if (!arg) throw new Error("Usage: garden kick <worker>");
+  const retryReview = args[1] === "--retry-review";
+  if (!arg || arg.startsWith("-") || args.length > 2 || (args.length === 2 && !retryReview)) {
+    throw new Error("Usage: garden kick <worker> [--retry-review]");
+  }
 
   const { project, worker: workerName, entry } = resolveWorkerArg(arg);
   const state = entry.prState;
   const agentStatus = entry.agentStatus;
   const failingReason = entry.failingReason;
 
-  // failing → working recovery for review-side failures. The worker's code is
-  // fine; the reviewer itself was unavailable or garbled. Clear the failing
-  // pin and re-queue review without needing a new commit.
+  if (retryReview && !(state === "failing"
+    && (failingReason === "code" || failingReason === undefined)
+    && (entry.workflow ?? "default") === "default"
+    && entry.lastReview?.verdict === "failed"
+    && entry.failingSha !== undefined
+    && entry.lastReview.tipSha === entry.failingSha)) {
+    throw new Error("--retry-review requires a failed default-workflow review matching the failing SHA. Inspect 'garden review <worker>' first.");
+  }
+
   const isReviewSideFailure = state === "failing"
     && failingReason !== undefined
     && REVIEW_SIDE_FAILING_REASONS.has(failingReason);
 
-  if (state && state !== "working" && !isReviewSideFailure) {
+  if (state && state !== "working" && !isReviewSideFailure && !retryReview) {
     const hint = state === "failing"
       ? ` (failingReason='${failingReason ?? "code"}'). Kick only auto-recovers ` +
         `review-side failures (${[...REVIEW_SIDE_FAILING_REASONS].join(", ")}); ` +
-        `for code failures push a new commit, for oversized-diff split the work ` +
+        `for code failures push a new commit (or, after repairing the review environment, ` +
+        `inspect garden review and use --retry-review for a fresh full review), for oversized-diff split the work ` +
         `across smaller branches (a retry on the same diff fails identically), ` +
         `for trellis-flagged run ` +
         `'garden trellis resume', for an exhausted iteration budget inspect and ` +
@@ -83,7 +87,7 @@ export async function kick(args: string[]): Promise<void> {
   // below. Ledger the operator intervention once here so both paths are covered.
   recordOperatorAction(project, workerName, entry.createdAt, entry.workflow ?? "default", "kick");
 
-  if (isReviewSideFailure) {
+  if (isReviewSideFailure || retryReview) {
     // Clear the failing pin and the retry state so handleWorking launches a
     // fresh review on the next poll. prState moves failing → working via the
     // workflow's valid-transitions map.
@@ -99,11 +103,13 @@ export async function kick(args: string[]): Promise<void> {
       unparseableRetryCount: undefined,
     });
     triggerProjectPoll(project);
-    console.log(`Kicked ${project}/${workerName} — recovered from failing (${failingReason}), review re-queued.`);
+    output({ project, worker: workerName, reviewQueued: true, recoveredFrom: failingReason },
+      () => `Kicked ${project}/${workerName} — recovered from failing (${failingReason}), review re-queued.`);
     return;
   }
 
   updateWorkerFields(project, workerName, { pendingReviewAt: Date.now() });
   triggerProjectPoll(project);
-  console.log(`Kicked ${project}/${workerName} — review queued.`);
+  output({ project, worker: workerName, reviewQueued: true },
+    () => `Kicked ${project}/${workerName} — review queued.`);
 }

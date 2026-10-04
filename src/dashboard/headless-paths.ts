@@ -57,12 +57,16 @@ export function headlessArtifactNames(project: string, worker: string): string[]
   ];
   return paths.flatMap(file => {
     const name = path.basename(file);
-    return [name, `${name}.stderr`];
+    return name.endsWith("-prompt.txt")
+      ? [name, `${name}.stderr`, `${name}.settings.json`]
+      : [name, `${name}.stderr`];
   });
 }
 
 export function isHeadlessArtifactName(name: string): boolean {
-  return name.endsWith("-review-result.txt")
+  return name.endsWith("-review-prompt.txt.settings.json")
+    || name.endsWith("-ci-fix-prompt.txt.settings.json")
+    || name.endsWith("-review-result.txt")
     || name.endsWith("-review-result.txt.stderr")
     || name.endsWith("-review-prompt.txt")
     || name.endsWith("-ci-fix-result.txt")

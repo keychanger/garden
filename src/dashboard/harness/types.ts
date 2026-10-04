@@ -99,7 +99,7 @@ export interface HeadlessCommandOptions {
   launchPlan: HeadlessLaunchPlan;
   /** Inline env assignments (e.g. `GARDEN_REVIEWER=1 `), pre-escaped. */
   inlineEnv: string;
-  /** See AgentCommandOptions.settingsFile. */
+  /** Protected settings sidecar generated for this headless launch. */
   settingsFile: string;
 }
 

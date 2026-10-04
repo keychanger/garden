@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vites
 vi.mock("node:fs", () => ({
   default: {
     existsSync: vi.fn(() => false),
+    realpathSync: vi.fn((p: string) => p),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     readFileSync: vi.fn(() => "{}"),

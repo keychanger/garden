@@ -98,9 +98,9 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       if (project.requireCiSuccess !== undefined) {
         data.requireCiSuccess = String(project.requireCiSuccess);
       }
-    } else if (key === "sandboxDenyCredentials") {
-      if (project.sandboxDenyCredentials !== undefined) {
-        data.sandboxDenyCredentials = String(project.sandboxDenyCredentials);
+    } else if (key === "sandboxDenyCredentials" || key === "sandboxAllowLocalBinding") {
+      if (project[key] !== undefined) {
+        data[key] = String(project[key]);
       }
     } else if (key === "beadIntake") {
       if (project.beadIntake !== undefined) {
@@ -176,8 +176,8 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
     else output({ [key]: null }, () => `(not set)`);
     return;
   }
-  if (key === "sandboxDenyCredentials") {
-    const v = project.sandboxDenyCredentials;
+  if (key === "sandboxDenyCredentials" || key === "sandboxAllowLocalBinding") {
+    const v = project[key];
     if (v !== undefined) output({ [key]: v }, () => String(v));
     else output({ [key]: null }, () => `(not set)`);
     return;

@@ -869,6 +869,55 @@ describe("sandboxDenyCredentials project config key", () => {
   });
 });
 
+describe("sandboxAllowLocalBinding project config key", () => {
+  async function setup() {
+    const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    return { config, loadConfig };
+  }
+
+  it("isValidConfigKey accepts sandboxAllowLocalBinding", async () => {
+    const { isValidConfigKey } = await importConfig();
+    expect(isValidConfigKey("sandboxAllowLocalBinding")).toBe(true);
+  });
+
+  it("config() persists true/false and clears on the unset sentinel", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "sandboxAllowLocalBinding", "true"]);
+    expect(loadConfig().projects.garden.sandboxAllowLocalBinding).toBe(true);
+    await config(["garden", "sandboxAllowLocalBinding", "false"]);
+    expect(loadConfig().projects.garden.sandboxAllowLocalBinding).toBe(false);
+    await config(["garden", "sandboxAllowLocalBinding", "unset"]);
+    expect(loadConfig().projects.garden.sandboxAllowLocalBinding).toBeUndefined();
+  });
+
+  it("config() rejects a non-boolean value", async () => {
+    const { config } = await setup();
+    await expect(config(["garden", "sandboxAllowLocalBinding", "yes"]))
+      .rejects.toThrow(/sandboxAllowLocalBinding must be 'true' or 'false'/);
+  });
+
+  // An explicitly-persisted `false` must read back as false, not "(not set)".
+  // It is a security toggle: the read-back is how an operator confirms the
+  // deny is off deliberately rather than never configured.
+  it("reads back an explicit false as false, not as unset", async () => {
+    const { config } = await setup();
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((m?: unknown) => { lines.push(String(m)); });
+    try {
+      await config(["garden", "sandboxAllowLocalBinding", "false"]);
+      lines.length = 0;
+      await config(["garden", "sandboxAllowLocalBinding"]);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines.join("\n")).toContain("false");
+    expect(lines.join("\n")).not.toContain("not set");
+  });
+});
+
 describe("sandboxWriteRoots project config subcommand", () => {
   async function setup() {
     const { saveConfig, GARDEN_DIR, loadConfig } = await importConfig();

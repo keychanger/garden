@@ -154,6 +154,11 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
   });
 }
 
+export function installHeadlessSettings(targetDir: string, project: ProjectConfig, settingsFile: string): void {
+  const json = buildSettingsJson(resolveHookRunner(), sandboxForTarget(targetDir, project), statusLineCommand(targetDir));
+  atomicWriteFile(settingsFile, json, { mode: 0o444 });
+}
+
 // Garden's settings live outside the worktree and reach Claude through
 // `--settings` (see claudeSettingsPath), not in .claude/settings.json: a repo
 // that commits its own settings file would otherwise see it overwritten, show

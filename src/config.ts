@@ -32,6 +32,7 @@ export interface ProjectConfig {
   checks?: string;
   postMerge?: string;
   sandboxDomains?: string[];
+  sandboxAllowLocalBinding?: boolean;
   // When true, the worker sandbox additionally DENIES READ of the operator's
   // credential paths (~/.claude, ~/.ssh, cloud creds) via Claude Code's
   // sandbox.credentials (mode deny) + filesystem.denyRead. Those are
@@ -234,7 +235,7 @@ export interface StoredCrew {
 export const DEFAULT_HOLISTIC_REVIEW = "fix";
 
 const VALID_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials",
+  "path", "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials", "sandboxAllowLocalBinding",
   "sandboxWriteRoots", "claudeProfile", "provider",
   "harness", "model", "effort", "logColor", "displayName", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",

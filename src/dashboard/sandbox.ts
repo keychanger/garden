@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import {
   tryResolveProvider, resolveBeadsDir, resolveSandboxWriteRoots, type ProjectConfig,
 } from "../config.js";
@@ -13,6 +15,7 @@ export interface SandboxConfig {
   };
   network: {
     allowedDomains: string[];
+    allowLocalBinding: boolean;
   };
   // Claude Code's purpose-built credential guard (mode "deny" is honored in a
   // repo's .claude/settings.json; "mask" is not, so it is never emitted here).
@@ -23,8 +26,8 @@ export interface SandboxConfig {
 
 // Domains every garden-spawned Claude session needs. The Anthropic block
 // stays unconditional even when the project's workers run on a provider:
-// the reviewer/resolver/ci-fix agents share the worker's settings file
-// and always run on the first-party Anthropic path (see workerEnvPrefix /
+// Claude reviewer/resolver/ci-fix settings use these same defaults
+// and the first-party Anthropic path (see workerEnvPrefix /
 // claudeEnvPrefix in claude-env.ts). github/npm cover git pushes and
 // installs during review checks. The git remote host and the provider's
 // hosts are added separately at runtime.
@@ -97,6 +100,10 @@ export function buildSandboxConfig(opts: {
 
   const allowWrite = new Set<string>(DEFAULT_ALLOW_WRITE);
   allowWrite.add(opts.worktreePath);
+  const slashTmp = fs.realpathSync("/tmp");
+  const systemTmp = fs.realpathSync(os.tmpdir());
+  allowWrite.add(slashTmp);
+  allowWrite.add(systemTmp);
 
   // Bead-intake projects: workers run bd against the project's resolved
   // canonical .beads store (BEADS_DIR points there — the worktree copy has no
@@ -116,6 +123,7 @@ export function buildSandboxConfig(opts: {
     },
     network: {
       allowedDomains: Array.from(domains),
+      allowLocalBinding: opts.project.sandboxAllowLocalBinding === true,
     },
   };
 

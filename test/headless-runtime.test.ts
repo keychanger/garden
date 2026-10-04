@@ -25,7 +25,7 @@ beforeEach(() => {
   fs.mkdirSync(cwd);
   execFileSync("git", ["init", "-q", cwd]);
   execFileSync("git", ["-C", cwd, "remote", "add", "origin", "git@example.org:team/project.git"]);
-  settingsPath = claudeSettingsPath(cwd);
+  settingsPath = path.join(root, "prompt.txt.settings.json");
 });
 
 afterEach(() => {
@@ -84,12 +84,27 @@ describe("headless runtime repair", () => {
   it("preserves an existing worker's Claude runtime settings", () => {
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
     const existing = '{"sandbox":{"enabled":true},"permissions":{"deny":["Bash(custom:*)"]}}\n';
-    fs.writeFileSync(settingsPath, existing);
+    const workerSettings = claudeSettingsPath(cwd);
+    fs.mkdirSync(path.dirname(workerSettings), { recursive: true });
+    fs.writeFileSync(workerSettings, existing);
 
     launchHeadlessAgent(options());
 
-    expect(fs.readFileSync(settingsPath, "utf-8")).toBe(existing);
+    expect(fs.readFileSync(workerSettings, "utf-8")).toBe(existing);
+    expect(JSON.parse(fs.readFileSync(settingsPath, "utf-8")).sandbox.filesystem.allowWrite).toContain(path.join(root, "cache"));
     expect(newDashboardWindow).toHaveBeenCalledOnce();
+  });
+
+  it("refreshes review settings after test permissions change", () => {
+    launchHeadlessAgent(options());
+    const opts = options();
+    opts.project.sandboxWriteRoots = [path.join(root, "godot-data")];
+    launchHeadlessAgent({ ...opts, project: { ...opts.project, sandboxAllowLocalBinding: true } });
+    const sandbox = JSON.parse(fs.readFileSync(settingsPath, "utf-8")).sandbox;
+    expect(sandbox.network.allowLocalBinding).toBe(true);
+    expect(sandbox.filesystem.allowWrite).toContain(path.join(root, "godot-data"));
+    expect(sandbox.filesystem.allowWrite).not.toContain(path.join(root, "cache"));
+    expect(sandbox.filesystem.denyRead).toContain("~/.ssh");
   });
 
   it("leaves Codex headless launches independent of Claude runtime settings", () => {
@@ -102,13 +117,12 @@ describe("headless runtime repair", () => {
   it("does not launch when missing settings cannot be installed", () => {
     // Claude refuses to start without its --settings file, so a failed install
     // must stop the launch rather than spawn a reviewer that exits at once.
-    fs.rmSync(path.dirname(settingsPath), { recursive: true, force: true });
-    fs.writeFileSync(path.dirname(settingsPath), "not a directory");
+    fs.mkdirSync(settingsPath);
     try {
       expect(() => launchHeadlessAgent(options())).toThrow();
       expect(newDashboardWindow).not.toHaveBeenCalled();
     } finally {
-      fs.rmSync(path.dirname(settingsPath), { force: true });
+      fs.rmSync(settingsPath, { recursive: true, force: true });
     }
   });
 });

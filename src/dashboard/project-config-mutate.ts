@@ -35,7 +35,7 @@ import {
 // <value>` and the project menu. `path` is deliberately excluded (set via
 // `garden add`); crew and the review roles have their own subcommands.
 export const SETTABLE_KEYS = [
-  "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials",
+  "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials", "sandboxAllowLocalBinding",
   "claudeProfile", "provider",
   "harness", "model", "effort", "logColor", "displayName", "trellisDir", "maxTrellisIterations",
   "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
@@ -292,15 +292,15 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
           notes.push(`  note: ${storeNote} — intake will refuse to run until it is a directory.`);
         }
       }
-    } else if (key === "sandboxDenyCredentials") {
+    } else if (key === "sandboxDenyCredentials" || key === "sandboxAllowLocalBinding") {
       if (value === "" || value === "unset" || value === "null") {
-        delete project.sandboxDenyCredentials;
+        delete project[key];
         message = `Cleared ${key} for ${projectName} (default: false)`;
       } else if (value === "true" || value === "false") {
-        project.sandboxDenyCredentials = value === "true";
+        project[key] = value === "true";
         message = `Set ${key} = ${value} for ${projectName}`;
       } else {
-        throw new Error(`sandboxDenyCredentials must be 'true' or 'false', got '${value}'`);
+        throw new Error(`${key} must be 'true' or 'false', got '${value}'`);
       }
     } else if (key === "holisticReview") {
       if (value === "" || value === "unset" || value === "null") {

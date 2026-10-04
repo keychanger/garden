@@ -837,6 +837,22 @@ describe("cleanContextFiles", () => {
     expect(unlink).not.toHaveBeenCalledWith(`${DIR}/myproject-live-worker-review-prompt.txt`);
   });
 
+  it("keeps live headless settings and removes stale settings", () => {
+    const live = "myproject-live-worker-review-prompt.txt.settings.json";
+    const stale = "myproject-stale-worker-ci-fix-prompt.txt.settings.json";
+    vi.spyOn(fs, "readdirSync").mockImplementation(directory => (
+      String(directory) === HEADLESS_RUNS_DIR ? [live, stale] : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+    vi.mocked(readRegistry).mockReturnValue({ workers: { myproject: [{
+      name: "live-worker", sessionId: "s", task: "", reviewWindowName: "_myproject-review-live-worker",
+    }] } });
+    vi.mocked(windowExists).mockReturnValue(true);
+    cleanContextFiles();
+    expect(unlink).not.toHaveBeenCalledWith(path.join(HEADLESS_RUNS_DIR, live));
+    expect(unlink).toHaveBeenCalledWith(path.join(HEADLESS_RUNS_DIR, stale));
+  });
+
   it("sweeps a review file when its worker's review window has died", () => {
     vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
       String(directory) === DIR

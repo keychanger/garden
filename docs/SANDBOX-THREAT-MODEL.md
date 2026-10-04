@@ -114,7 +114,7 @@ reads or runs.
   (`src/dashboard/harness/codex-core.ts`) invokes `codex exec
   --dangerously-bypass-approvals-and-sandbox`, so a Codex reviewer/resolver/ci-fix agent
   runs with the operator's full privileges — unlike the claude-code review family, whose
-  headless `claude -p` inherits the worktree sandbox. This is the sharpest residual in
+  headless `claude -p` uses freshly generated project sandbox settings in a protected prompt sidecar. This is the sharpest residual in
   the model: the reviewer's whole job is to read a diff and repo content a possibly
   prompt-injected worker just wrote, and it does so unconfined. Selecting a Codex
   reviewer (`role reviewer harness codex`, or a `*-codex` crew) is therefore a
@@ -139,3 +139,11 @@ The guarantees above hold only if the agent CLI's own sandbox is functioning and
 (`sandbox.enabled: true`, which garden always sets for workers). `garden doctor` reports
 the CLI versions; the credential read-deny in particular depends on a Claude Code version
 that honors `sandbox.credentials`.
+
+Project test permissions remain explicit: `sandboxAllowLocalBinding` defaults to false.
+On macOS, opting in permits local listeners and direct access to host localhost services;
+it does not disable the domain allowlist or filesystem/credential restrictions. Test data
+outside the worktree requires an exact `sandboxWriteRoots` grant. Temporary writes include
+the launcher's canonical OS temporary directory and canonical `/tmp`. Headless settings
+are regenerated under `control/headless` on every launch, so a retry observes repaired
+permissions without rewriting the live worker's settings or granting control-plane writes.

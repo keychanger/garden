@@ -94,10 +94,12 @@ Projects:
                                  effort levels for either harness: low|medium|high|xhigh|max
                                  e.g. 'config <p> role reviewer harness codex' for a Codex reviewer
   config <project> crew [<name>] Bind the project to a crew ('none' unbinds). See 'garden crew'.
+  config <project> sandboxAllowLocalBinding <true|false|unset>
+                                 Allow Claude sandbox local test servers on macOS (default false)
   config <project> sandboxWriteRoots [list | add <path> | remove <path>]
                                  Extra directories every worker sandbox may write (Claude Code
                                  allowWrite + Codex writable_roots), e.g. ~/.config/gcloud.
-                                 Applies to newly created or bounced workers. None by default;
+                                 Applies to new/bounced workers and each headless review. None by default;
                                  /, top-level dirs, and the home directory are refused.
   crew [list|show|add|edit|remove|apply]
                                  Manage crews: who designs, who builds, who reviews, and how strong.
@@ -179,7 +181,7 @@ Dashboard:
   health                         Check dashboard state consistency
   redraw                         Rebuild the dashboard's passive panes (status/usage/history/alerts): re-bake content, respawn each repaint loop (recovers a frozen or garbled pane)
   doctor                         Environment preflight (git / tmux / claude / gh / node / config / Option-key)
-  kick <worker>                  Re-arm a stranded 'working' worker for review
+  kick <worker> [--retry-review]  Re-arm review; explicitly retry a failed default review after fixing its environment
   poke [project]                 Wake the project's poller now (runs bead intake immediately; board's dispatch gate uses this)
   bounce <worker>                Restart a worker's Claude process (preserves session history)
   hold <worker>                  Interrupt a working worker and mark it 'paused' (sends Escape; ⌥e in the dashboard toggles this on the focused worker; the next prompt resumes it)
