@@ -15,8 +15,8 @@ vi.mock("../src/session.js", () => ({
 vi.mock("../src/dashboard/credentials.js", () => ({
   readKeychainCredential: vi.fn(() => null),
   readPersonalCredential: vi.fn(() => null),
-  readFileCredential: vi.fn(() => null),
-  captureKeychainTo: vi.fn(() => false),
+  readProfileCredential: vi.fn(() => null),
+  readClaudeAccount: vi.fn(() => null),
   runClaudeLogin: vi.fn(),
 }));
 
@@ -119,6 +119,50 @@ describe("garden auth status provider rows", () => {
     logSpy.mockRestore();
     const parsed = JSON.parse(lines.join("\n"));
     expect(parsed.providers.deepseek.shell).toBe(false);
+  });
+});
+
+describe("garden auth status profile rows", () => {
+  const PERSONAL = { emailAddress: "me@example.com", organizationName: "Personal", organizationUuid: "org-personal" };
+
+  async function statusFor(profileAccount: object | null) {
+    const config = await setup();
+    config.saveConfig({
+      projects: {
+        lex: { path: "/tmp/lex", claudeProfile: "imp" },
+        website: { path: "/tmp/website", claudeProfile: "imp" },
+        garden: { path: "/tmp/garden" },
+      },
+      claudeProfiles: { imp: { configDir: "/tmp/claude-imp" } },
+    });
+    const credentials = await import("../src/dashboard/credentials.js");
+    vi.mocked(credentials.readClaudeAccount).mockImplementation(
+      ((dir?: string) => (dir ? profileAccount : PERSONAL)) as typeof credentials.readClaudeAccount,
+    );
+    const { auth } = await import("../src/commands/auth.js");
+    const lines: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((l) => { lines.push(String(l)); });
+    await auth(["status"]);
+    logSpy.mockRestore();
+    return JSON.parse(lines.join("\n"));
+  }
+
+  it("flags a profile logged into the personal organization and names its projects", async () => {
+    const parsed = await statusFor({ ...PERSONAL });
+    expect(parsed.profiles.imp.sameAccountAsPersonal).toBe(true);
+    expect(parsed.profiles.imp.projects).toEqual(["lex", "website"]);
+    expect(parsed.personal.account).toEqual(PERSONAL);
+  });
+
+  it("does not flag a profile logged into another organization", async () => {
+    const parsed = await statusFor({ emailAddress: "me@imp.example", organizationUuid: "org-imp" });
+    expect(parsed.profiles.imp.sameAccountAsPersonal).toBe(false);
+    expect(parsed.profiles.imp.account.organizationUuid).toBe("org-imp");
+  });
+
+  it("does not flag a profile with no recorded account", async () => {
+    const parsed = await statusFor(null);
+    expect(parsed.profiles.imp.sameAccountAsPersonal).toBe(false);
   });
 });
 

@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
 import { loadConfig, expandHome } from "../config.js";
-import { captureKeychainTo, runClaudeLogin } from "../dashboard/credentials.js";
+import { readProfileCredential, runClaudeLogin } from "../dashboard/credentials.js";
 import { refreshUsage } from "../dashboard/usage.js";
 import { refreshDashboard } from "../dashboard/header.js";
 
@@ -44,23 +43,15 @@ async function loginProfile(name: string): Promise<void> {
   fs.mkdirSync(configDir, { recursive: true });
 
   console.log(`Launching: CLAUDE_CONFIG_DIR=${configDir} claude /login`);
-  console.log(`Pick the workspace bound to the '${name}' plan when prompted.`);
+  console.log(`Sign your browser into the account that owns the '${name}' plan before approving.`);
   await runClaudeLogin(configDir);
 
-  const credFile = path.join(configDir, ".credentials.json");
-  if (fs.existsSync(credFile)) {
-    console.log(`✓ Credentials written to ${credFile}`);
+  if (!readProfileCredential(configDir)) {
+    console.log(`Warning: no '${name}' credentials found after login. Claude may not have saved them.`);
     return;
   }
-
-  if (process.platform === "darwin" && captureKeychainTo(credFile)) {
-    console.log(`✓ Captured '${name}' token to ${credFile}.`);
-    console.log(`⚠ macOS Keychain currently holds the '${name}' token, displacing the personal account.`);
-    console.log(`  Run 'garden login' next to restore the Keychain to your personal account.`);
-    return;
-  }
-
-  console.log(`Warning: ${credFile} not found after login. Claude may not have written credentials.`);
+  console.log(`✓ '${name}' credentials saved.`);
+  console.log(`  Confirm the account with: garden auth status`);
 }
 
 // Heal the dashboard meter now instead of waiting for the poller's auth backoff to elapse.

@@ -388,7 +388,7 @@ garden config <project> provider <name>          # project default; unset to cle
 
 `garden login <provider>` prints guidance instead of a login flow
 ("export DEEPSEEK_API_KEY in the shell that starts garden") — the
-Keychain capture, refresh, and displacement machinery in
+Keychain lookup, refresh, and account-identity machinery in
 `login.ts`/`credentials.ts`/`auth.ts` applies only to OAuth profiles.
 `garden auth status` reports a row per provider: presence/absence of the
 named env var in the current shell, no expiry or Keychain semantics.

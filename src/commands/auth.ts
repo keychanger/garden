@@ -1,8 +1,7 @@
-import path from "node:path";
 import { loadConfig, expandHome } from "../config.js";
 import {
-  readKeychainCredential, readPersonalCredential, readFileCredential,
-  type CredentialSlot, type ClaudeOAuth,
+  readPersonalCredential, readProfileCredential, readClaudeAccount,
+  type CredentialSlot, type ClaudeOAuth, type ClaudeAccount,
 } from "../dashboard/credentials.js";
 import { providerTokenPresence, syncProviderTokenToVault } from "../dashboard/claude-env.js";
 import { isTTY } from "../output.js";
@@ -17,25 +16,32 @@ interface ProfileState {
   name: string;
   configDir: string;
   slot: CredentialSlot | null;
+  account: ClaudeAccount | null;
+  projects: string[];
+  sameAccountAsPersonal: boolean;
 }
 
 function handleStatus(): void {
   const personal = readPersonalCredential();
-  const personalKeychain = readKeychainCredential();
+  const personalAccount = readClaudeAccount();
 
   const cfg = loadConfig();
   const profiles: ProfileState[] = Object.entries(cfg.claudeProfiles ?? {}).map(
     ([name, p]) => {
       const dir = expandHome(p.configDir);
+      const account = readClaudeAccount(dir);
       return {
         name,
         configDir: dir,
-        slot: readFileCredential(path.join(dir, ".credentials.json")),
+        slot: readProfileCredential(dir),
+        account,
+        projects: Object.entries(cfg.projects)
+          .filter(([, project]) => project.claudeProfile === name)
+          .map(([projectName]) => projectName),
+        sameAccountAsPersonal: sameOrganization(account, personalAccount),
       };
     },
   );
-
-  const displacedBy = detectDisplacement(personalKeychain, profiles);
 
   // Providers are API-key-backed: no expiry, no Keychain, no displacement
   // semantics. Presence is reported for both the hidden tmux launch vault
@@ -55,21 +61,26 @@ function handleStatus(): void {
 
   if (!isTTY) {
     console.log(JSON.stringify({
-      personal: serializeSlot(personal),
+      personal: { ...serializeSlot(personal), account: personalAccount },
       profiles: Object.fromEntries(profiles.map(p => [
         p.name,
-        { configDir: p.configDir, ...serializeSlot(p.slot) },
+        {
+          configDir: p.configDir,
+          ...serializeSlot(p.slot),
+          account: p.account,
+          projects: p.projects,
+          sameAccountAsPersonal: p.sameAccountAsPersonal,
+        },
       ])),
       providers: Object.fromEntries(providers.map(p => [
         p.name,
         { authTokenEnv: p.authTokenEnv, shell: p.shell, session: p.session },
       ])),
-      displacedBy,
     }));
     return;
   }
 
-  printPersonal(personal, displacedBy);
+  printPersonal(personal, personalAccount);
   for (const p of profiles) {
     console.log("");
     printProfile(p);
@@ -89,33 +100,49 @@ function handleStatus(): void {
     }
   }
 
+  const shared = profiles.filter(p => p.sameAccountAsPersonal);
   console.log("");
-  if (displacedBy) {
-    console.log(`⚠ Routing broken: keychain holds the '${displacedBy}' token instead of personal.`);
-    console.log(`  Run 'garden login' to restore the keychain to your personal account.`);
-  } else if (profiles.length > 0) {
-    console.log(`✓ Routing intact: keychain ≠ any profile file (each profile has its own token).`);
+  for (const p of shared) {
+    console.log(`⚠ '${p.name}' is logged into your personal account, so its projects use your personal plan.`);
+    console.log(`  Sign your browser into the '${p.name}' account, then run 'garden login ${p.name}'.`);
+  }
+  if (shared.length === 0 && profiles.length > 0) {
+    console.log(`✓ Each profile is logged into an account other than personal.`);
   }
 }
 
-function printPersonal(slot: CredentialSlot | null, displacedBy: string | null): void {
+function printPersonal(slot: CredentialSlot | null, account: ClaudeAccount | null): void {
   console.log(`default (personal)`);
   if (!slot) {
     console.log(`  ${pad("(none)")}  ⚠ no credentials found — run 'garden login'`);
     return;
   }
-  const marker = displacedBy ? `⚠ token matches profile '${displacedBy}' — keychain displaced` : "✓ present";
-  console.log(`  ${pad(slot.source)}  ${marker}  ${expiryLine(slot.oauth)}  token: ${tokenPrefix(slot.oauth)}`);
+  console.log(`  ${pad(slot.source)}  ✓ present  ${expiryLine(slot.oauth)}  token: ${tokenPrefix(slot.oauth)}`);
+  console.log(`  ${pad("account")}  ${accountLine(account)}`);
 }
 
 function printProfile(p: ProfileState): void {
   console.log(`${p.name}`);
   console.log(`  ${pad("configDir")}  ${p.configDir}`);
+  console.log(`  ${pad("projects")}  ${p.projects.length > 0 ? p.projects.join(", ") : "(none)"}`);
   if (!p.slot) {
-    console.log(`  ${pad("file")}       ⚠ missing — run 'garden login ${p.name}'`);
+    console.log(`  ${pad("(none)")}  ⚠ no credentials found — run 'garden login ${p.name}'`);
     return;
   }
-  console.log(`  ${pad("file")}       ✓ present  ${expiryLine(p.slot.oauth)}  token: ${tokenPrefix(p.slot.oauth)}`);
+  console.log(`  ${pad(p.slot.source)}  ✓ present  ${expiryLine(p.slot.oauth)}  token: ${tokenPrefix(p.slot.oauth)}`);
+  const marker = p.sameAccountAsPersonal ? "  ⚠ same account as personal" : "";
+  console.log(`  ${pad("account")}  ${accountLine(p.account)}${marker}`);
+}
+
+function accountLine(account: ClaudeAccount | null): string {
+  if (!account?.emailAddress) return "unknown (no oauthAccount recorded)";
+  return account.organizationName
+    ? `${account.emailAddress} (${account.organizationName})`
+    : account.emailAddress;
+}
+
+function sameOrganization(a: ClaudeAccount | null, b: ClaudeAccount | null): boolean {
+  return !!a?.organizationUuid && a.organizationUuid === b?.organizationUuid;
 }
 
 function pad(s: string): string {
@@ -141,19 +168,6 @@ function formatDuration(ms: number): string {
   if (days > 0) return `in ${days}d ${hours}h`;
   if (hours > 0) return `in ${hours}h ${mins}m`;
   return `in ${mins}m`;
-}
-
-function detectDisplacement(
-  keychain: CredentialSlot | null,
-  profiles: ProfileState[],
-): string | null {
-  if (!keychain) return null;
-  for (const p of profiles) {
-    if (p.slot && p.slot.oauth.accessToken === keychain.oauth.accessToken) {
-      return p.name;
-    }
-  }
-  return null;
 }
 
 function serializeSlot(slot: CredentialSlot | null): Record<string, unknown> {

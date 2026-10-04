@@ -4,6 +4,8 @@ import path from "node:path";
 import os from "node:os";
 import {
   readFileCredential,
+  readClaudeAccount,
+  keychainServiceFor,
   isAccessTokenExpired,
   REFRESH_SKEW_MS,
   refreshOAuthToken,
@@ -71,6 +73,43 @@ describe("readFileCredential", () => {
       claudeAiOauth: { accessToken: 12345 },
     }));
     expect(readFileCredential(p)).toBeNull();
+  });
+});
+
+describe("keychainServiceFor", () => {
+  it("uses the bare service for the default config dir", () => {
+    expect(keychainServiceFor()).toBe("Claude Code-credentials");
+  });
+
+  it("suffixes the first 8 hex of sha256(configDir), as Claude Code does", () => {
+    // Observed in a real Keychain: CLAUDE_CONFIG_DIR=/Users/jic/.claude-imp
+    // stores its login under this service, not the shared bare one.
+    expect(keychainServiceFor("/Users/jic/.claude-imp")).toBe("Claude Code-credentials-907d7e59");
+  });
+});
+
+describe("readClaudeAccount", () => {
+  it("reads the oauthAccount Claude Code recorded in <configDir>/.claude.json", () => {
+    fs.writeFileSync(path.join(tmpDir, ".claude.json"), JSON.stringify({
+      numStartups: 3,
+      oauthAccount: {
+        emailAddress: "me@example.com",
+        organizationName: "Example Org",
+        organizationUuid: "org-1",
+        accountUuid: "acct-1",
+      },
+    }));
+    expect(readClaudeAccount(tmpDir)).toEqual({
+      emailAddress: "me@example.com",
+      organizationName: "Example Org",
+      organizationUuid: "org-1",
+    });
+  });
+
+  it("returns null when the dir has never logged in", () => {
+    fs.writeFileSync(path.join(tmpDir, ".claude.json"), JSON.stringify({ numStartups: 1 }));
+    expect(readClaudeAccount(tmpDir)).toBeNull();
+    expect(readClaudeAccount(path.join(tmpDir, "missing"))).toBeNull();
   });
 });
 

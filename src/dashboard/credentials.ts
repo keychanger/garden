@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import https from "node:https";
 import os from "node:os";
@@ -31,19 +32,35 @@ export interface CredentialSlot {
   oauth: ClaudeOAuth;
 }
 
-export function readKeychainCredential(): CredentialSlot | null {
+const KEYCHAIN_SERVICE = "Claude Code-credentials";
+
+// Claude Code keys its macOS Keychain entry by config dir: the bare service for
+// the default dir, `-<first 8 hex of sha256(dir)>` whenever CLAUDE_CONFIG_DIR is
+// set (verified against Claude Code 2.1.289). Each profile therefore has its own
+// entry, and Claude Code reads it ahead of `<configDir>/.credentials.json`.
+export function keychainServiceFor(configDir?: string): string {
+  if (!configDir) return KEYCHAIN_SERVICE;
+  const hash = createHash("sha256").update(configDir.normalize("NFC")).digest("hex").slice(0, 8);
+  return `${KEYCHAIN_SERVICE}-${hash}`;
+}
+
+function readKeychainRaw(configDir?: string): string | null {
   if (process.platform !== "darwin") return null;
   try {
-    const raw = execFileSync(
+    return execFileSync(
       "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      ["find-generic-password", "-s", keychainServiceFor(configDir), "-w"],
       { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
     ).trim();
-    const oauth = parseOAuth(raw);
-    return oauth ? { source: "keychain", oauth } : null;
   } catch {
     return null;
   }
+}
+
+export function readKeychainCredential(configDir?: string): CredentialSlot | null {
+  const raw = readKeychainRaw(configDir);
+  const oauth = raw ? parseOAuth(raw) : null;
+  return oauth ? { source: "keychain", oauth } : null;
 }
 
 export function readFileCredential(filePath: string): CredentialSlot | null {
@@ -61,6 +78,41 @@ export function readPersonalCredential(): CredentialSlot | null {
     readKeychainCredential() ??
     readFileCredential(path.join(os.homedir(), ".claude", ".credentials.json"))
   );
+}
+
+// Mirrors Claude Code's own lookup order for a CLAUDE_CONFIG_DIR session.
+export function readProfileCredential(configDir: string): CredentialSlot | null {
+  return (
+    readKeychainCredential(configDir) ??
+    readFileCredential(path.join(configDir, ".credentials.json"))
+  );
+}
+
+export interface ClaudeAccount {
+  emailAddress?: string;
+  organizationName?: string;
+  organizationUuid?: string;
+}
+
+// The account a config dir is logged into, as Claude Code recorded it at
+// /login: `~/.claude.json` for the default dir, `<configDir>/.claude.json`
+// for a profile. The organization is the billing entity whose plan limits apply.
+export function readClaudeAccount(configDir?: string): ClaudeAccount | null {
+  const file = configDir
+    ? path.join(configDir, ".claude.json")
+    : path.join(os.homedir(), ".claude.json");
+  try {
+    const account = JSON.parse(fs.readFileSync(file, "utf8"))?.oauthAccount;
+    if (!account || typeof account !== "object") return null;
+    const pick = (k: string) => (typeof account[k] === "string" ? account[k] as string : undefined);
+    return {
+      emailAddress: pick("emailAddress"),
+      organizationName: pick("organizationName"),
+      organizationUuid: pick("organizationUuid"),
+    };
+  } catch {
+    return null;
+  }
 }
 
 function parseOAuth(raw: string): ClaudeOAuth | null {
@@ -183,7 +235,7 @@ export function persistCredential(source: "keychain" | "file", oauth: ClaudeOAut
         [
           "add-generic-password",
           "-U", "-a", user,
-          "-s", "Claude Code-credentials",
+          "-s", KEYCHAIN_SERVICE,
           "-w", merged,
         ],
         { stdio: ["ignore", "ignore", "pipe"] },
@@ -207,14 +259,9 @@ export function persistCredential(source: "keychain" | "file", oauth: ClaudeOAut
 function mergeCredentialPayload(source: "keychain" | "file", oauth: ClaudeOAuth): string | null {
   let raw: string;
   if (source === "keychain") {
-    if (process.platform !== "darwin") return null;
-    try {
-      raw = execFileSync(
-        "security",
-        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
-    } catch { return null; }
+    const keychain = readKeychainRaw();
+    if (keychain === null) return null;
+    raw = keychain;
   } else {
     const file = path.join(os.homedir(), ".claude", ".credentials.json");
     try { raw = fs.readFileSync(file, "utf8"); } catch { return null; }
@@ -235,35 +282,9 @@ function mergeCredentialPayload(source: "keychain" | "file", oauth: ClaudeOAuth)
   return JSON.stringify(parsed);
 }
 
-export function captureKeychainTo(credFile: string): boolean {
-  if (process.platform !== "darwin") return false;
-  try {
-    const raw = execFileSync(
-      "security",
-      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
-    if (!raw) return false;
-    atomicWriteFile(credFile, raw, { mode: 0o600 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// Detects /login writes. macOS: shared Keychain (ignores CLAUDE_CONFIG_DIR); Linux: per-config-dir file.
+// Detects /login writes. macOS: the config dir's own Keychain entry; Linux: per-config-dir file.
 function credentialFingerprint(configDir?: string): string {
-  if (process.platform === "darwin") {
-    try {
-      return execFileSync(
-        "security",
-        ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
-    } catch {
-      return "";
-    }
-  }
+  if (process.platform === "darwin") return readKeychainRaw(configDir) ?? "";
   const dir = configDir ?? path.join(os.homedir(), ".claude");
   const file = path.join(dir, ".credentials.json");
   try {
