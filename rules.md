@@ -137,6 +137,9 @@ in `<project>/.garden/rules.md` can extend or override these.
   `garden kick <worker> --retry-review` for a failed default-workflow review.
   This queues a fresh full review; it does not certify the branch. Do not create
   empty commits, bypass checks, or manually mark the review passed to recover.
+- A local CI repair must be pushed before GitHub can verify it. If the CI gate
+  reports the commit missing, publish the existing repair and let CI run; do not
+  disable the gate or create an empty commit to recover.
 
 ## Security
 

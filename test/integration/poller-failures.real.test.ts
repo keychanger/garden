@@ -124,6 +124,53 @@ async function readAlertsForWorker(): Promise<string[]> {
 }
 
 describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
+  it("retries an unpublished CI repair without merging, then accepts publication of the same commit", async () => {
+    const { createWorktree } = await import("../../src/dashboard/git.js");
+    const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+    const { handleCiFixing, ciFixResultPath } = await import("../../src/dashboard/poller-ci-fix.js");
+    const headless = await import("../../src/dashboard/headless-agent.js");
+    const launch = vi.spyOn(headless, "launchHeadlessAgent").mockReturnValue({
+      windowName: "_myproject-ci-fix-swift-oak", launchedAt: Date.now(),
+    });
+    try {
+      createWorktree(projectPath, worktreePath, WORKER);
+      fs.writeFileSync(path.join(worktreePath, "change.txt"), "original change\n");
+      git(worktreePath, "add", "change.txt");
+      git(worktreePath, "commit", "-m", "original change");
+      git(worktreePath, "push", "origin", WORKER);
+      const original = git(worktreePath, "rev-parse", "HEAD");
+      fs.writeFileSync(path.join(worktreePath, "change.txt"), "repaired change\n");
+      git(worktreePath, "commit", "-am", "repair failing check");
+      const repair = git(worktreePath, "rev-parse", "HEAD");
+      await makeWorker({
+        prState: "ci-fixing", agentStatus: "idle", preCiFixSha: original,
+        failingSha: original, lastSeenSha: original, ciFixAttempts: 1,
+        failingCheckSummary: "test: failure", reviewWindowName: "_myproject-ci-fix-swift-oak",
+      });
+      const resultFile = ciFixResultPath(PROJECT, WORKER);
+      fs.mkdirSync(path.dirname(resultFile), { recursive: true });
+      fs.writeFileSync(resultFile, "Committed repair but push was denied.\nFAILED\n");
+      handleCiFixing(PROJECT, projectPath, "main", findWorkerByName(PROJECT, WORKER)!);
+
+      expect(findWorkerByName(PROJECT, WORKER)).toMatchObject({
+        prState: "ci-fixing", ciFixAttempts: 2, preCiFixSha: original,
+      });
+      expect(launch).toHaveBeenCalledOnce();
+      expect(git(originPath, "rev-parse", WORKER)).toBe(original);
+      expect(git(worktreePath, "rev-parse", "HEAD")).toBe(repair);
+
+      git(worktreePath, "push", "origin", WORKER);
+      fs.writeFileSync(resultFile, "Published the existing repair.\nFIXED\n");
+      handleCiFixing(PROJECT, projectPath, "main", findWorkerByName(PROJECT, WORKER)!);
+      expect(findWorkerByName(PROJECT, WORKER)).toMatchObject({
+        prState: "merge-pending", lastSeenSha: repair,
+      });
+      expect(git(originPath, "rev-parse", "main")).not.toBe(repair);
+    } finally {
+      launch.mockRestore();
+    }
+  });
+
   describe("resolver budget exhausted", () => {
     it("escalates to failing with an alert listing unmerged files when budget is hit", async () => {
       // Set up: worker has merged changes; main has advanced with a conflicting

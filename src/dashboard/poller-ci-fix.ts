@@ -5,8 +5,8 @@
 // branch HEAD. The agent reads the failing logs, makes the minimum fix to
 // turn CI green, and pushes; the poller re-enters merge-pending on the new
 // SHA and the gate re-runs. Budget 3 attempts per merge cycle. On exhaustion,
-// or on the agent reporting FAILED without progress, the worker is parked in
-// `failing` with failingReason="ci" — preserving the pre-self-heal terminal
+// the worker is parked in `failing` with failingReason="ci", preserving the
+// pre-self-heal terminal
 // behavior so operator muscle memory still works.
 //
 // See poller-resolve.ts for the analogous merge-conflict resolution flow.
@@ -100,7 +100,9 @@ export function launchCiFix(
   // Stamp failingCheckSummary BEFORE building the prompt — the section reads
   // it off the entry. Also stamp the SHA so the agent's commit lands a new
   // SHA we can verify against.
-  const failingCheckSummary = formatFailingCheckSummary(failed);
+  const failingCheckSummary = failed.length > 0
+    ? formatFailingCheckSummary(failed)
+    : entry.failingCheckSummary ?? formatFailingCheckSummary(failed);
   updateWorkerFields(projectName, entry.name, {
     failingCheckSummary,
     failingSha: sha,
@@ -188,7 +190,9 @@ export function launchCiFix(
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
   });
 
-  const preCiFixSha = getBranchHeadSha(wtPath);
+  const preCiFixSha = entry.prState === "ci-fixing"
+    ? entry.preCiFixSha
+    : getBranchHeadSha(wtPath);
   const launchSha = getRemoteTrackingSha(wtPath, entry.branchName ?? entry.name)
     ?? preCiFixSha ?? entry.lastSeenSha;
 
@@ -206,7 +210,7 @@ export function launchCiFix(
 
   const detail = failed
     .map(f => `${f.name} (${f.conclusion})`)
-    .join(", ");
+    .join(", ") || failingCheckSummary;
   // Launch is a routine lifecycle beat — log it (streams into `garden logs`)
   // but do not raise an operator alert. The alert badge is reserved for states
   // that need the operator: only ci-fix budget *exhaustion* (below) alerts.
@@ -300,7 +304,7 @@ function escalateCiFixBudget(
 export function handleCiFixing(
   projectName: string,
   projectPath: string,
-  _baseBranch: string,
+  baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
   // Timeout: same wall-clock ceiling as the reviewer/resolver. A hung agent
@@ -409,17 +413,11 @@ export function handleCiFixing(
       return true;
     }
 
-    // Re-enter merge-pending: the next poll cycle will re-run the CI gate,
-    // which (on the same SHA) will re-fail, which will call launchCiFix
-    // again, counting toward the budget.
-    transitionState(projectName, entry.name, "merge-pending", {
-      mergePendingAt: entry.mergePendingAt ?? new Date().toISOString(),
-      reviewWindowName: undefined,
-      reviewStartedAt: undefined,
-    });
-    refreshDashboard();
-    scheduleDelayedPoke(projectName, 0);
-    return true;
+    return launchCiFix(
+      projectName, projectPath, baseBranch,
+      { ...entry, lastCiFixBody: result?.body ?? entry.lastCiFixBody },
+      [], entry.failingSha ?? entry.preCiFixSha ?? entry.lastSeenSha ?? "",
+    );
   }
 
   // Success: agent pushed a fix and re-enters merge-pending; the next CI gate

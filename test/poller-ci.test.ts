@@ -140,6 +140,14 @@ describe("checkCiStatus", () => {
     }
   });
 
+  it("distinguishes an unpublished commit from an unavailable CI service", () => {
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      status: 1, pid: 1, output: [], signal: null, stdout: "",
+      stderr: "gh: No commit found for SHA: 230c308 (HTTP 422)",
+    });
+    expect(checkCiStatus("owner/repo", "230c308")).toEqual({ kind: "missing-commit" });
+  });
+
   it("returns unavailable on gh non-zero exit", () => {
     vi.mocked(spawnSync).mockReturnValueOnce({
       status: 1,

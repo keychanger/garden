@@ -245,6 +245,7 @@ stateDiagram-v2
     resolving --> failing : resolver Stop (budget exhausted)
     resolving --> working : worker push (stale resolution)
 
+    ci_fixing --> ci_fixing : ci-fix Stop (unverified, retry budget remains)
     ci_fixing --> merge_pending : ci-fix Stop (FIXED + verified push)
     ci_fixing --> failing : ci-fix Stop (budget exhausted)
     ci_fixing --> working : worker push (stale auto-fix)
@@ -331,7 +332,7 @@ a terminal state — it returns to `working` when the operator responds
 | resolving     | failing       | Resolver `Stop`, budget exhausted or verification failed |
 | resolving     | working       | Worker push event (commits during resolution, aborted) |
 | ci-fixing     | merge-pending | ci-fix `Stop`, verdict FIXED and verified push (re-runs CI gate) |
-| ci-fixing     | merge-pending | ci-fix `Stop`, retry (budget remains, no verified push) |
+| ci-fixing     | ci-fixing     | ci-fix `Stop`, retry directly (budget remains, no verified push) |
 | ci-fixing     | failing       | ci-fix `Stop`, budget exhausted with `failingReason: "ci"` |
 | ci-fixing     | working       | Worker push event (commits during auto-fix, agent aborted) |
 | merged        | working       | Worker `UserPromptSubmit` (transient cleared)        |
@@ -388,7 +389,7 @@ signals the status pane. They drive:
   poller, which kills the reviewer and cancels the pass — hooks write
   `agentStatus`, the poller writes `prState`)
 - `resolving → merge-pending`, `resolving → failing` (resolver's `Stop`)
-- `ci-fixing → merge-pending`, `ci-fixing → failing` (ci-fix agent's `Stop`)
+- `ci-fixing → ci-fixing`, `ci-fixing → merge-pending`, `ci-fixing → failing` (ci-fix agent's `Stop`)
 
 The worker's `Stop` hook also pokes the project's poller FIFO if it sees
 new commits ahead of the base branch on a clean worktree — so review starts
@@ -420,7 +421,8 @@ Drives:
 - `merge-pending → working` (merge fails for a non-conflict reason)
 - `resolving → merge-pending` (resolver succeeded and verification passed)
 - `resolving → failing` (resolver budget exhausted or verification failed)
-- `ci-fixing → merge-pending` (ci-fix succeeded with verified push, or retrying within budget)
+- `ci-fixing → ci-fixing` (retrying within budget, without exposing an unverified repair to merging)
+- `ci-fixing → merge-pending` (ci-fix succeeded with verified push)
 - `ci-fixing → failing` (ci-fix budget exhausted)
 
 **4. tmux `pane-died` hook** — tmux fires this automatically when a

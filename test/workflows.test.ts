@@ -51,7 +51,7 @@ const PRE_REFACTOR_VALID_TRANSITIONS: Record<PrState, PrState[]> = {
   reviewing:       ["merge-pending", "working", "failing", "done"],
   "merge-pending": ["merged", "done", "resolving", "ci-fixing", "working", "failing"],
   resolving:       ["merge-pending", "working", "failing"],
-  "ci-fixing":     ["merge-pending", "working", "failing"],
+  "ci-fixing":     ["ci-fixing", "merge-pending", "working", "failing"],
   failing:         ["working"],
   merged:          ["working", "done"],
   done:            ["working", "reviewing"],

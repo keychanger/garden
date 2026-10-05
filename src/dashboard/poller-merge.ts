@@ -408,6 +408,23 @@ function gateCiStatus(
       return true;
     }
 
+    case "missing-commit":
+      log.warn("poller", "ci gate: commit missing on GitHub, deferring merge", {
+        worker: entry.name,
+        data: { project: projectName, sha },
+      });
+      addAlert({
+        level: "warn",
+        source: "poller",
+        project: projectName,
+        worker: entry.name,
+        message: `CI cannot verify ${sha.slice(0, 7)}: commit is missing on GitHub. `
+          + `Push the worker branch so CI can run; merge remains blocked.`,
+        dedupKey: `ci-commit-missing:${projectName}:${entry.name}:${sha}`,
+      });
+      armCiRecheck(projectName);
+      return false;
+
     case "unavailable":
       // Don't block on infrastructure problems. One alert per reason to
       // surface the gap without spamming on every poll cycle.

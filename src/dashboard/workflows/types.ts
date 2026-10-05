@@ -113,10 +113,10 @@ export const defaultValidTransitions: Record<PrState, PrState[]> = {
   "merge-pending": ["merged", "done", "resolving", "ci-fixing", "working", "failing"],
   resolving:       ["merge-pending", "working", "failing"],
   // ci-fixing: agent pushed FIXED → merge-pending re-runs the CI gate on the
-  // new SHA. Worker pushed mid-fix or agent FAILED → working. Budget
-  // exhausted, push verification failed, or unrecoverable → failing with
+  // new SHA. Failed verification retries in ci-fixing; a worker push mid-fix
+  // returns to working. Budget exhausted or unrecoverable → failing with
   // failingReason="ci".
-  "ci-fixing":     ["merge-pending", "working", "failing"],
+  "ci-fixing":     ["ci-fixing", "merge-pending", "working", "failing"],
   failing:         ["working"],
   merged:          ["working", "done"],
   // done → reviewing is the holistic final-review interposition: a multi-phase

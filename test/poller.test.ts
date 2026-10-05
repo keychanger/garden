@@ -4377,6 +4377,25 @@ describe("poll — merge-pending CI gate", () => {
     expect(mergeToBase).toHaveBeenCalled();
   });
 
+  it("never merges a missing GitHub commit, even after the no-runs grace expires", () => {
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "missing-commit" });
+    registryMock._setEntries("myproject", [{
+      ...pending(), ciNoRuns: { sha: "deadbeefcafe", since: Date.now() - 600_000 },
+    }]);
+    poll("myproject");
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(rebaseBranch).not.toHaveBeenCalled();
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 60_000);
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      message: expect.stringContaining("missing on GitHub"),
+    }));
+
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "success" });
+    poll("myproject");
+    expect(mergeToBase).toHaveBeenCalledOnce();
+  });
+
   it("passes through (with an alert) when gh is unavailable", () => {
     vi.mocked(checkCiStatus).mockReturnValue({
       kind: "unavailable",
@@ -4923,17 +4942,58 @@ describe("poll — ci-fixing state", () => {
 
     poll("myproject");
 
-    // Budget has 2 attempts left, so we bounce back to merge-pending
-    // (NOT to failing). The next merge-pending tick re-runs CI gate,
-    // re-spawns the ci-fix agent, counting toward the budget.
-    const mpCall = vi.mocked(updateWorkerFields).mock.calls.find(
-      c => (c[2] as Record<string, unknown>).prState === "merge-pending",
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      prState: "ci-fixing", ciFixAttempts: 2, preCiFixSha: "pre-fix-sha",
+    }));
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      prState: "merge-pending",
+    }));
+    expect(newDashboardWindow).toHaveBeenCalled();
+  });
+
+  it.each(["FAILED", "FIXED"])("keeps an unpushed repair out of merging after %s and accepts a later verified push", verdict => {
+    setupCiFix({ failingCheckSummary: "test (failure): original job" });
+    vi.mocked(getBranchHeadSha).mockReturnValue("local-repair-sha");
+    vi.mocked(fs.readFileSync).mockImplementation(p =>
+      String(p).includes("ci-fix-result") ? `Local repair, push blocked.\n${verdict}` : "{}",
     );
-    expect(mpCall).toBeDefined();
-    const failingCall = vi.mocked(updateWorkerFields).mock.calls.find(
-      c => (c[2] as Record<string, unknown>).prState === "failing",
+    poll("myproject");
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      prState: "merge-pending",
+    }));
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      prState: "ci-fixing", ciFixAttempts: 2, preCiFixSha: "pre-fix-sha",
+    }));
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      failingCheckSummary: "test (failure): original job",
+    }));
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(newDashboardWindow).toHaveBeenCalledOnce();
+
+    vi.mocked(fs.readFileSync).mockImplementation(p =>
+      String(p).includes("ci-fix-result") ? "Published existing repair.\nFIXED" : "{}",
     );
-    expect(failingCall).toBeUndefined();
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("local-repair-sha");
+    poll("myproject");
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      prState: "merge-pending", lastSeenSha: "local-repair-sha",
+    }));
+  });
+
+  it("exhausts the retry budget without merging or discarding an unpublished repair", () => {
+    setupCiFix();
+    vi.mocked(getBranchHeadSha).mockReturnValue("local-repair-sha");
+    for (let attempt = 1; attempt <= 3; attempt++) poll("myproject");
+    expect(newDashboardWindow).toHaveBeenCalledTimes(2);
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      prState: "failing", failingReason: "ci", ciFixAttempts: 0,
+    }));
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      prState: "merge-pending",
+    }));
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(forcePushBranch).not.toHaveBeenCalled();
   });
 
   it("escalates to failing when verdict FAILED and budget is exhausted", () => {

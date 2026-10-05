@@ -14,6 +14,7 @@
 //     check-runs is treated as "not yet materialized" and the merge defers
 //     within a bounded grace window before passing through (the disambiguation
 //     lives in gateCiStatus, poller-merge.ts)
+//   - "missing-commit" → defer until GitHub knows the commit; never pass on timeout
 //   - "pending" → defer (caller stays in merge-pending, schedules a re-poke)
 //   - "failed" → caller transitions worker to `failing` with reason "ci"
 //
@@ -29,6 +30,7 @@ export type CiStatus =
   | { kind: "pending"; pending: string[] }
   | { kind: "failed"; failed: Array<{ name: string; conclusion: string; htmlUrl?: string }> }
   | { kind: "no-ci" }
+  | { kind: "missing-commit" }
   | { kind: "unavailable"; reason: string };
 
 // Parse a GitHub repo slug ("owner/repo") from the origin remote URL.
@@ -113,11 +115,12 @@ export function checkCiStatus(repoSlug: string, sha: string): CiStatus {
     return { kind: "unavailable", reason: `gh-spawn-error: ${String(result.error)}` };
   }
   if (result.status !== 0) {
-    const stderr = (result.stderr ?? "").trim().slice(0, 200);
+    const stderr = (result.stderr ?? "").trim();
+    if (/No commit found for SHA:/i.test(stderr)) return { kind: "missing-commit" };
     // 404 on the commit, auth failure, rate limit — all surface here. Pass
     // through rather than block. The alert path is the operator's signal
     // that the gate isn't doing its job; we log enough to debug.
-    return { kind: "unavailable", reason: `gh-exit-${result.status}: ${stderr}` };
+    return { kind: "unavailable", reason: `gh-exit-${result.status}: ${stderr.slice(0, 200)}` };
   }
 
   // --paginate concatenates JSON arrays as separate lines, NOT as one big
