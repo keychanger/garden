@@ -160,6 +160,27 @@ describe("addAlert", () => {
     expect(log.error).not.toHaveBeenCalled();
   });
 
+  it("routes info alerts through log.info, so a reviewer note never reads as a fault in the log", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    addAlert({
+      level: "info",
+      source: "review",
+      project: "wolf",
+      worker: "cold-brash-lark",
+      message: "Reviewer left non-blocking notes on cold-brash-lark",
+    });
+
+    expect(log.info).toHaveBeenCalledWith(
+      "alert",
+      expect.stringContaining("non-blocking notes"),
+      expect.objectContaining({ worker: "cold-brash-lark" }),
+    );
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.error).not.toHaveBeenCalled();
+    expect(fs.renameSync).toHaveBeenCalled();
+  });
+
   it("routes error alerts through log.error", () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
 
