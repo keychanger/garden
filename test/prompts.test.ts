@@ -470,3 +470,25 @@ describe("headless single-turn discipline", () => {
     expect(result).toContain("several foreground");
   });
 });
+
+describe("non-blocking notes convention", () => {
+  const holistic = (mode: "fix" | "shadow") => buildHolisticFinalReviewPrompt(
+    "myproject", "/repo/myproject", "main",
+    makeEntry({ baseBranchSha: "base123", holisticTouchedFiles: ["src/foo.ts"], holisticReviewMode: mode }),
+  )!;
+
+  beforeEach(() => {
+    vi.mocked(resolveHolisticDiff).mockReturnValue("holistic diff");
+  });
+
+  it("tells the per-phase reviewer to list rule-classified findings instead of implementing them", () => {
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+    expect(result).toContain("`Non-blocking notes:` heading placed directly above your verdict");
+    expect(result).toContain("non-blocking notes is CLEAN");
+  });
+
+  it("is part of the holistic fix pass but not the analysis-only shadow pass", () => {
+    expect(holistic("fix")).toContain("`Non-blocking notes:` heading");
+    expect(holistic("shadow")).not.toContain("Non-blocking notes");
+  });
+});

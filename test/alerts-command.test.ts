@@ -85,17 +85,17 @@ describe("garden alerts", () => {
     expect(text).not.toMatch(/\bread \(/); // no read section (\b excludes the "unread" header)
   });
 
-  it("uses honest level glyphs (✖ error, ⚠ warn)", async () => {
+  it("uses honest level glyphs (✖ error, ⚠ warn, • info)", async () => {
     h.store = { lastSeenAt: undefined, alerts: [
       a({ level: "error", message: "boom" }),
       a({ level: "warn", message: "hmm" }),
+      a({ level: "info", message: "fyi" }),
     ] };
     const raw = (await captureConsoleLog(() => alerts([]))).join("\n");
-    expect(raw).toContain("✖");
-    expect(raw).toContain("⚠");
-    // error glyph is red, warn is yellow
+    // error glyph is red, warn is yellow, info is cyan
     expect(raw).toMatch(/\x1b\[1;31m✖/);
     expect(raw).toMatch(/\x1b\[1;33m⚠/);
+    expect(raw).toMatch(/\x1b\[1;36m•/);
   });
 
   it("keeps a multi-line message on a single row", async () => {

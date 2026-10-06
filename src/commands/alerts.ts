@@ -107,13 +107,13 @@ export function condenseMessage(message: string): string {
 function formatPaneRows(a: Alert, now: number, read: boolean, width: number): string[] {
   const ago = formatAgo(now - Date.parse(a.ts)).padStart(3);
   const loc = a.worker ? `${a.project}/${a.worker}` : a.project;
-  const glyph = a.level === "error" ? "✖" : "⚠";
+  const glyph = levelGlyph(a);
   // Read alerts recede in the gutter only. The message is the whole reason the
   // operator opened the view — greying it out made an already-noisy pane harder
   // to skim, and the section header plus the dim gutter already say "seen".
   const head = read
     ? ` \x1b[2m${glyph} ${ago}  ${loc}\x1b[0m`
-    : ` ${a.level === "error" ? "\x1b[1;31m" : "\x1b[1;33m"}${glyph}\x1b[0m \x1b[2m${ago}\x1b[0m  \x1b[1m${loc}\x1b[0m`;
+    : ` ${levelColor(a)}${glyph}\x1b[0m \x1b[2m${ago}\x1b[0m  \x1b[1m${loc}\x1b[0m`;
 
   const textWidth = Math.max(10, width - PANE_GUTTER - 1);
   const body = wrapDetail(condenseMessage(a.message), textWidth, textWidth, PANE_MAX_MESSAGE_LINES)
@@ -128,13 +128,21 @@ function formatAlertRow(a: Alert, now: number, read: boolean): string {
   // its own newlines — same reason as the pane.
   const message = condenseMessage(a.message);
   if (read) {
-    const glyph = a.level === "error" ? "✖" : "⚠";
+    const glyph = levelGlyph(a);
     return `    \x1b[2m${glyph} ${ago}  ${loc}\x1b[0m  ${message}`;
   }
-  // Unread: colored glyph by level (heavy-x for error, warning sign for warn),
-  // dim relative age, bold location.
-  const glyph = a.level === "error" ? "\x1b[1;31m✖\x1b[0m" : "\x1b[1;33m⚠\x1b[0m";
+  // Unread: colored glyph by level (heavy-x for error, warning sign for warn,
+  // bullet for info), dim relative age, bold location.
+  const glyph = `${levelColor(a)}${levelGlyph(a)}\x1b[0m`;
   return `    ${glyph} \x1b[2m${ago}\x1b[0m  \x1b[1m${loc}\x1b[0m  ${message}`;
+}
+
+function levelGlyph(a: Alert): string {
+  return a.level === "error" ? "✖" : a.level === "info" ? "•" : "⚠";
+}
+
+function levelColor(a: Alert): string {
+  return a.level === "error" ? "\x1b[1;31m" : a.level === "info" ? "\x1b[1;36m" : "\x1b[1;33m";
 }
 
 // Compact relative age: seconds under a minute, then minutes/hours/days. Bounded

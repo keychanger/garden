@@ -46,6 +46,7 @@ import { reviewWindowName } from "./window-names.js";
 import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
 import { recordReviewVerdict } from "./telemetry.js";
+import { recordReviewNotes } from "./review-notes.js";
 import {
   holisticFindingsPath,
   reviewPromptPath,
@@ -550,6 +551,11 @@ function handleHolisticFinalReview(
   const rawOutput = readReviewOutputRaw(projectName, entry);
   const review = rawOutput === null ? null : parseReviewResult(rawOutput, entry.name, projectName);
   cleanReviewFiles(projectName, entry.name);
+  if (review !== null) {
+    recordReviewNotes({
+      project: projectName, worker: entry.name, branch: branchName, verdict: review.verdict, body: review.body,
+    });
+  }
 
   // Finalize the worker back to `done`, clearing the final-review markers and
   // bumping the high-water guard past this mergeCount so it never re-fires.
@@ -699,6 +705,13 @@ function recordAndDispatchReview(
       preReviewSha: entry.preReviewSha,
       tipSha,
     },
+  });
+  recordReviewNotes({
+    project: projectName,
+    worker: entry.name,
+    branch: entry.branchName ?? entry.name,
+    verdict: review.verdict,
+    body: review.body,
   });
 
   // Ledger the verdict with the signal the `state` event can't carry: review

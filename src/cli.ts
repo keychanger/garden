@@ -158,6 +158,7 @@ Dashboard:
   status [--all]                 Show project and worker status (--all: every plot, not just the active one)
   whoami [worker]                Show the current worker's registry entry (uses $GARDEN_WORKER)
   review [worker]                Show a worker's last review: verdict, review-window diff, notes (default: focused)
+  notes [project] [--clear]      Show the non-blocking notes reviewers left (--clear removes them)
   queue [project]                Show the merge pipeline: queue order, in-review, blocked, CI markers
   checks [project]               Run the project's checks command under the machine-wide concurrency gate
   stats [options]                Aggregate the telemetry ledger by config (quality / cost / autonomy)

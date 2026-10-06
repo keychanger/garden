@@ -37,6 +37,7 @@ import { limits } from "./limits.js";
 import { awake } from "./awake.js";
 import { whoami } from "./whoami.js";
 import { review } from "./review.js";
+import { notes } from "./notes.js";
 import { queue } from "./queue.js";
 import { stats } from "./stats.js";
 import { doctor } from "./doctor.js";
@@ -92,6 +93,7 @@ export const commands: Record<string, Command> = {
   awake,
   whoami,
   review,
+  notes,
   queue,
   stats,
   doctor,

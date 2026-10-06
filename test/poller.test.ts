@@ -85,6 +85,10 @@ vi.mock("../src/dashboard/telemetry.js", async (importOriginal) => ({
   recordCiFixOutcome: vi.fn(),
 }));
 
+vi.mock("../src/dashboard/review-notes.js", () => ({
+  recordReviewNotes: vi.fn(),
+}));
+
 vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
   setupStatusBar: vi.fn(),
@@ -322,6 +326,7 @@ import { getGitHubRepoSlug, checkCiStatus, projectDefinesCi } from "../src/dashb
 import { sweepGhostEntries } from "../src/dashboard/validate.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { recordCiFixOutcome } from "../src/dashboard/telemetry.js";
+import { recordReviewNotes } from "../src/dashboard/review-notes.js";
 import { extractReviewVerdict } from "../src/dashboard/verdict-extract.js";
 import { showBeads, addLabel, removeLabel } from "../src/dashboard/beads.js";
 import {
@@ -1387,6 +1392,33 @@ describe("poll — reviewing state (async)", () => {
     );
     // Must poke the poller so it processes handleMergePending next tick
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
+  });
+
+  it("hands the review body to the notes recorder without changing the CLEAN dispatch", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123" }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) =>
+      !name.includes("-review-"),
+    );
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result"),
+    );
+    const body = "Looks good.\n\nNon-blocking notes:\n- new latch cites no incident";
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      if (String(p).includes("review-result")) return `${body}\nCLEAN`;
+      return "{}";
+    });
+
+    poll("myproject");
+
+    expect(recordReviewNotes).toHaveBeenCalledWith({
+      project: "myproject", worker: "bold-ash", branch: "bold-ash", verdict: "clean", body,
+    });
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }),
+    );
   });
 
   it("transitions to merge-pending when review returns FIXED", () => {
@@ -2913,6 +2945,17 @@ describe("poll — holistic final review (interposed whole-task review)", () => 
     expect(after.prState).toBe("done");
     expect(after.holisticFinalActive).toBeUndefined();
     expect(after.holisticReviewedThroughMergeCount).toBe(3);
+  });
+
+  it("fix mode: forwards the reviewer's non-blocking notes and still finalizes done", () => {
+    setHolistic({ holisticReviewMode: "fix", preReviewSha: "abc123" });
+    const body = "Coherent.\nNon-blocking notes:\n- phase 2 added an unneeded guard";
+    reviewResult(`${body}\nCLEAN`);
+    poll("myproject");
+    expect(recordReviewNotes).toHaveBeenCalledWith({
+      project: "myproject", worker: "bold-ash", branch: "bold-ash", verdict: "clean", body,
+    });
+    expect(registryMock.findWorkerByName("myproject", "bold-ash")!.prState).toBe("done");
   });
 
   it("fix mode FIXED with a commit: force-pushes, rides the merge gate, marker persists", () => {

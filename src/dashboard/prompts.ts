@@ -46,6 +46,19 @@ export const headlessSingleTurnNote: readonly string[] = [
   "is not the verdict token is treated as a failed run.",
 ];
 
+// The one outcome between "fix it" and "fail it". The review body is scrubbed
+// at merge, so garden lifts this section out of a finished review and keeps it
+// for the operator (review-notes.ts); the heading text is what it looks for.
+export const nonBlockingNotesConvention: readonly string[] = [
+  "Exception — non-blocking notes: a finding the project's rules mark as non-blocking",
+  "(for example, a rule that a new control or an implementation-pinning test must cite",
+  "a real incident, and this one cites none) is NOT implemented. List each such finding",
+  "as a bullet under a `Non-blocking notes:` heading placed directly above your verdict",
+  "line; garden forwards that section to the operator. Omit the heading when there are",
+  "none. Non-blocking notes never change the verdict: a review whose only findings are",
+  "non-blocking notes is CLEAN.",
+];
+
 export const reviewIntroSection: PromptSection = {
   name: "intro",
   render: () => "You are reviewing a branch before merge. Complete these steps in order:",
@@ -150,6 +163,8 @@ export const reviewCodeReviewStepSection: PromptSection = {
       "update docs as needed. Make focused, minimal fixes — do not refactor or improve code",
       "beyond what the review requires. Commit your fixes with a clear message prefixed with",
       '"review: " (e.g., "review: add missing tests for error handling").',
+      "",
+      ...nonBlockingNotesConvention,
     ].join("\n");
   },
 };
@@ -629,6 +644,8 @@ export const holisticActionSection: PromptSection = {
         `If you find a genuine defect, fix it MINIMALLY and commit with a message prefixed "review: "`,
         `naming the cross-phase defect. If the assembled task is coherent (the common outcome), change`,
         `NOTHING and do not commit.`,
+        ``,
+        ...nonBlockingNotesConvention,
       );
       if (ctx.data.checksCommand) {
         lines.push(

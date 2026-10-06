@@ -34,6 +34,10 @@ export function holisticFindingsPath(project: string, worker: string): string {
   return path.join(CONTROL_REPORTS_DIR, `holistic-findings-${artifactStem(project, worker)}.md`);
 }
 
+export function reviewNotesPath(project: string): string {
+  return path.join(CONTROL_REPORTS_DIR, `review-notes-${artifactPart(project)}.jsonl`);
+}
+
 // Garden's Claude Code settings (hooks, sandbox, status line), passed to every
 // interactive Claude launch with `--settings` (a headless launch generates its
 // own `<promptFile>.settings.json` sidecar). Kept outside the worktree so a repo that

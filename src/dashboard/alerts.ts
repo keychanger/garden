@@ -20,7 +20,7 @@ import { resolveGardenRunner } from "./runner.js";
 export interface Alert {
   id: string;
   ts: string;
-  level: "warn" | "error";
+  level: "info" | "warn" | "error";
   source: string;
   project: string;
   worker?: string;
