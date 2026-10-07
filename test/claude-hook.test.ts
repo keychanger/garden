@@ -6,6 +6,7 @@ const entries: Record<string, import("../src/dashboard/registry.js").WorkerEntry
 vi.mock("node:child_process", () => ({
   execSync: vi.fn(() => ""),
   execFileSync: vi.fn(() => "0"),
+  spawn: vi.fn(() => ({ unref: vi.fn() })),
 }));
 
 vi.mock("node:fs", () => ({
@@ -281,6 +282,45 @@ describe("handleClaudeHook — mid-turn asking transitions (differential)", () =
     setCwd("garden", "bold-ash");
     handleClaudeHook("pretooluse");
     expect(addAlert).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleClaudeHook — permission dialog watcher", () => {
+  async function spawnedCommands(): Promise<string[]> {
+    const { spawn } = await import("node:child_process");
+    return vi.mocked(spawn).mock.calls.map(call => String((call[1] as string[])[1]));
+  }
+
+  async function fireBlocked(input: Record<string, unknown>) {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify(input));
+    handleClaudeHook("pretooluse");
+  }
+
+  it("watches the episode a PermissionRequest raised", async () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
+    setCwd("garden", "bold-ash");
+    await fireBlocked({ hook_event_name: "PermissionRequest" });
+    const askedAt = entries.garden[0].lastStateChangeAt;
+    expect(statusAfter("garden", "bold-ash")).toBe("asking");
+    const commands = await spawnedCommands();
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain(`dashboard _await-permission garden bold-ash ${askedAt}`);
+  });
+
+  it("does not watch an AskUserQuestion, which clears through its own PostToolUse", async () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
+    setCwd("garden", "bold-ash");
+    await fireBlocked({ hook_event_name: "PreToolUse", tool_name: "AskUserQuestion" });
+    expect(statusAfter("garden", "bold-ash")).toBe("asking");
+    expect(await spawnedCommands()).toEqual([]);
+  });
+
+  it("does not watch when the request raised no new asking episode", async () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "paused" });
+    setCwd("garden", "bold-ash");
+    await fireBlocked({ hook_event_name: "PermissionRequest" });
+    expect(await spawnedCommands()).toEqual([]);
   });
 });
 

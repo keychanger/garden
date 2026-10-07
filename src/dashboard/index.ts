@@ -436,6 +436,18 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     runWorkerTitle(projectName, workerName);
     return;
   }
+  if (sub === "_await-permission") {
+    // Spawned detached by the PermissionRequest hook (hooks/default.ts) to
+    // clear `asking` once the operator answers the dialog.
+    const [, projectName, workerName, askedAtArg] = args;
+    const askedAt = Number(askedAtArg);
+    if (!projectName || !workerName || !Number.isInteger(askedAt)) {
+      throw new Error("usage: garden dashboard _await-permission <project> <worker> <askedAt>");
+    }
+    const { watchPermissionPrompt } = await import("./permission-prompt.js");
+    await watchPermissionPrompt(projectName, workerName, askedAt);
+    return;
+  }
   if (sub === "_usage-poll-loop") {
     await runUsagePollerLoop();
     return;

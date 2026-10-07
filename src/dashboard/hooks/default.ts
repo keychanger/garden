@@ -14,7 +14,7 @@
 // retains the whole review/merge graph in the per-tool-call hook bundle.
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { tryGetProject } from "../../config.js";
 import { addAlert, readAlerts } from "../alerts.js";
 import {
@@ -30,7 +30,7 @@ import {
   findWorkerByName, isDelegating, setReviewBlockedReason, updateWorkerFields,
   updateWorkerFieldsIf, type WorkerEntry,
 } from "../registry.js";
-import { getPaneTitle } from "../tmux.js";
+import { getPaneTitle, shellEscape } from "../tmux.js";
 import { DEFAULT_HARNESS, resolveWorkerActivity } from "../harness/core.js";
 import { CODEX_AWAITING_TASK } from "../harness/codex-core.js";
 import { maybeRefreshUsage } from "../usage.js";
@@ -492,8 +492,24 @@ function claudeTranscriptPath(ctx: HookContext): string | undefined {
 // ExitPlanMode) — the two wire events signal the same condition.
 const onBlockedOnOperator: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
-  applyAndLog(ctx, midTurnAskingFields(ctx));
+  const fields = midTurnAskingFields(ctx);
+  applyAndLog(ctx, fields);
+  // applyAndLog stamps lastStateChangeAt onto `fields` when it raised asking;
+  // that stamp names this episode for the watcher's guarded clear.
+  if (ctx.input.hook_event_name === "PermissionRequest" && fields.lastStateChangeAt !== undefined
+      && (ctx.workerInfo.entry.harness ?? DEFAULT_HARNESS) === DEFAULT_HARNESS) {
+    watchPermissionPrompt(ctx.workerInfo.project, ctx.workerInfo.name, fields.lastStateChangeAt);
+  }
 };
+
+// No hook fires when the operator approves a permission dialog, so asking
+// would otherwise hold until the approved tool finishes (permission-prompt.ts).
+function watchPermissionPrompt(project: string, worker: string, askedAt: number): void {
+  try {
+    const cmd = `${resolveGardenRunner()} dashboard _await-permission ${shellEscape(project)} ${shellEscape(worker)} ${askedAt}`;
+    spawn("sh", ["-c", `${cmd} 2>/dev/null`], { detached: true, stdio: "ignore" }).unref();
+  } catch { /* the watchdog sweep clears it within a tick */ }
+}
 
 const onToolActivity: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;

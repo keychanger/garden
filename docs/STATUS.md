@@ -8,7 +8,9 @@ event-driven and the implementation must stay that way. The sole
 sanctioned recurring tick is the liveness watchdog (see "Scheduled
 wake-ups" and invariant 6) — it recovers lost event *delivery* (re-poking
 a project and respawning a dead poller window) but never detects status
-or drives transitions.
+or drives transitions. One named exception reads a pane to detect a
+transition, because the harness emits no event for it: an approved
+permission dialog (see "Answered permission dialogs" below).
 
 ## Display states
 
@@ -291,7 +293,8 @@ The two normal exits from `working` via `Stop` are the core branching point:
 `working` also exits to `asking` mid-turn (PreToolUse / PermissionRequest)
 when Claude needs operator input before it can continue. `asking` is not
 a terminal state — it returns to `working` when the operator responds
-(PostToolUse) or submits a new prompt.
+(PostToolUse), submits a new prompt, or approves a permission dialog
+(read from the pane — see "Answered permission dialogs").
 
 ### Transition rules
 
@@ -312,6 +315,7 @@ a terminal state — it returns to `working` when the operator responds
 | idle          | asking        | Worker `PreToolUse` (self-heal; stale idle)          |
 | asking        | working       | Worker `UserPromptSubmit`                            |
 | asking        | working       | Worker `PostToolUse` (mid-turn resume) — main thread only, not a subagent's |
+| asking        | working       | claude-code pane shows the composer holding the caret again: the permission dialog was answered (watcher spawned by `PermissionRequest`, watchdog backstop) |
 | working       | paused        | Operator `hold` action (`garden hold` / `⌥e`)        |
 | asking        | paused        | Operator `hold` action                               |
 | idle          | paused        | Operator `hold` action                               |
@@ -382,7 +386,9 @@ signals the status pane. They drive:
 - `working → idle`, `working → reviewing` (worker's `Stop`)
 - `working → asking` (worker's `PreToolUse` for user-input tools, `PermissionRequest`)
 - `asking → working` (worker's `PostToolUse` for user-input tools; a
-  subagent's tool events carry `agent_id` and never move `agentStatus`)
+  subagent's tool events carry `agent_id` and never move `agentStatus`.
+  An approved permission dialog is the exception: see "Answered permission
+  dialogs")
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
 - `reviewing → working` (worker's `PostToolUse` for a mutating tool while the
   review is in flight: the hook stamps `reviewInterruptedAt` and pokes the
@@ -722,7 +728,12 @@ clock. Update the list above when you do.
    process that can receive one) and never transitions state itself; the
    event-driven handlers do all the work, idempotently. Events remain the
    only fast path, and no transition is *discovered* by a clock — a
-   watchdog tick that finds nothing wrong is a no-op.
+   watchdog tick that finds nothing wrong is a no-op. The single
+   exception is the answered permission dialog (see "Answered permission
+   dialogs"): Claude Code emits no event when the operator approves one,
+   so a watcher spawned by the `PermissionRequest` event, backed by the
+   watchdog tick, reads the pane to recognize it. Nothing else may
+   discover state that way.
 
 7. **Resolver verdicts are not trusted — they are verified.** When a
    resolver returns a `DONE` verdict, the poller does not transition to
@@ -834,7 +845,34 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   and this hook is the one-stop signal for operator-attention-required
   events across every tool, not just Bash. No operator alert fires —
   the `asking` status (yellow row in the status pane) is the signal;
-  the bottom-bar alert badge is reserved for failures and errors.
+  the bottom-bar alert badge is reserved for failures and errors. It
+  fires in manual and accept-edits modes too, for every tool those modes
+  prompt on.
+
+  **Answered permission dialogs.** No hook fires when the operator
+  approves the dialog: the next event is the approved tool's
+  `PostToolUse`, which for a long Bash command (a test suite, a wait
+  loop) arrives minutes later, and the row read `asking` over a worker
+  that was plainly running. Claude Code 2.1.292 has no approval event
+  (its hook list has `PermissionRequest` and `PermissionDenied`, nothing
+  for a grant), writes nothing to the transcript until the tool finishes,
+  and tmux has no cursor-change hook, so the pane is the only witness.
+  It is a reliable one: the dialog hides the caret, and answering it
+  puts the caret back in the composer box (verified on 2.1.292). This is
+  the one sanctioned pane read that drives a transition, and it is
+  bounded on both sides (`permission-prompt.ts`):
+  - the `PermissionRequest` hook that raised `asking` spawns one detached
+    watcher for that episode, which reads the pane every second, flips
+    `asking → working` after two consecutive readings of the caret in the
+    composer (one could land before the dialog's first frame), and exits
+    on the flip, on any other writer moving the episode (status or
+    `lastStateChangeAt` changed), or after 10 minutes;
+  - the liveness watchdog's tick re-reads the pane of any claude-code
+    worker still `asking` after 10 s, covering a dialog answered after
+    its watcher gave up or a watcher that died.
+  Both write under the registry lock and only while the worker is in the
+  same `asking` episode. A dialog still open, an unreachable pane, or an
+  unknown cursor all read as "still asking", the pre-existing behavior.
 - `PostToolUse` (no matcher — fires for all tools) →
   `agentStatus = "working"` if currently `asking` or `idle`. Fires
   when the user has responded and Claude resumes processing. The

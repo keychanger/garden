@@ -688,6 +688,8 @@ export async function runWatchdogLoop(): Promise<void> {
   // Dynamic for the cycle, like the poller above: validate.ts statically
   // imports poller.ts, which statically imports this module for start/stopWatchdog.
   const { healActivePane } = await import("./validate.js");
+  // Dynamic for the same reason as header.ts above, which it imports.
+  const { sweepAnsweredPermissionPrompts } = await import("./permission-prompt.js");
   startCodexInputWatcher(refreshDashboard);
   const gardenRunner = resolveGardenRunner();
   // Damping state lives in the loop closure: it persists across ticks and
@@ -765,6 +767,13 @@ export async function runWatchdogLoop(): Promise<void> {
         if (sweepWorkerModels(registry) > 0) refreshDashboard();
       } catch (err) {
         log.warn("watchdog", "worker model sweep failed", { data: { error: String(err) } });
+      }
+      // Clear `asking` on workers whose permission dialog was answered after
+      // the hook's own watcher gave up, or whose watcher died.
+      try {
+        if (sweepAnsweredPermissionPrompts(registry, Date.now())) refreshDashboard();
+      } catch (err) {
+        log.warn("watchdog", "permission prompt sweep failed", { data: { error: String(err) } });
       }
       // Retry any worker cleanup whose own dispatch failed. On the fast 60s
       // tick rather than hourly housekeeping: this is a recovery path for a

@@ -387,6 +387,27 @@ export function capturePaneCursor(paneId: string): PaneCursor | null {
   }
 }
 
+export interface PaneCursorState extends PaneCursor { visible: boolean; }
+
+// capturePaneCursor plus whether the application is showing its caret. Claude
+// Code hides the caret while a dialog (permission prompt, AskUserQuestion,
+// folder trust) owns the screen and shows it again in the composer once the
+// dialog closes — verified on 2.1.292. Returns null on any failure.
+export function readPaneCursorState(paneId: string): PaneCursorState | null {
+  try {
+    const out = execFileSync(
+      "tmux",
+      ["display-message", "-p", "-t", paneId, "#{cursor_flag},#{cursor_x},#{cursor_y}"],
+      { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
+    ).trim();
+    const [flag, x, y] = out.split(",").map(Number);
+    if (![flag, x, y].every(Number.isInteger)) return null;
+    return { x, y, visible: flag === 1 };
+  } catch {
+    return null;
+  }
+}
+
 export function tmuxDisplay(msg: string): void {
   try {
     tmux("display-message", "-t", DASHBOARD_SESSION, msg);
