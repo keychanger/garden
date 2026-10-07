@@ -1621,6 +1621,22 @@ describe("blocked-on-operator row", () => {
     expect(line).not.toContain("\u2713");    // ✓ — would argue with the question
   });
 
+  // The elapsed suffix ends in its own reset; the row color must survive it, or
+  // a row's description is yellow only while it has no elapsed to show.
+  it("keeps the description in the row color past the elapsed suffix", async () => {
+    const now = Date.now();
+    vi.mocked(getWorkers).mockReturnValue([{
+      name: "bold-ash", sessionId: "a", task: "Ship the widget", agentStatus: "idle",
+      blockedQuestion: "Which shape?",
+      blockedAt: now - 2 * 60 * 60 * 1000,
+    }]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(stripAnsi(line)).toContain("asking 2h");
+    const beforeTopic = line.slice(0, line.indexOf("Ship the widget"));
+    const afterLastReset = beforeTopic.slice(beforeTopic.lastIndexOf("\x1b[0m"));
+    expect(afterLastReset).toContain("\x1b[1;33m");
+  });
+
   // Red outranks yellow: something broken is more urgent than a question, and a
   // failing row must not be recolored into looking merely inquisitive.
   it("leaves a failing worker red even when it recorded a question", async () => {

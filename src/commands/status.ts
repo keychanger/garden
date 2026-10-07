@@ -590,13 +590,21 @@ function computeStatusWidth(workers: WorkerInfo[], now: number): number {
 }
 
 function colorizeRow(status: WorkerStatus, line: string): string {
-  if (status === "asking") return `\x1b[1;33m${line}\x1b[0m`;
-  if (status === "failing") return `\x1b[1;31m${line}\x1b[0m`;
-  if (status === "done") return `\x1b[1;32m${line}\x1b[0m`;
+  if (status === "asking") return wrapRow("\x1b[1;33m", line);
+  if (status === "failing") return wrapRow("\x1b[1;31m", line);
+  if (status === "done") return wrapRow("\x1b[1;32m", line);
   // paused is operator-controlled, not urgent — bold cyan marks it as a
   // deliberate hold, distinct from the yellow/red/green attention states.
-  if (status === "paused") return `\x1b[1;36m${line}\x1b[0m`;
+  if (status === "paused") return wrapRow("\x1b[1;36m", line);
   return line;
+}
+
+// Wrap a whole row in one style, re-arming it after every inner reset (the
+// elapsed suffix, the grey badges) so the style reaches the end of the row
+// rather than stopping at the first segment that carries its own color.
+function wrapRow(style: string, line: string): string {
+  const RESET = "\x1b[0m";
+  return style + line.split(RESET).join(RESET + style) + RESET;
 }
 
 // Render a status row dimmed (faint). Rows embed inner ANSI that ends in a full
@@ -608,9 +616,7 @@ function colorizeRow(status: WorkerStatus, line: string): string {
 // `paused`, is excluded from staleness (isWorkerStale) so a row-level color never
 // reaches here to fight the faint.
 export function dimRow(line: string): string {
-  const FAINT = "\x1b[2m";
-  const RESET = "\x1b[0m";
-  return FAINT + line.split(RESET).join(RESET + FAINT) + RESET;
+  return wrapRow("\x1b[2m", line);
 }
 
 // Approximate terminal column width of one code point: 0 for combining marks,
