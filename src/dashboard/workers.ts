@@ -28,6 +28,7 @@ import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
 import { log } from "./log.js";
+import { explainPtyExhaustion } from "./pty-census.js";
 import { resolveAndApplyVineModel } from "./trellis-model.js";
 import { getWorkflow } from "./workflows/index.js";
 import {
@@ -183,14 +184,15 @@ export interface NewWorkerOptions {
 /**
  * The ⌥n entry point. Its key binding discards the route's output, so a throw
  * reaches the operator only as tmux's bare "returned 1"; name the failure in
- * the status line instead.
+ * the status line instead, held until a key is pressed. The route exits 0 on
+ * purpose: a non-zero exit makes tmux open its own "returned 1" view over the
+ * pane, which is all the operator sees.
  */
 export function newWorkerFromHotkey(): void {
   try {
     newWorker();
   } catch (err) {
-    tmuxDisplay(`New worker failed: ${err instanceof Error ? err.message : String(err)}`);
-    process.exitCode = 1;
+    tmuxDisplay(`New worker failed: ${err instanceof Error ? err.message : String(err)}`, { untilKey: true });
   }
 }
 
@@ -850,11 +852,12 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       preexistingWorktree ? undefined : wtPath,
       preexistingBranch ? undefined : branchName,
     );
+    const ptyExhaustion = explainPtyExhaustion(err);
     log.error("workers", "tmux pane creation failed; rolled back registry entry", {
       worker: workerName,
-      data: { project: targetProject, error: String(err) },
+      data: { project: targetProject, error: String(err), ...(ptyExhaustion && { cause: ptyExhaustion }) },
     });
-    throw err;
+    throw ptyExhaustion ? new Error(ptyExhaustion) : err;
   }
 
   log.info("workers", "created", {

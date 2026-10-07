@@ -1,4 +1,4 @@
-// Liveness watchdog: a slow recurring tick with five duties, plus one
+// Liveness watchdog: a slow recurring tick with six duties, plus one
 // event-driven Codex rollout listener.
 //
 // 1. Re-poke projects holding workers stranded in active states. The state
@@ -39,6 +39,12 @@
 // `garden health --fix`, neither of which runs while a session simply stays
 // attached, which is exactly when the wedge happens.
 //
+// 6. Count the machine's pseudo-terminals and name who holds them (see
+// recordPtyCensus). Every pane needs one, the machine-wide limit is fixed, and
+// a leak there fails every worker spawn with nothing in the log naming the
+// holder; the census logs unexplained holders as they change and alerts well
+// before the limit.
+//
 // The rollout listener translates Codex's hookless request_user_input call and
 // result records into the shared asking/working worker states. It is driven by
 // fs.watch writes, not by the recurring tick.
@@ -75,6 +81,9 @@ import { getBuildBranch, loadConfig } from "../config.js";
 import { GARDEN_VERSION } from "../version.js";
 import { withFileLock } from "./file-lock.js";
 import { enforceAwake } from "./awake.js";
+import {
+  takePtyCensus, unexplainedHoldings, isPtyPressure, formatTopHolders, type PtyCensus,
+} from "./pty-census.js";
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
@@ -386,6 +395,43 @@ export function refreshBuildStaleness(): boolean {
     changed = true;
   });
   return changed;
+}
+
+// How often the pty census runs. The leak it exists to catch grew ~35 ptys a
+// day, so five minutes resolves it to a handful of events while keeping the
+// two lsof calls (~0.25s together) off most liveness ticks.
+export const PTY_CENSUS_INTERVAL_MS = 5 * 60_000;
+
+// Take a pty census, log it whenever the holdings a live pane does not explain
+// change, and alert while allocation is within reach of the machine's limit.
+// Returns the unexplained-holdings signature for the caller to pass back next
+// time; tmux's own per-pane ptys churn with every review and are excluded so an
+// ordinary fleet logs nothing.
+export function recordPtyCensus(
+  previous: string | null,
+  census: PtyCensus | null = takePtyCensus(),
+): string | null {
+  if (!census) return previous;
+  const unexplained = unexplainedHoldings(census);
+  const signature = unexplained.join("\n");
+  if (signature !== previous) {
+    log.info("watchdog", "pty census", {
+      data: { inUse: census.inUse, limit: census.limit, tmuxServer: census.tmuxServer, unexplained },
+    });
+  }
+  if (isPtyPressure(census)) {
+    addAlert({
+      level: "warn",
+      source: "watchdog",
+      project: "garden",
+      message:
+        `${census.inUse} of ${census.limit} pseudo-terminals are allocated; at the limit, ` +
+        `tmux cannot open a pane and every worker spawn fails. Top holders: ` +
+        `${formatTopHolders(census)}.`,
+      dedupKey: "warn:watchdog:pty-pressure",
+    });
+  }
+  return signature;
 }
 
 // A spent bootstrap script older than this is safe to delete. The worker pane
@@ -710,6 +756,9 @@ export async function runWatchdogLoop(): Promise<void> {
   // 0 so the first tick after (re)spawn pokes intake projects — a restart may
   // have eaten a poke, and the poller-side throttle bounds the cost.
   let lastIntakeBeatAt = 0;
+  // 0 so the first tick after (re)spawn records a baseline census.
+  let lastPtyCensusAt = 0;
+  let ptySignature: string | null = null;
   // Timestamp the START of each iteration; the gap to the next start spans the
   // whole loop (tick body + the fixed sleep), so a suspend during EITHER is
   // measured — capturing only around the sleep would miss a suspend mid-body.
@@ -832,6 +881,14 @@ export async function runWatchdogLoop(): Promise<void> {
           if (refreshBuildStaleness()) refreshDashboard();
         } catch (err) {
           log.warn("watchdog", "build staleness refresh failed", { data: { error: String(err) } });
+        }
+      }
+      if (Date.now() - lastPtyCensusAt >= PTY_CENSUS_INTERVAL_MS) {
+        lastPtyCensusAt = Date.now();
+        try {
+          ptySignature = recordPtyCensus(ptySignature);
+        } catch (err) {
+          log.warn("watchdog", "pty census failed", { data: { error: String(err) } });
         }
       }
       // The passive capture above only re-reports the last time Codex ran, so a

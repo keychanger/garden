@@ -408,9 +408,11 @@ export function readPaneCursorState(paneId: string): PaneCursorState | null {
   }
 }
 
-export function tmuxDisplay(msg: string): void {
+// untilKey holds the message in the status line until a key is pressed, for a
+// failure the operator would otherwise miss in the default 750ms display.
+export function tmuxDisplay(msg: string, opts: { untilKey?: boolean } = {}): void {
   try {
-    tmux("display-message", "-t", DASHBOARD_SESSION, msg);
+    tmux("display-message", ...(opts.untilKey ? ["-d", "0"] : []), "-t", DASHBOARD_SESSION, msg);
   } catch { log.debug("tmux", "tmuxDisplay failed"); }
 }
 

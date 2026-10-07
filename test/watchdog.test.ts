@@ -88,8 +88,10 @@ import {
   latestActivityMs, isWatchedState, isWorkerStale, hasLiveWork, tick,
   healProjectPollers, alertOrphanedWindows, WATCHDOG_THRESHOLD_MS,
   absorbSleep, WATCHDOG_TICK_MS, SLEEP_SLACK_MS, startWatchdog,
-  refreshBuildStaleness, WATCHDOG_SPAWN_LOCK_FILE,
+  refreshBuildStaleness, WATCHDOG_SPAWN_LOCK_FILE, recordPtyCensus,
 } from "../src/dashboard/watchdog.js";
+import { log } from "../src/dashboard/log.js";
+import type { PtyCensus } from "../src/dashboard/pty-census.js";
 import { commitsBehindOrigin, gardenInstallRepo } from "../src/dashboard/git.js";
 import { loadConfig } from "../src/config.js";
 import { writeDashState } from "../src/dashboard/state.js";
@@ -652,5 +654,82 @@ describe("refreshBuildStaleness", () => {
     stateMock._setBuildBehind(5);
     expect(refreshBuildStaleness()).toBe(true);
     expect(vi.mocked(writeDashState).mock.calls.at(-1)![0].buildBehind).toBeNull();
+  });
+});
+
+describe("recordPtyCensus", () => {
+  function census(overrides: Partial<PtyCensus> = {}): PtyCensus {
+    return {
+      inUse: 60,
+      limit: 511,
+      holders: [
+        { pid: 1474, command: "tmux", count: 57, owner: "tmux server" },
+        { pid: 57951, command: "iTerm2", count: 2, owner: "outside garden" },
+      ],
+      tmuxServer: { held: 57, panes: 57 },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.mocked(log.info).mockClear();
+    vi.mocked(addAlert).mockClear();
+  });
+
+  it("logs a baseline, then stays quiet while only tmux's own pane ptys churn", () => {
+    const signature = recordPtyCensus(null, census());
+    expect(log.info).toHaveBeenCalledWith("watchdog", "pty census", expect.objectContaining({
+      data: expect.objectContaining({ unexplained: ["iTerm2[57951] outside garden: 2"] }),
+    }));
+    vi.mocked(log.info).mockClear();
+
+    const busier = census({
+      inUse: 90,
+      holders: [{ pid: 1474, command: "tmux", count: 87, owner: "tmux server" }, census().holders[1]],
+      tmuxServer: { held: 87, panes: 87 },
+    });
+    expect(recordPtyCensus(signature, busier)).toBe(signature);
+    expect(log.info).not.toHaveBeenCalled();
+  });
+
+  it("logs when a holder no live pane explains appears or grows", () => {
+    const signature = recordPtyCensus(null, census());
+    vi.mocked(log.info).mockClear();
+    const leaking = census({
+      holders: [...census().holders, { pid: 4242, command: "node", count: 9, owner: "wolf/rapt-west-quail (detached)" }],
+    });
+    recordPtyCensus(signature, leaking);
+    expect(log.info).toHaveBeenCalledWith("watchdog", "pty census", expect.objectContaining({
+      data: expect.objectContaining({
+        unexplained: ["iTerm2[57951] outside garden: 2", "node[4242] wolf/rapt-west-quail (detached): 9"],
+      }),
+    }));
+  });
+
+  it("treats ptys the tmux server holds beyond its live panes as unexplained", () => {
+    recordPtyCensus(null, census({ tmuxServer: { held: 70, panes: 57 } }));
+    expect(log.info).toHaveBeenCalledWith("watchdog", "pty census", expect.objectContaining({
+      data: expect.objectContaining({
+        unexplained: expect.arrayContaining(["tmux server surplus over panes: 13"]),
+      }),
+    }));
+  });
+
+  it("alerts with the top holders once allocation nears the machine limit", () => {
+    recordPtyCensus(null, census());
+    expect(addAlert).not.toHaveBeenCalled();
+
+    recordPtyCensus(null, census({ inUse: 400 }));
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      dedupKey: "warn:watchdog:pty-pressure",
+      message: expect.stringContaining("400 of 511 pseudo-terminals"),
+    }));
+    expect(vi.mocked(addAlert).mock.calls[0][0].message).toContain("tmux server (57 panes): 57");
+  });
+
+  it("keeps the previous signature when no census could be taken", () => {
+    expect(recordPtyCensus("prior", null)).toBe("prior");
+    expect(log.info).not.toHaveBeenCalled();
   });
 });
