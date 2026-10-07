@@ -41,6 +41,7 @@ import {
   newDashboardWindowPaned,
   getActivePaneId,
   capturePaneText,
+  readPaneCursorState,
   tmuxDisplay,
   setPaneTitle,
   setPaneLabel,
@@ -506,6 +507,33 @@ describe("capturePaneText", () => {
     mockExecFileSync.mockReturnValue("❯ \x1b[2mghost\x1b[0m");
     expect(capturePaneText("%3", { styles: true })).toBe("❯ \x1b[2mghost\x1b[0m");
     expect(mockExecFileSync.mock.calls[0][1]).toEqual(["capture-pane", "-p", "-e", "-t", "%3"]);
+  });
+});
+
+// ===========================================================================
+// readPaneCursorState — caret position plus whether the app is showing it
+// ===========================================================================
+
+describe("readPaneCursorState", () => {
+  it("reads a visible caret from cursor_flag=1", () => {
+    mockExecFileSync.mockReturnValue("1,2,6\n");
+    expect(readPaneCursorState("%3")).toEqual({ x: 2, y: 6, visible: true });
+    expect(mockExecFileSync.mock.calls[0][1]).toEqual([
+      "display-message", "-p", "-t", "%3", "#{cursor_flag},#{cursor_x},#{cursor_y}",
+    ]);
+  });
+
+  it("reads a hidden caret from cursor_flag=0", () => {
+    // A permission dialog hides the caret; the position is still reported.
+    mockExecFileSync.mockReturnValue("0,1,9");
+    expect(readPaneCursorState("%3")).toEqual({ x: 1, y: 9, visible: false });
+  });
+
+  it("returns null on a malformed reading or a failed tmux call", () => {
+    mockExecFileSync.mockReturnValue("1,2");
+    expect(readPaneCursorState("%3")).toBeNull();
+    mockExecFileSync.mockImplementation(() => { throw new Error("pane gone"); });
+    expect(readPaneCursorState("%3")).toBeNull();
   });
 });
 

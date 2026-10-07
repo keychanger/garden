@@ -761,7 +761,9 @@ The status of every worker is two fields in the registry: `agentStatus`
 and `prState` (plus two display-only inputs, `subagentActivityAt` and
 `backgroundTasks` — see "Delegated background work"). There are exactly five writers and one
 reader. There is
-no `pgrep`, no marker file, no activity-text parsing, no fallback poll.
+no `pgrep`, no marker file, no activity-text parsing, no fallback poll —
+save the one named exception, the answered permission dialog, which the
+`PermissionRequest` hook below owns (see "Answered permission dialogs").
 
 ### Writers
 
