@@ -568,11 +568,19 @@ function isSubagentEvent(ctx: HookContext): boolean {
   return typeof ctx.input.agent_id === "string" && ctx.input.agent_id.length > 0;
 }
 
-// Tools that rewrite the worktree. Bash is deliberately absent: a worker
-// answering an operator question mid-review runs read-only Bash (git log, rg)
-// far more often than it mutates through Bash alone, and the commit/push
-// backstops in poller-review catch a Bash-only mutator one turn later.
+// Tools that rewrite the worktree, from any thread.
 const MUTATING_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
+
+// Bash counts on the main thread only. The review launches on Stop, so
+// main-thread activity during it means a prompt landed mid-review, and a
+// prompted worker edits through the shell (heredocs, `sed -i`) as readily as
+// through Edit; the commit/push backstops fire only after the reviewer has
+// already failed a tree that changed under it. A read-only answer costs a
+// re-review, which is cheaper than that false FAILED. Subagents outlive Stop
+// and mostly read, so their Bash calls are left alone.
+function mutatesWorktree(ctx: HookContext, toolName: string): boolean {
+  return MUTATING_TOOLS.has(toolName) || (toolName === "Bash" && !isSubagentEvent(ctx));
+}
 
 // A mutating tool completing while this worker's review is in flight means
 // the reviewer — which shares the worker's worktree — is now certifying a
@@ -586,7 +594,7 @@ function markReviewInterrupted(ctx: HookContext): void {
   const { project, name, entry } = ctx.workerInfo;
   if (entry.prState !== "reviewing" || entry.reviewInterruptedAt) return;
   const toolName = ctx.input.tool_name;
-  if (typeof toolName !== "string" || !MUTATING_TOOLS.has(toolName)) return;
+  if (typeof toolName !== "string" || !mutatesWorktree(ctx, toolName)) return;
   updateWorkerFields(project, name, { reviewInterruptedAt: Date.now() });
   triggerProjectPoll(project);
   log.info("hook", "mutating tool during review, marked for cancel", {

@@ -390,7 +390,7 @@ signals the status pane. They drive:
   An approved permission dialog is the exception: see "Answered permission
   dialogs")
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
-- `reviewing → working` (worker's `PostToolUse` for a mutating tool while the
+- `reviewing → working` (worker's `PostToolUse` for a mutating tool — main-thread `Bash` included — while the
   review is in flight: the hook stamps `reviewInterruptedAt` and pokes the
   poller, which kills the reviewer and cancels the pass — hooks write
   `agentStatus`, the poller writes `prState`)
@@ -914,10 +914,14 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   write that flips the derived display), the input to the `working bg`
   display derivation — see "Delegated background work" above.
   This hook also writes `reviewInterruptedAt` when the tool was a
-  *mutating* one (`Edit` / `MultiEdit`
-  / `Write` / `NotebookEdit` — `Bash` is deliberately exempt, so a
-  read-only Q&A turn costs nothing) and the worker's `prState` is
-  `reviewing`, it stamps `reviewInterruptedAt` and pokes the poller. It
+  *mutating* one (`Edit` / `MultiEdit` / `Write` / `NotebookEdit` from
+  any thread, or `Bash` from the main thread) and the worker's `prState`
+  is `reviewing`, it stamps `reviewInterruptedAt` and pokes the poller.
+  Main-thread `Bash` counts because the review launches on `Stop`, so
+  main-thread activity during it means a prompt landed mid-review, and a
+  prompted worker edits through the shell as readily as through `Edit`.
+  A read-only answer costs a re-review; a subagent's `Bash` (background
+  agents outlive `Stop` and mostly read) never counts. It
   still does not write `prState`: the cancel is the poller's, in
   `handleReviewing`. The marker is stamped once per pass and cleared by
   the cancel and by every review launch.

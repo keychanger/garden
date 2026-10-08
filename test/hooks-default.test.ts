@@ -118,11 +118,28 @@ describe("onToolActivity — mid-review-edit marker", () => {
   });
 
   it("ignores read-only tools — an operator Q&A turn must not cancel the review", () => {
-    for (const tool of ["Read", "Grep", "Glob", "Bash", "WebFetch", "TodoWrite"]) {
+    for (const tool of ["Read", "Grep", "Glob", "WebFetch", "TodoWrite"]) {
       workerHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }, tool));
     }
     expect(interruptStamps()).toHaveLength(0);
     expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
+  it("stamps on a main-thread Bash call — a worker prompted mid-review edits through the shell too", () => {
+    // wolf/stern-dry-scree, 2026-10-08: the operator prompted the worker while
+    // its review ran, the worker rewrote code, tests and spec through python
+    // heredocs and `sed -i`, and the reviewer, watching its tree change, failed
+    // the review instead of garden cancelling it. Main-thread activity during
+    // review always follows a prompt, since the review launches on Stop.
+    workerHookHandlers.onToolActivity(toolCtx({ prState: "reviewing" }, "Bash"));
+    expect(interruptStamps()).toHaveLength(1);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+  });
+
+  it("ignores a subagent's Bash call — background agents outlive Stop and mostly read", () => {
+    workerHookHandlers.onToolActivity(
+      toolCtx({ prState: "reviewing" }, "Bash", "a6159cebbfb14984c"));
+    expect(interruptStamps()).toHaveLength(0);
   });
 
   it("ignores mutating tools outside the reviewing state", () => {
