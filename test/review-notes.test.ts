@@ -61,7 +61,7 @@ describe("recordReviewNotes", () => {
 
   const input = { project: "wolf", worker: "cold-brash-lark", branch: "cold-brash-lark", verdict: "clean" };
 
-  it("persists the notes durably and raises a deduped info alert", async () => {
+  it("persists the notes durably without raising an alert", async () => {
     const { recordReviewNotes, readReviewNotes } = await import("../src/dashboard/review-notes.js");
     recordReviewNotes({ ...input, body: "ok\n\nNon-blocking notes:\n- first" });
     recordReviewNotes({ ...input, verdict: "fixed", body: "Non-blocking notes:\n- second" });
@@ -74,28 +74,10 @@ describe("recordReviewNotes", () => {
     expect(Date.parse(notes[0].at)).not.toBeNaN();
     expect(notes[0].project).toBe("wolf");
 
-    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
-      level: "info",
-      project: "wolf",
-      worker: "cold-brash-lark",
-      message: "Non-blocking review notes (full text: garden notes wolf):\n- first",
-      dedupKey: "review-notes:wolf:cold-brash-lark:cold-brash-lark",
-    }));
+    expect(addAlert).not.toHaveBeenCalled();
   });
 
-  it("names the branch only when it differs from the worker and caps a long section", async () => {
-    const { recordReviewNotes, readReviewNotes } = await import("../src/dashboard/review-notes.js");
-    const long = "- " + "x".repeat(600);
-    recordReviewNotes({ ...input, branch: "feat/other", body: `Non-blocking notes:\n${long}` });
-
-    const message: string = addAlert.mock.calls[0][0].message;
-    expect(message.startsWith("Non-blocking review notes on feat/other (full text: garden notes wolf):\n- x")).toBe(true);
-    expect(message.endsWith("…")).toBe(true);
-    expect(message.length).toBeLessThan(500);
-    expect(readReviewNotes("wolf")[0].notes).toBe(long);
-  });
-
-  it("writes and alerts nothing when the body carries no notes", async () => {
+  it("writes nothing when the body carries no notes", async () => {
     const { recordReviewNotes, readReviewNotes } = await import("../src/dashboard/review-notes.js");
     recordReviewNotes({ ...input, body: "Looks good." });
     expect(readReviewNotes("wolf")).toEqual([]);
