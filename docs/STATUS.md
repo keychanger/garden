@@ -325,7 +325,7 @@ a terminal state — it returns to `working` when the operator responds
 | reviewing     | done          | Holistic final review `Stop`: CLEAN / shadow / no-commit (interposed whole-task pass) |
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
-| reviewing     | working       | Worker ran a mutating tool (Edit/Write) mid-review — the reviewer shares the worktree, so the pass is cancelled and re-armed for the worker's next quiescence. Applies to the holistic pass too (its markers clear; the gate re-evaluates at the next terminal state). Read-only activity (an operator Q&A turn) leaves the review running. |
+| reviewing     | working       | Worker ran a mutating tool (Edit/Write from any thread, or main-thread Bash) mid-review — the reviewer shares the worktree, so the pass is cancelled and re-armed for the worker's next quiescence. Applies to the holistic pass too (its markers clear; the gate re-evaluates at the next terminal state). Read-only tools (Read/Grep/Glob) and a subagent's Bash leave the review running. |
 | merge-pending | merged        | Merge queue: ff merge succeeds (no sentinel)         |
 | merge-pending | done          | Merge queue: ff merge succeeds AND `.garden-done` present at merge time |
 | merge-pending | resolving     | Merge queue: rebase conflict (resolver launched)     |
