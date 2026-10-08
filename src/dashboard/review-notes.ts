@@ -41,6 +41,17 @@ export function extractNonBlockingNotes(body: string): string | null {
   return notes && !EMPTY_NOTES.test(notes) ? notes : null;
 }
 
+// The alert carries the notes themselves: a bare pointer made the operator
+// run a command to read what is usually two sentences. The worker is already
+// the alert's location, and its branch is named only when it differs.
+const ALERT_NOTES_MAX = 400;
+
+function notesAlertMessage(project: string, worker: string, branch: string, notes: string): string {
+  const onBranch = branch === worker ? "" : ` on ${branch}`;
+  const excerpt = notes.length > ALERT_NOTES_MAX ? `${notes.slice(0, ALERT_NOTES_MAX).trimEnd()}…` : notes;
+  return `Non-blocking review notes${onBranch} (full text: garden notes ${project}):\n${excerpt}`;
+}
+
 export function recordReviewNotes(input: Omit<ReviewNote, "at" | "notes"> & { body: string }): void {
   try {
     const notes = extractNonBlockingNotes(input.body);
@@ -61,7 +72,7 @@ export function recordReviewNotes(input: Omit<ReviewNote, "at" | "notes"> & { bo
       source: "review",
       project: input.project,
       worker: input.worker,
-      message: `Reviewer left non-blocking notes on ${input.worker} (${input.branch}) — run: garden notes ${input.project}`,
+      message: notesAlertMessage(input.project, input.worker, input.branch, notes),
       dedupKey: `review-notes:${input.project}:${input.worker}:${input.branch}`,
     });
   } catch (err) {
