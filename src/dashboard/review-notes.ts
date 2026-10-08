@@ -2,9 +2,9 @@
 // report rather than implement (prompts.ts nonBlockingNotesConvention). The
 // review body is scrubbed at merge, so a note left there would reach no one;
 // this module lifts the `Non-blocking notes:` section out of a finished review,
-// appends it to a durable per-project file, and raises an info alert pointing
-// at `garden notes`. Strictly best-effort: it runs after the verdict is parsed
-// and never influences it.
+// appends it to a durable per-project file, and raises an info alert carrying
+// the notes (with `garden notes` named for the full text). Strictly
+// best-effort: it runs after the verdict is parsed and never influences it.
 import fs from "node:fs";
 import path from "node:path";
 import { addAlert } from "./alerts.js";
