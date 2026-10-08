@@ -188,14 +188,6 @@ update docs as needed. Make focused, minimal fixes — do not refactor or improv
 beyond what the review requires. Commit your fixes with a clear message prefixed with
 "review: " (e.g., "review: add missing tests for error handling").
 
-Exception — non-blocking notes: a finding the project's rules mark as non-blocking
-(for example, a rule that a new control or an implementation-pinning test must cite
-a real incident, and this one cites none) is NOT implemented. List each such finding
-as a bullet under a \`Non-blocking notes:\` heading placed directly above your verdict
-line; garden forwards that section to the operator. Omit the heading when there are
-none. Non-blocking notes never change the verdict: a review whose only findings are
-non-blocking notes is CLEAN.
-
 ## Branch: bold-ash
 
 ### Commits
@@ -335,14 +327,6 @@ If you find issues, fix them directly in the worktree. Edit files, update tests,
 update docs as needed. Make focused, minimal fixes — do not refactor or improve code
 beyond what the review requires. Commit your fixes with a clear message prefixed with
 "review: " (e.g., "review: add missing tests for error handling").
-
-Exception — non-blocking notes: a finding the project's rules mark as non-blocking
-(for example, a rule that a new control or an implementation-pinning test must cite
-a real incident, and this one cites none) is NOT implemented. List each such finding
-as a bullet under a \`Non-blocking notes:\` heading placed directly above your verdict
-line; garden forwards that section to the operator. Omit the heading when there are
-none. Non-blocking notes never change the verdict: a review whose only findings are
-non-blocking notes is CLEAN.
 
 ## Branch: bold-ash
 
@@ -496,14 +480,6 @@ update docs as needed. Make focused, minimal fixes — do not refactor or improv
 beyond what the review requires. Commit your fixes with a clear message prefixed with
 "review: " (e.g., "review: add missing tests for error handling").
 
-Exception — non-blocking notes: a finding the project's rules mark as non-blocking
-(for example, a rule that a new control or an implementation-pinning test must cite
-a real incident, and this one cites none) is NOT implemented. List each such finding
-as a bullet under a \`Non-blocking notes:\` heading placed directly above your verdict
-line; garden forwards that section to the operator. Omit the heading when there are
-none. Non-blocking notes never change the verdict: a review whose only findings are
-non-blocking notes is CLEAN.
-
 ## Branch: bold-ash
 
 ### Commits
@@ -626,14 +602,6 @@ If you find issues, fix them directly in the worktree. Edit files, update tests,
 update docs as needed. Make focused, minimal fixes — do not refactor or improve code
 beyond what the review requires. Commit your fixes with a clear message prefixed with
 "review: " (e.g., "review: add missing tests for error handling").
-
-Exception — non-blocking notes: a finding the project's rules mark as non-blocking
-(for example, a rule that a new control or an implementation-pinning test must cite
-a real incident, and this one cites none) is NOT implemented. List each such finding
-as a bullet under a \`Non-blocking notes:\` heading placed directly above your verdict
-line; garden forwards that section to the operator. Omit the heading when there are
-none. Non-blocking notes never change the verdict: a review whose only findings are
-non-blocking notes is CLEAN.
 
 ## Branch: bold-ash
 

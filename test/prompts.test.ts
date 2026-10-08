@@ -28,6 +28,7 @@ vi.mock("../src/rules.js", () => ({
 
 import fs from "node:fs";
 import { tryGetProject } from "../src/config.js";
+import { buildRulesContext } from "../src/rules.js";
 import { getDiffAgainstBase, getDiffStat, getChangedFiles, resolveHolisticDiff } from "../src/dashboard/git.js";
 import { buildReviewPrompt, buildResolvePrompt, buildCiFixPrompt, buildHolisticFinalReviewPrompt, findSpecFiles, buildSpecWarning, readDocSections, readTestSections } from "../src/dashboard/prompts.js";
 import { MAX_REVIEW_PROMPT_BYTES } from "../src/dashboard/prompt-compose.js";
@@ -476,19 +477,39 @@ describe("non-blocking notes convention", () => {
     "myproject", "/repo/myproject", "main",
     makeEntry({ baseBranchSha: "base123", holisticTouchedFiles: ["src/foo.ts"], holisticReviewMode: mode }),
   )!;
+  const review = () => buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+  const agentDoc = (content: string) => vi.mocked(fs.readFileSync).mockImplementation(((p: string) =>
+    String(p).endsWith("AGENTS.md") ? content : defaultRead(p)) as typeof fs.readFileSync);
 
   beforeEach(() => {
     vi.mocked(resolveHolisticDiff).mockReturnValue("holistic diff");
   });
 
-  it("tells the per-phase reviewer to list rule-classified findings instead of implementing them", () => {
-    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
-    expect(result).toContain("`Non-blocking notes:` heading placed directly above your verdict");
-    expect(result).toContain("non-blocking notes is CLEAN");
+  it("is withheld from a project whose rules classify nothing as non-blocking", () => {
+    expect(review()).not.toContain("Non-blocking notes");
+    expect(holistic("fix")).not.toContain("Non-blocking notes");
   });
 
-  it("is part of the holistic fix pass but not the analysis-only shadow pass", () => {
-    expect(holistic("fix")).toContain("`Non-blocking notes:` heading");
-    expect(holistic("shadow")).not.toContain("Non-blocking notes");
+  describe("when the project's agent doc defines non-blocking findings", () => {
+    beforeEach(() => {
+      agentDoc("Without that citation it is a non-blocking note: a reviewer lists it.");
+    });
+
+    it("tells the per-phase reviewer to list rule-classified findings instead of implementing them", () => {
+      const result = review();
+      expect(result).toContain("`Non-blocking notes:` heading placed directly above your");
+      expect(result).toContain("a pre-existing or unrelated problem, a coverage nit");
+      expect(result).toContain("whose only findings are non-blocking notes is CLEAN");
+    });
+
+    it("is part of the holistic fix pass but not the analysis-only shadow pass", () => {
+      expect(holistic("fix")).toContain("`Non-blocking notes:` heading");
+      expect(holistic("shadow")).not.toContain("Non-blocking notes");
+    });
+  });
+
+  it("is offered when the project's rules file defines non-blocking findings", () => {
+    vi.mocked(buildRulesContext).mockReturnValueOnce("Findings without a citation are non-blocking.");
+    expect(review()).toContain("`Non-blocking notes:` heading");
   });
 });

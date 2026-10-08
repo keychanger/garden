@@ -50,14 +50,27 @@ export const headlessSingleTurnNote: readonly string[] = [
 // at merge, so garden lifts this section out of a finished review and keeps it
 // for the operator (review-notes.ts); the heading text is what it looks for.
 export const nonBlockingNotesConvention: readonly string[] = [
-  "Exception — non-blocking notes: a finding the project's rules mark as non-blocking",
-  "(for example, a rule that a new control or an implementation-pinning test must cite",
-  "a real incident, and this one cites none) is NOT implemented. List each such finding",
-  "as a bullet under a `Non-blocking notes:` heading placed directly above your verdict",
-  "line; garden forwards that section to the operator. Omit the heading when there are",
-  "none. Non-blocking notes never change the verdict: a review whose only findings are",
-  "non-blocking notes is CLEAN.",
+  "Exception — non-blocking notes: a finding this project's rules explicitly classify as",
+  "non-blocking (for example, a rule that a new control or an implementation-pinning test",
+  "must cite a real incident, and this one cites none) is NOT implemented. List each such",
+  "finding as a bullet under a `Non-blocking notes:` heading placed directly above your",
+  "verdict line; garden records that section for the operator. Only a finding a rule",
+  "classifies belongs there: a pre-existing or unrelated problem, a coverage nit, or a",
+  "passing observation is not a note — fix it, fail on it, or leave it out. Omit the",
+  "heading when there are none. Non-blocking notes never change the verdict: a review",
+  "whose only findings are non-blocking notes is CLEAN.",
 ];
+
+// Offered only where the project's own rules or agent docs classify some
+// findings as non-blocking. Offered everywhere, the heading became a catch-all
+// for unrelated observations in projects with nothing to classify.
+const NON_BLOCKING_RULE = /non[- ]?blocking/i;
+
+function nonBlockingNotesFor(data: PromptData): readonly string[] {
+  return NON_BLOCKING_RULE.test([data.rules, ...data.docSections].join("\n"))
+    ? ["", ...nonBlockingNotesConvention]
+    : [];
+}
 
 export const reviewIntroSection: PromptSection = {
   name: "intro",
@@ -163,8 +176,7 @@ export const reviewCodeReviewStepSection: PromptSection = {
       "update docs as needed. Make focused, minimal fixes — do not refactor or improve code",
       "beyond what the review requires. Commit your fixes with a clear message prefixed with",
       '"review: " (e.g., "review: add missing tests for error handling").',
-      "",
-      ...nonBlockingNotesConvention,
+      ...nonBlockingNotesFor(ctx.data),
     ].join("\n");
   },
 };
@@ -644,8 +656,7 @@ export const holisticActionSection: PromptSection = {
         `If you find a genuine defect, fix it MINIMALLY and commit with a message prefixed "review: "`,
         `naming the cross-phase defect. If the assembled task is coherent (the common outcome), change`,
         `NOTHING and do not commit.`,
-        ``,
-        ...nonBlockingNotesConvention,
+        ...nonBlockingNotesFor(ctx.data),
       );
       if (ctx.data.checksCommand) {
         lines.push(
