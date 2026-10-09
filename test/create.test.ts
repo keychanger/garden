@@ -236,6 +236,14 @@ describe("claude-code adapter installRuntimeConfig", () => {
     expect(JSON.parse(settingsJsonContent()).ultracodeKeywordTrigger).toBe("on");
   });
 
+  it("launches workers on Claude Code's fullscreen renderer", () => {
+    // The classic renderer repaints only the visible rows on a pane resize and
+    // leaves old-width copies of them in tmux scrollback.
+    process.argv[1] = "/usr/local/bin/garden";
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
+    expect(JSON.parse(settingsJsonContent()).tui).toBe("fullscreen");
+  });
+
   it("does not write to settings.local.json (Claude Code auto-edits it)", () => {
     process.argv[1] = "/usr/local/bin/garden";
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });

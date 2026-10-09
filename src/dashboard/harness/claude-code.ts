@@ -125,6 +125,11 @@ export function buildSettingsJson(
     },
     sandbox,
     statusLine: { type: "command", command: statusLineCmd },
+    // The classic renderer repaints only the visible rows when the pane is
+    // resized, so every terminal resize left old-width copies of the reply in
+    // tmux scrollback. Fullscreen redraws the whole screen and scrolls its own
+    // history (the wheel reaches it via the WheelUpPane binding in hotkeys.ts).
+    tui: "fullscreen",
     // The non-effort half of the ultracode preset (the dynamic-workflow
     // keyword trigger); the launch command adds `--effort max`.
     ...(opts.ultracode ? { ultracodeKeywordTrigger: "on" } : {}),

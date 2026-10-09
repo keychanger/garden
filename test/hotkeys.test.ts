@@ -177,6 +177,18 @@ describe("setupKeybindings", () => {
     }
   });
 
+  it("hands the wheel to a full-screen app that tracks the mouse, and to copy-mode otherwise", () => {
+    setupKeybindings("/path/to/garden");
+    const bind = execFileSyncMock.mock.calls.find((call) => {
+      const argv = call[1] as string[];
+      return Array.isArray(argv) && argv[0] === "bind-key" && argv[1] === "-n" && argv[2] === "WheelUpPane";
+    });
+    const body = (bind![1] as string[])[9];
+    expect(body).toBe(
+      'if-shell -F "#{||:#{pane_in_mode},#{&&:#{alternate_on},#{mouse_any_flag}}}" "send-keys -M" "copy-mode -e; send-keys -M"',
+    );
+  });
+
   it("clears the selection on a plain click so the lingering highlight can be dismissed", () => {
     // copy-pipe-no-clear leaves the selection highlighted after a drag. Without
     // clearing it on a plain click, the highlight lingers with no way to dismiss

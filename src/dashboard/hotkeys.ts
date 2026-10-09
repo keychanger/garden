@@ -35,18 +35,19 @@ export function setupKeybindings(gardenRunner: string): void {
     bindMeta(b.key, b.raw ? b.command : `${gr} dashboard ${b.command}`);
   }
 
-  // Mouse scroll: always enter copy-mode on wheel-up instead of passing
-  // events to alternate-screen apps (like Claude Code). Gated on
-  // @garden_mouse_lock (set only on the usage/status panes — see
-  // lockPaneMouse in tmux.ts): on those two, the wheel is a no-op rather
-  // than scrolling, since they're pure repaint content with nothing to
-  // scroll back through.
+  // Mouse scroll: wheel-up enters copy-mode, except in a full-screen app that
+  // asked for the mouse (alternate screen + mouse tracking) — Claude Code's
+  // fullscreen renderer keeps its history in its own scrollback, leaving tmux's
+  // empty. Gated on @garden_mouse_lock (set only on the usage/status panes —
+  // see lockPaneMouse in tmux.ts): on those two, the wheel is a no-op rather
+  // than scrolling, since they're pure repaint content with nothing to scroll
+  // back through.
   try {
     execFileSync("tmux", [
       "bind-key", "-n", "WheelUpPane",
       "if-shell", "-F", "-t", "=", "#{@garden_mouse_lock}",
       "select-pane -t =",
-      'if-shell -F "#{pane_in_mode}" "send-keys -M" "copy-mode -e; send-keys -M"'
+      'if-shell -F "#{||:#{pane_in_mode},#{&&:#{alternate_on},#{mouse_any_flag}}}" "send-keys -M" "copy-mode -e; send-keys -M"'
     ], { stdio: "ignore" });
   } catch { /* ignore */ }
   try {
