@@ -28,7 +28,7 @@ import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
 import { log } from "./log.js";
-import { explainPtyExhaustion } from "./pty-census.js";
+import { explainPtyFailure } from "./pty-census.js";
 import { resolveAndApplyVineModel } from "./trellis-model.js";
 import { getWorkflow } from "./workflows/index.js";
 import {
@@ -852,12 +852,12 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       preexistingWorktree ? undefined : wtPath,
       preexistingBranch ? undefined : branchName,
     );
-    const ptyExhaustion = explainPtyExhaustion(err);
+    const ptyFailure = explainPtyFailure(err);
     log.error("workers", "tmux pane creation failed; rolled back registry entry", {
       worker: workerName,
-      data: { project: targetProject, error: String(err), ...(ptyExhaustion && { cause: ptyExhaustion }) },
+      data: { project: targetProject, error: String(err), ...(ptyFailure && { cause: ptyFailure }) },
     });
-    throw ptyExhaustion ? new Error(ptyExhaustion) : err;
+    throw ptyFailure ? new Error(ptyFailure) : err;
   }
 
   log.info("workers", "created", {

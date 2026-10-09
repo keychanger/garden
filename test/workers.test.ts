@@ -206,7 +206,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
 
 // The real census shells out to lsof/ps/sysctl; null means "not pty exhaustion".
 vi.mock("../src/dashboard/pty-census.js", () => ({
-  explainPtyExhaustion: vi.fn(() => null),
+  explainPtyFailure: vi.fn(() => null),
 }));
 
 // bd shell-outs for the removal-time bead unclaim (Decision 12). Real beads.ts
@@ -245,7 +245,7 @@ import {
   decideHold, holdWorker, releaseWorker, holdActiveWorker,
 } from "../src/dashboard/workers.js";
 import { showBeads, reopenBead, unassignBead } from "../src/dashboard/beads.js";
-import { explainPtyExhaustion } from "../src/dashboard/pty-census.js";
+import { explainPtyFailure } from "../src/dashboard/pty-census.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { parkToHidden, restoreFromHidden } from "../src/dashboard/layout.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
@@ -891,7 +891,7 @@ describe("newWorker", () => {
 
   it("names pty exhaustion instead of tmux's fork errno when pane creation fails", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
-    vi.mocked(explainPtyExhaustion).mockReturnValueOnce("out of pseudo-terminals (511/511 in use; top holders: x)");
+    vi.mocked(explainPtyFailure).mockReturnValueOnce("out of pseudo-terminals (511/511 in use; top holders: x)");
     vi.mocked(restoreFromHidden).mockImplementationOnce(() => {
       throw new Error("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured");
     });

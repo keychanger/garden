@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import {
   parsePtmxHolders, parseParents, parsePanes, attributeHolder, workerFromCwd,
   countAllocatedPtys, takePtyCensus, unexplainedHoldings, isPtyPressure,
-  explainPtyExhaustion,
+  explainPtyFailure,
 } from "../src/dashboard/pty-census.js";
 
 const LSOF = `COMMAND     PID USER   FD   TYPE DEVICE   SIZE/OFF NODE NAME
@@ -116,14 +116,22 @@ describe("takePtyCensus and its consumers", () => {
     expect(takePtyCensus()).toBeNull();
   });
 
-  it("translates tmux's fork errno into pty exhaustion with the holders named", () => {
-    const message = explainPtyExhaustion(
-      new Error("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured"),
+  const forkFailure = new Error("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured");
+
+  it("reports a fork failure below the limit with the count, without claiming exhaustion", () => {
+    expect(explainPtyFailure(forkFailure)).toMatch(
+      /^tmux could not open a pseudo-terminal for the pane, below the machine limit \(400\/511 in use; top holders: tmux server \(2 panes\): 2; /,
     );
-    expect(message).toMatch(/^out of pseudo-terminals \(400\/511 in use; top holders: tmux server \(2 panes\): 2; /);
+  });
+
+  it("names pty exhaustion only when the count has reached the limit", () => {
+    vi.mocked(fs.readdirSync).mockReturnValue(
+      Array.from({ length: 511 }, (_, i) => `ttys${String(i).padStart(3, "0")}`) as never,
+    );
+    expect(explainPtyFailure(forkFailure)).toMatch(/^out of pseudo-terminals \(511\/511 in use; top holders: /);
   });
 
   it("leaves every other spawn failure alone", () => {
-    expect(explainPtyExhaustion(new Error("tmux swap-pane failed: can't find pane: %36"))).toBeNull();
+    expect(explainPtyFailure(new Error("tmux swap-pane failed: can't find pane: %36"))).toBeNull();
   });
 });

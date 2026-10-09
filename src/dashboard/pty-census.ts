@@ -3,11 +3,13 @@
 // macOS caps allocated ptys machine-wide (kern.tty.ptmx_max, 511 by default).
 // Every tmux pane needs one, so when the cap is reached tmux cannot fork a
 // pane's shell and every worker spawn fails with "fork failed: Device not
-// configured". That happened twice in one session lifetime (2026-10-04 and
-// 2026-10-07): something leaked ~450 ptys over two weeks, a dashboard rebuild
-// released them, and nothing in the log named the holder.
+// configured". That error is ENXIO, which the kernel returns at the cap, but
+// it is not proof of the cap: during the 2026-10-04 failures a worker counted
+// 79 of 511 allocated, 20s before and 5s after a failed spawn. Every spawn
+// failure therefore takes a census at that moment and reports the count, so
+// the next one settles whether the limit was reached.
 //
-// The census answers that question. The kernel's allocation count comes from
+// The census also names who holds the ptys. The kernel's allocation count comes from
 // /dev (each allocated pty has a /dev/ttysNNN node, including ones held by
 // processes lsof cannot see), and attribution comes from lsof's view of who
 // holds /dev/ptmx open. A holder is attributed to the garden pane it descends
@@ -186,13 +188,17 @@ export function isPtyPressure(census: PtyCensus): boolean {
 // tmux reports a failed pane fork with the errno text of ENXIO, which on macOS
 // means posix_openpt found no free pty. Translate it into what the operator
 // can act on, with the census naming who holds them.
-export function explainPtyExhaustion(err: unknown): string | null {
+export function explainPtyFailure(err: unknown): string | null {
   if (!String(err).includes("fork failed: Device not configured")) return null;
   let census: PtyCensus | null = null;
   try {
     census = takePtyCensus();
-  } catch { /* the message below still names the cause */ }
-  if (!census) return "out of pseudo-terminals (tmux could not allocate one for the pane)";
-  const usage = census.limit !== null ? `${census.inUse}/${census.limit}` : `${census.inUse}`;
-  return `out of pseudo-terminals (${usage} in use; top holders: ${formatTopHolders(census)})`;
+  } catch { /* the message below still states what tmux reported */ }
+  if (!census) return "tmux could not open a pseudo-terminal for the pane";
+  const holders = `top holders: ${formatTopHolders(census)}`;
+  if (census.limit === null) return `tmux could not open a pseudo-terminal for the pane (${census.inUse} in use; ${holders})`;
+  const usage = `${census.inUse}/${census.limit} in use`;
+  return census.inUse >= census.limit
+    ? `out of pseudo-terminals (${usage}; ${holders})`
+    : `tmux could not open a pseudo-terminal for the pane, below the machine limit (${usage}; ${holders})`;
 }
