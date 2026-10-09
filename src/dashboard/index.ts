@@ -500,10 +500,12 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     const { readDashState } = await import("./state.js");
     const { refreshDashboard, setupStatusBar } = await import("./header.js");
     const { restartLongLivedPollers } = await import("./poller.js");
+    const { setupKeybindings } = await import("./hotkeys.js");
     if (dashboardExists()) {
       const state = readDashState();
       const runner = resolveGardenRunner();
       try { setupStatusBar(runner); } catch { /* best effort — pick up format-string changes */ }
+      try { setupKeybindings(runner); } catch { /* best effort — pick up binding changes */ }
       try { respawnStatusPane(state); } catch { /* pane gone */ }
       try { restartLongLivedPollers(runner); } catch { /* best effort */ }
       try { respawnLogsPane(state); } catch { /* pane gone */ }
