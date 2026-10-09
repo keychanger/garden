@@ -252,6 +252,15 @@ describe("Bash during review — cancel only when the command wrote", () => {
     expect(interruptStamps()).toHaveLength(1);
   });
 
+  it("cancels when the tree can no longer be read after the command — a failed git read counts as a change", () => {
+    workerHookHandlers.onToolStarting(bashCtx("PreToolUse"));
+    expect(stored).toEqual({ toolu_01: expect.any(String) });
+    fs.rmSync(path.join(wt, ".git"), { recursive: true, force: true });
+    workerHookHandlers.onToolActivity(bashCtx("PostToolUse"));
+    expect(interruptStamps()).toHaveLength(1);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+  });
+
   it("records nothing outside review or for a subagent", () => {
     const outside = bashCtx("PreToolUse");
     outside.workerInfo!.entry.prState = "working";

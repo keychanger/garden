@@ -435,6 +435,7 @@ export interface WorkflowHookHandlers {
   onTurnEnded: (ctx: HookContext) => HookAction;
   onBlockedOnOperator: (ctx: HookContext) => HookAction;
   onToolActivity: (ctx: HookContext) => HookAction;
+  onToolStarting: (ctx: HookContext) => HookAction;
 }
 
 export interface WorkflowDefinition {
