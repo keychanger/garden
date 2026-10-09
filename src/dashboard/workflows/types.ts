@@ -34,9 +34,9 @@ export type HookMethod = (ctx: HookContext) => void;
 // the harness's native hook names (docs/MULTI-MODEL.md "Layer 2"). The
 // dispatcher translates wire events to these: Claude Code's Stop →
 // onTurnEnded, UserPromptSubmit → onPromptSubmitted, PostToolUse →
-// onToolActivity, and both Notification and the PreToolUse matchers →
-// onBlockedOnOperator (they signal the same thing: the agent is blocked on
-// operator input mid-turn). A future harness adapter feeds the same methods
+// onToolActivity, the PreToolUse Bash matcher → onToolStarting, and both
+// Notification and the other PreToolUse matchers → onBlockedOnOperator (they
+// signal the same thing: the agent is blocked on operator input mid-turn). A future harness adapter feeds the same methods
 // from its own event mechanism without the workflow layer changing.
 export interface WorkflowHookHandlers {
   onSessionStart: HookMethod;
@@ -44,6 +44,7 @@ export interface WorkflowHookHandlers {
   onTurnEnded: HookMethod;
   onBlockedOnOperator: HookMethod;
   onToolActivity: HookMethod;
+  onToolStarting: HookMethod;
 }
 
 export interface WorkflowDefinition {

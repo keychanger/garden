@@ -66,6 +66,7 @@ function pickHookMethod(handlers: WorkflowHookHandlers, event: string): HookMeth
     case "notification": return handlers.onBlockedOnOperator;
     case "pretooluse":   return handlers.onBlockedOnOperator;
     case "posttooluse":  return handlers.onToolActivity;
+    case "toolstart":    return handlers.onToolStarting;
     default:             return null;
   }
 }

@@ -18,6 +18,7 @@ vi.mock("../src/dashboard/registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/dashboard/registry.js")>()),
   findWorkerByName: vi.fn(),
   updateWorkerFields: vi.fn(),
+  updateWorkerFieldsIf: vi.fn(),
 }));
 vi.mock("../src/dashboard/poller-fifo.js", () => ({
   triggerProjectPoll: vi.fn(),
@@ -56,7 +57,8 @@ vi.mock("../src/config.js", () => ({
 }));
 
 import { workerHookHandlers } from "../src/dashboard/hooks/default.js";
-import { updateWorkerFields } from "../src/dashboard/registry.js";
+import { execFileSync } from "node:child_process";
+import { updateWorkerFields, updateWorkerFieldsIf } from "../src/dashboard/registry.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import { clearAwaitingInput } from "../src/dashboard/continue.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
@@ -125,7 +127,7 @@ describe("onToolActivity — mid-review-edit marker", () => {
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
-  it("stamps on a main-thread Bash call — a worker prompted mid-review edits through the shell too", () => {
+  it("stamps on a main-thread Bash call whose start was not recorded — a worker prompted mid-review edits through the shell too", () => {
     // wolf/stern-dry-scree, 2026-10-08: the operator prompted the worker while
     // its review ran, the worker rewrote code, tests and spec through python
     // heredocs and `sed -i`, and the reviewer, watching its tree change, failed
@@ -169,6 +171,100 @@ describe("onToolActivity — mid-review-edit marker", () => {
       toolCtx({ prState: "reviewing" }, "Edit", "a6159cebbfb14984c"));
     expect(interruptStamps()).toHaveLength(1);
     expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+  });
+});
+
+// A main-thread Bash call during review cancels it only when the command
+// changed the tree: the PreToolUse hook (onToolStarting) records the tree,
+// the PostToolUse hook compares. Runs against a real repository, since the
+// comparison is what decides whether a read-only answer keeps the review.
+describe("Bash during review — cancel only when the command wrote", () => {
+  let wt: string;
+  let stored: Record<string, string> | undefined;
+
+  function git(...args: string[]): void {
+    execFileSync("git", args, { cwd: wt, stdio: "ignore" });
+  }
+
+  function bashCtx(event: "PreToolUse" | "PostToolUse", agentId?: string): HookContext {
+    const ctx = toolCtx({
+      prState: "reviewing",
+      worktreePath: wt,
+      reviewBashBaselines: stored,
+    }, "Bash", agentId);
+    ctx.input.hook_event_name = event;
+    ctx.input.tool_use_id = "toolu_01";
+    return ctx;
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    stored = undefined;
+    wt = fs.mkdtempSync(path.join(os.tmpdir(), "garden-review-bash-"));
+    git("init", "-q");
+    fs.writeFileSync(path.join(wt, "a.txt"), "one\n");
+    git("add", "a.txt");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+    // Stand in for the registry: apply each conditional write to `stored`.
+    vi.mocked(updateWorkerFieldsIf).mockImplementation((_p, _n, decide) => {
+      const decision = decide({ prState: "reviewing", reviewBashBaselines: stored } as WorkerEntry);
+      if (decision.fields) stored = decision.fields.reviewBashBaselines;
+      return decision.result;
+    });
+  });
+
+  function runBash(command: () => void): void {
+    workerHookHandlers.onToolStarting(bashCtx("PreToolUse"));
+    command();
+    workerHookHandlers.onToolActivity(bashCtx("PostToolUse"));
+  }
+
+  it("leaves the review running when the command only read", () => {
+    runBash(() => fs.readFileSync(path.join(wt, "a.txt"), "utf-8"));
+    expect(interruptStamps()).toHaveLength(0);
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+    expect(stored).toEqual({});
+  });
+
+  it("cancels when the command rewrote a tracked file", () => {
+    runBash(() => fs.writeFileSync(path.join(wt, "a.txt"), "two\n"));
+    expect(interruptStamps()).toHaveLength(1);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+  });
+
+  it("cancels when the command rewrote a file that was already modified", () => {
+    // The status line is identical before and after; only the file changed.
+    fs.writeFileSync(path.join(wt, "a.txt"), "two\n");
+    runBash(() => fs.writeFileSync(path.join(wt, "a.txt"), "three, longer\n"));
+    expect(interruptStamps()).toHaveLength(1);
+  });
+
+  it("cancels when the command created an untracked file", () => {
+    runBash(() => fs.writeFileSync(path.join(wt, "new.txt"), "x\n"));
+    expect(interruptStamps()).toHaveLength(1);
+  });
+
+  it("cancels when the command committed", () => {
+    runBash(() => {
+      fs.writeFileSync(path.join(wt, "a.txt"), "two\n");
+      git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qam", "edit");
+    });
+    expect(interruptStamps()).toHaveLength(1);
+  });
+
+  it("records nothing outside review or for a subagent", () => {
+    const outside = bashCtx("PreToolUse");
+    outside.workerInfo!.entry.prState = "working";
+    workerHookHandlers.onToolStarting(outside);
+    workerHookHandlers.onToolStarting(bashCtx("PreToolUse", "a6159cebbfb14984c"));
+    expect(updateWorkerFieldsIf).not.toHaveBeenCalled();
+  });
+
+  it("records nothing once the review is already marked for cancel", () => {
+    const ctx = bashCtx("PreToolUse");
+    ctx.workerInfo!.entry.reviewInterruptedAt = 12345;
+    workerHookHandlers.onToolStarting(ctx);
+    expect(updateWorkerFieldsIf).not.toHaveBeenCalled();
   });
 });
 

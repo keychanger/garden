@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tryGetProject } from "../../config.js";
 import { addAlert, readAlerts } from "../alerts.js";
 import {
@@ -575,11 +576,85 @@ const MUTATING_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 // main-thread activity during it means a prompt landed mid-review, and a
 // prompted worker edits through the shell (heredocs, `sed -i`) as readily as
 // through Edit; the commit/push backstops fire only after the reviewer has
-// already failed a tree that changed under it. A read-only answer costs a
-// re-review, which is cheaper than that false FAILED. Subagents outlive Stop
-// and mostly read, so their Bash calls are left alone.
+// already failed a tree that changed under it. Whether a given command wrote
+// is decided by comparing the tree around it (bashLeftTreeUnchanged), so a
+// read-only answer leaves the review running. Subagents outlive Stop and
+// mostly read, so their Bash calls are left alone.
 function mutatesWorktree(ctx: HookContext, toolName: string): boolean {
-  return MUTATING_TOOLS.has(toolName) || (toolName === "Bash" && !isSubagentEvent(ctx));
+  if (MUTATING_TOOLS.has(toolName)) return true;
+  return toolName === "Bash" && !isSubagentEvent(ctx) && !bashLeftTreeUnchanged(ctx);
+}
+
+// HEAD, every changed path's index state, and the mtime and size of each
+// changed or untracked file: enough to tell whether a shell command wrote to
+// the tree. Null when git cannot answer, which callers treat as "changed".
+// Timeout matches worktreeHasUncommittedChanges: this runs inside a hook.
+function worktreeFingerprint(cwd: string): string | null {
+  const git = (args: string[]): string => execFileSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: 5000,
+  });
+  try {
+    const status = git(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
+    const changed = git(["ls-files", "-z", "--modified", "--others", "--exclude-standard"]);
+    const stats = changed.split("\0").filter(Boolean).map(file => {
+      try {
+        const st = fs.statSync(path.join(cwd, file));
+        return `${file}:${st.mtimeMs}:${st.size}`;
+      } catch {
+        return `${file}:missing`;
+      }
+    });
+    return createHash("sha256").update(status).update("\0").update(stats.join("\0")).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function toolUseId(ctx: HookContext): string | null {
+  const id = ctx.input.tool_use_id;
+  return typeof id === "string" && id ? id : null;
+}
+
+// PreToolUse for Bash: while a review is in flight, record the tree as the
+// command starts so its PostToolUse can tell whether the command wrote.
+// Keyed by tool_use_id because the worker can run Bash calls in parallel.
+const onToolStarting: HookMethod = (ctx) => {
+  if (!ctx.workerInfo || isSubagentEvent(ctx)) return;
+  const { project, name, entry } = ctx.workerInfo;
+  if (entry.prState !== "reviewing" || entry.reviewInterruptedAt || !entry.worktreePath) return;
+  const id = toolUseId(ctx);
+  const fingerprint = id ? worktreeFingerprint(entry.worktreePath) : null;
+  if (!id || !fingerprint) return;
+  updateWorkerFieldsIf(project, name, current => ({
+    fields: current.prState === "reviewing"
+      ? { reviewBashBaselines: { ...current.reviewBashBaselines, [id]: fingerprint } }
+      : null,
+    result: undefined,
+  }));
+};
+
+// True only when this Bash call's start was recorded and the tree is the same
+// now. A missing record (a session started before the PreToolUse hook existed,
+// a Codex relay, a failed git read) counts as a write: a needless re-review is
+// cheaper than a reviewer failing a tree that changed under it. The tree
+// cannot say which agent wrote, so a reviewer edit landing while the command
+// runs also cancels.
+function bashLeftTreeUnchanged(ctx: HookContext): boolean {
+  const { project, name, entry } = ctx.workerInfo!;
+  const id = toolUseId(ctx);
+  const baseline = id ? entry.reviewBashBaselines?.[id] : undefined;
+  if (!id || !baseline || !entry.worktreePath) return false;
+  if (worktreeFingerprint(entry.worktreePath) !== baseline) return false;
+  updateWorkerFieldsIf(project, name, current => {
+    if (!current.reviewBashBaselines?.[id]) return { fields: null, result: undefined };
+    const remaining = { ...current.reviewBashBaselines };
+    delete remaining[id];
+    return { fields: { reviewBashBaselines: remaining }, result: undefined };
+  });
+  return true;
 }
 
 // A mutating tool completing while this worker's review is in flight means
@@ -626,4 +701,5 @@ export const workerHookHandlers: WorkflowHookHandlers = {
   onTurnEnded,
   onBlockedOnOperator,
   onToolActivity,
+  onToolStarting,
 };

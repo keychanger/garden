@@ -281,6 +281,14 @@ describe("claude-code adapter installRuntimeConfig", () => {
     expect(permReq.hooks[0].command).toContain("hook.js pretooluse");
   });
 
+  it("registers a Bash PreToolUse hook so a read-only command can leave a review running", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
+    const parsed = JSON.parse(settingsJsonContent());
+    const bash = parsed.hooks.PreToolUse.find((h: { matcher: string }) => h.matcher === "Bash");
+    expect(bash.hooks[0].command).toContain("hook.js toolstart");
+  });
+
   it("registers a catch-all PostToolUse hook so asking flips back to working after any tool completes", () => {
     process.argv[1] = "/usr/local/bin/garden";
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });

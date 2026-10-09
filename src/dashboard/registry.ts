@@ -238,6 +238,11 @@ export interface WorkerEntry {
   // and defensively at every review launch (a marker stamped in the instant
   // between verdict dispatch and the poll would otherwise leak forward).
   reviewInterruptedAt?: number;
+  // Worktree fingerprints recorded by the PreToolUse hook for main-thread Bash
+  // calls that started during a review, keyed by tool_use_id. The PostToolUse
+  // hook compares against its entry so a read-only command leaves the review
+  // running. Cleared at every review launch and cancel.
+  reviewBashBaselines?: Record<string, string>;
   reviewWindowName?: string;
   // Epoch ms when the current reviewer/resolver window was launched. Set by
   // launchReview/launchResolver, cleared whenever reviewWindowName is cleared.

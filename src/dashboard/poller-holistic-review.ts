@@ -262,6 +262,7 @@ function launchHolisticFinalReview(
     // Same defensive clear as launchReview: a stale mid-review-edit marker
     // would cancel this fresh pass on its first handleReviewing tick.
     reviewInterruptedAt: undefined,
+    reviewBashBaselines: undefined,
     holisticFinalActive: true,
     holisticReviewMode: mode,
     lastSeenSha: preReviewSha,

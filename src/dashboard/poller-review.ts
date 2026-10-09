@@ -1613,6 +1613,7 @@ export function cancelReviewOnWorkerEdit(
 
   transitionState(projectName, entry.name, "working", {
     reviewInterruptedAt: undefined,
+    reviewBashBaselines: undefined,
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     reviewRetryCount: undefined,
@@ -1961,6 +1962,7 @@ function launchReview(
     // instant between a prior pass's verdict dispatch and its poll would
     // otherwise cancel this fresh review on its first handleReviewing tick.
     reviewInterruptedAt: undefined,
+    reviewBashBaselines: undefined,
     mergePendingAt: entry.mergePendingAt,
     preReviewSha,
     // Defensively clear any leaked holistic final-review markers. A per-phase

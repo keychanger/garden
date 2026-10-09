@@ -325,7 +325,7 @@ a terminal state — it returns to `working` when the operator responds
 | reviewing     | done          | Holistic final review `Stop`: CLEAN / shadow / no-commit (interposed whole-task pass) |
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
-| reviewing     | working       | Worker ran a mutating tool (Edit/Write from any thread, or main-thread Bash) mid-review — the reviewer shares the worktree, so the pass is cancelled and re-armed for the worker's next quiescence. Applies to the holistic pass too (its markers clear; the gate re-evaluates at the next terminal state). Read-only tools (Read/Grep/Glob) and a subagent's Bash leave the review running. |
+| reviewing     | working       | Worker ran a mutating tool (Edit/Write from any thread, or a main-thread Bash command that changed the worktree) mid-review — the reviewer shares the worktree, so the pass is cancelled and re-armed for the worker's next quiescence. Applies to the holistic pass too (its markers clear; the gate re-evaluates at the next terminal state). Read-only tools (Read/Grep/Glob), a main-thread Bash command that left the tree unchanged, and a subagent's Bash leave the review running. |
 | merge-pending | merged        | Merge queue: ff merge succeeds (no sentinel)         |
 | merge-pending | done          | Merge queue: ff merge succeeds AND `.garden-done` present at merge time |
 | merge-pending | resolving     | Merge queue: rebase conflict (resolver launched)     |
@@ -390,7 +390,7 @@ signals the status pane. They drive:
   An approved permission dialog is the exception: see "Answered permission
   dialogs")
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
-- `reviewing → working` (worker's `PostToolUse` for a mutating tool — main-thread `Bash` included — while the
+- `reviewing → working` (worker's `PostToolUse` for a mutating tool — a main-thread `Bash` command that changed the tree included — while the
   review is in flight: the hook stamps `reviewInterruptedAt` and pokes the
   poller, which kills the reviewer and cancels the pass — hooks write
   `agentStatus`, the poller writes `prState`)
@@ -835,6 +835,12 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   (all notification types, not just user-attention ones) and the
   user-input cases are fully covered by PreToolUse/PostToolUse on the
   specific tools.
+- `PreToolUse` (matched to `Bash`, wire event `toolstart`) → no status
+  write. While the worker's review is in flight it records a worktree
+  fingerprint for the main-thread command about to run, so the matching
+  `PostToolUse` can tell whether the command changed the tree (see the
+  mid-review mutation marker under `PostToolUse` below). Outside review
+  it reads the registry and exits.
 - `PermissionRequest` (no matcher — all tools) →
   `agentStatus = "asking"` (only if currently `working`). Fires when
   auto-mode's classifier escalates a tool call for operator approval —
@@ -920,11 +926,20 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   Main-thread `Bash` counts because the review launches on `Stop`, so
   main-thread activity during it means a prompt landed mid-review, and a
   prompted worker edits through the shell as readily as through `Edit`.
-  A read-only answer costs a re-review; a subagent's `Bash` (background
+  It counts only when the command changed the tree: a `PreToolUse` hook
+  on `Bash` (the `toolstart` wire event) records a worktree fingerprint
+  — HEAD, `git status`, and the mtime and size of every changed or
+  untracked file — under `reviewBashBaselines[tool_use_id]`, and
+  `PostToolUse` compares. An unchanged tree leaves the review running,
+  so a read-only answer does not cost a re-review. A missing record (a
+  session launched before the hook existed, Codex, whose `PreToolUse`
+  relays as `posttooluse`, a failed git read) counts as a change. The
+  fingerprint cannot say which agent wrote, so a reviewer edit landing
+  while the command runs also cancels. A subagent's `Bash` (background
   agents outlive `Stop` and mostly read) never counts. It
   still does not write `prState`: the cancel is the poller's, in
-  `handleReviewing`. The marker is stamped once per pass and cleared by
-  the cancel and by every review launch.
+  `handleReviewing`. The marker is stamped once per pass and cleared,
+  with `reviewBashBaselines`, by the cancel and by every review launch.
 - Codex `request_user_input` rollout state → `agentStatus = "asking"`
   while the latest call has no matching `function_call_output`, then
   `agentStatus = "working"` once that result arrives. Codex 0.147 does

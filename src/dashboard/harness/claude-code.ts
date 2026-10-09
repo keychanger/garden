@@ -110,6 +110,11 @@ export function buildSettingsJson(
       }, {
         matcher: "ExitPlanMode",
         hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
+      }, {
+        // Records the worktree before a Bash call during review, so a
+        // read-only command does not cancel it (hooks/default.ts).
+        matcher: "Bash",
+        hooks: [{ type: "command", command: `${hookCmd} toolstart`, timeout: 10 }],
       }],
       PermissionRequest: [{
         matcher: "",
