@@ -131,6 +131,19 @@ describe("takePtyCensus and its consumers", () => {
     expect(explainPtyFailure(forkFailure)).toMatch(/^out of pseudo-terminals \(511\/511 in use; top holders: /);
   });
 
+  it("reports the count without a limit comparison when the sysctl limit is unreadable", () => {
+    vi.mocked(spawnSync).mockImplementation(((cmd: string) =>
+      cmd === "sysctl" ? { status: 1, stdout: "" } : { status: 0, stdout: cmd === "lsof" ? LSOF : "" }) as never);
+    expect(explainPtyFailure(forkFailure)).toMatch(
+      /^tmux could not open a pseudo-terminal for the pane \(400 in use; top holders: /,
+    );
+  });
+
+  it("states only what tmux reported when no census can be taken", () => {
+    Object.defineProperty(process, "platform", { value: "linux" });
+    expect(explainPtyFailure(forkFailure)).toBe("tmux could not open a pseudo-terminal for the pane");
+  });
+
   it("leaves every other spawn failure alone", () => {
     expect(explainPtyFailure(new Error("tmux swap-pane failed: can't find pane: %36"))).toBeNull();
   });

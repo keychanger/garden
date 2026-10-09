@@ -186,8 +186,9 @@ export function isPtyPressure(census: PtyCensus): boolean {
 }
 
 // tmux reports a failed pane fork with the errno text of ENXIO, which on macOS
-// means posix_openpt found no free pty. Translate it into what the operator
-// can act on, with the census naming who holds them.
+// is what posix_openpt returns at the pty cap but also occurs well below it.
+// Report the count at that moment, claiming exhaustion only when the count
+// proves it, with the census naming who holds the ptys either way.
 export function explainPtyFailure(err: unknown): string | null {
   if (!String(err).includes("fork failed: Device not configured")) return null;
   let census: PtyCensus | null = null;

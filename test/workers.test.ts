@@ -204,7 +204,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
 
-// The real census shells out to lsof/ps/sysctl; null means "not pty exhaustion".
+// The real census shells out to lsof/ps/sysctl; null means "not a pty fork failure".
 vi.mock("../src/dashboard/pty-census.js", () => ({
   explainPtyFailure: vi.fn(() => null),
 }));
