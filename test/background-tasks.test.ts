@@ -17,6 +17,11 @@ const agentLaunch = (id: string) => ({
   message: { role: "user", content: [{ type: "tool_result", content: "Async agent launched" }] },
   toolUseResult: { isAsync: true, status: "async_launched", agentId: id },
 });
+const monitorLaunch = (id: string, persistent = false) => ({
+  type: "user",
+  message: { role: "user", content: [{ type: "tool_result", content: `Monitor started (task ${id}, timeout 600000ms).` }] },
+  toolUseResult: { taskId: id, timeoutMs: 600000, persistent },
+});
 const notification = (id: string, status?: string) => {
   const content = `<task-notification>\n<task-id>${id}</task-id>\n`
     + (status ? `<status>${status}</status>\n` : "<event>line</event>\n")
@@ -65,6 +70,21 @@ describe("scanBackgroundTasks", () => {
     const first = scanBackgroundTasks(transcript, undefined);
     append(taskStop("b5iie9nck"));
     expect(scanBackgroundTasks(transcript, first)?.pending).toEqual([]);
+  });
+
+  it("keeps a Monitor pending until its stream ends", () => {
+    // A worker that watches its checks through a Monitor ends its turn on that
+    // wait just as one that backgrounds the command does.
+    append(monitorLaunch("bdaiwm0r5"), notification("bdaiwm0r5"));
+    const first = scanBackgroundTasks(transcript, undefined);
+    expect(first?.pending).toEqual(["bdaiwm0r5"]);
+    append(notification("bdaiwm0r5", "completed"));
+    expect(scanBackgroundTasks(transcript, first)?.pending).toEqual([]);
+  });
+
+  it("does not count a persistent Monitor, which runs for the life of the session", () => {
+    append(monitorLaunch("bpersist1", true));
+    expect(scanBackgroundTasks(transcript, undefined)?.pending).toEqual([]);
   });
 
   it("does not treat a Monitor event as the end of a task", () => {

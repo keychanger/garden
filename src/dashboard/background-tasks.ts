@@ -11,10 +11,12 @@
 // The transcript is the only record of the lifecycle, and its shapes were read
 // off Claude Code 2.1.286:
 //   launch:  a user record whose toolUseResult carries `backgroundTaskId`
-//            (Bash) or `isAsync: true` + `agentId` (Agent)
+//            (Bash), `isAsync: true` + `agentId` (Agent), or `taskId` +
+//            `timeoutMs` (Monitor; a `persistent` one watches for the life of
+//            the session and never finishes, so it is not a wait)
 //   finish:  a `<task-notification>` naming the `<task-id>` with a `<status>`
-//            (completed / failed / killed); Monitor events carry no status and
-//            do not end anything
+//            (completed / failed / killed); a Monitor's per-event
+//            notifications carry no status, only its "stream ended" one does
 //   stop:    a TaskStop (or legacy KillShell) tool call — it emits no
 //            notification, so a stopped task would otherwise stay pending
 //
@@ -33,7 +35,7 @@ export interface BackgroundTaskScan {
 // which is the behavior before this existed.
 const FIRST_SCAN_BYTES = 4 * 1024 * 1024;
 
-const MARKERS = ["backgroundTaskId", "async_launched", "<task-notification>", "TaskStop", "KillShell"];
+const MARKERS = ["backgroundTaskId", "async_launched", "timeoutMs", "<task-notification>", "TaskStop", "KillShell"];
 
 // A fresh process holds no background tasks, so every launch already in the
 // transcript is dead. Starting the scan at its end keeps a resumed session from
@@ -89,6 +91,9 @@ function applyRecord(line: string, pending: Set<string>): void {
     const result = rec.toolUseResult;
     if (typeof result?.backgroundTaskId === "string") pending.add(result.backgroundTaskId);
     if (result?.isAsync === true && typeof result.agentId === "string") pending.add(result.agentId);
+    if (typeof result?.taskId === "string" && typeof result.timeoutMs === "number" && result.persistent !== true) {
+      pending.add(result.taskId);
+    }
     const content = rec.message?.content;
     if (typeof content === "string") finishFromNotification(content, pending);
   } else if (rec.type === "queue-operation" && typeof rec.content === "string") {

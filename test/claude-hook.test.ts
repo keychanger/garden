@@ -786,6 +786,31 @@ describe("handleClaudeHook — core events", () => {
     expect(entry.reviewBlockedReason).toBe("dirty");
   });
 
+  it("does not flag a dirty tree while the worker waits on its background tasks", async () => {
+    // A worker that runs its checks in the background ends its turn with edits
+    // uncommitted and commits when the result wakes it — mid-task, not stuck.
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      backgroundTasks: { transcriptPath: "/tmp/t.jsonl", offset: 0, pending: ["b098jjyed"] },
+    });
+    setCwd("garden", "bold-ash");
+
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[] | undefined;
+      if (argv?.[0] === "rev-list") return "1" as unknown as Buffer;
+      if (argv?.[0] === "status") return " M src/a.ts\n" as unknown as Buffer;
+      return "" as unknown as Buffer;
+    });
+
+    handleClaudeHook("stop");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.pendingReviewAt).toBeUndefined();
+    expect(entry.reviewBlockedReason).toBeUndefined();
+  });
+
   it("clears the blocked reason once the tree is clean and the review arms", async () => {
     seedWorker("garden", "bold-ash", {
       agentStatus: "working",

@@ -114,8 +114,8 @@ stay throttled as ordinary heartbeats.
 A background **command** fires no hook while it runs, so its evidence is
 the transcript, read at the one moment it matters: the `Stop` that
 parks the worker. Claude Code records each launch (a tool result whose
-`toolUseResult` carries `backgroundTaskId`, or `isAsync` + `agentId` for
-an async Agent) and each end (a `<task-notification>` with a `<status>`,
+`toolUseResult` carries `backgroundTaskId`, `isAsync` + `agentId` for
+an async Agent, or `taskId` + `timeoutMs` for a non-persistent Monitor) and each end (a `<task-notification>` with a `<status>`,
 or a `TaskStop` call, which emits no notification). The Stop hook scans
 what the transcript appended since its previous scan and stores the
 launched-but-unended ids with the scan's byte offset in
@@ -289,6 +289,10 @@ The two normal exits from `working` via `Stop` are the core branching point:
   no `prState` of its own, so without that field the row is a plain `idle`
   — indistinguishable from a worker that finished with nothing to review.
   The status pane renders it as a yellow `dirty tree` / `tree unknown` flag.
+  A dirty `Stop` while the worker still has background tasks pending
+  records no reason: the turn ended on a wait (checks running in the
+  background, edits uncommitted until they report), not on finished work,
+  and the next `Stop` decides.
 
 `working` also exits to `asking` mid-turn (PreToolUse / PermissionRequest)
 when Claude needs operator input before it can continue. `asking` is not

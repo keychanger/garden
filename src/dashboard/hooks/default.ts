@@ -140,6 +140,12 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
       // way. handleWorking re-checks at launch for the residual window where
       // an earlier clean Stop's pendingReviewAt outlives a later dirty tree.
       const dirty = worktreeHasUncommittedChanges(cwd);
+      // The turn ended on a wait, not on the work: a worker that starts its
+      // checks in the background ends its turn while they run, edits still
+      // uncommitted, and commits when the harness wakes it with the result.
+      // That is a worker mid-task, not a review the gate is holding back, so
+      // it records no blocked reason; the next Stop decides.
+      if (dirty && entry.backgroundTasks?.pending.length) return;
       if (dirty !== false) {
         const level = dirty === null ? "warn" : "info";
         log[level]("hook", "stop hook skipped review (worktree not provably clean)", {
