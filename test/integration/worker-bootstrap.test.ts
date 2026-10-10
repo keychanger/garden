@@ -257,3 +257,38 @@ describe("worker bootstrap (real fs + real git)", () => {
     expect(wtList).not.toContain(worktreePath);
   });
 });
+
+describe("bootstrap dependency install (real git + stub npm)", () => {
+  // A stub npm that does what the real one does to a lockfile out of sync
+  // with package.json: rewrites it in place.
+  async function install(): Promise<void> {
+    const bin = path.join(env.home, "stub-bin");
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, "npm"), "#!/bin/sh\necho '{\"rewritten\": true}' > package-lock.json\n", { mode: 0o755 });
+    const { npmInstallStep } = await import("../../src/dashboard/create.js");
+    const { shellEscape } = await import("../../src/dashboard/tmux.js");
+    const r = spawnSync("bash", ["-c", npmInstallStep(shellEscape(projectPath))], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    });
+    expect(r.status).toBe(0);
+  }
+
+  beforeEach(() => {
+    fs.writeFileSync(path.join(projectPath, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(projectPath, "package-lock.json"), "{\"committed\": true}\n");
+    git(projectPath, "add", ".");
+    git(projectPath, "commit", "-m", "add package files");
+  });
+
+  it("leaves the tree clean when npm rewrites a committed lockfile", async () => {
+    await install();
+    expect(git(projectPath, "status", "--porcelain")).toBe("");
+  });
+
+  it("keeps a lockfile that was already modified before the install", async () => {
+    fs.writeFileSync(path.join(projectPath, "package-lock.json"), "{\"local\": true}\n");
+    await install();
+    expect(git(projectPath, "status", "--porcelain")).toBe("M package-lock.json");
+  });
+});

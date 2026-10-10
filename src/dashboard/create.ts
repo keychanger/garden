@@ -816,6 +816,24 @@ export function trellisRelativePathForEntry(
   return tPath;
 }
 
+// The bootstrap's dependency install. `npm install` rewrites a committed
+// package-lock.json that disagrees with package.json, so a project whose base
+// carries a stale lockfile births every worker with a dirty tree — and the
+// clean-tree review gate then holds that worker's review back until someone
+// notices one changed line (lex, 2026-09-17 onward). Restore the lockfile when
+// it was clean before the install; one already modified is someone's work.
+export function npmInstallStep(wtPathLit: string): string {
+  return `if [ -f ${wtPathLit}/package.json ]; then
+  printf '  Installing dependencies...\\n'
+  LOCK_WAS_CLEAN=0
+  git -C ${wtPathLit} diff --quiet HEAD -- package-lock.json 2>/dev/null && LOCK_WAS_CLEAN=1
+  (cd ${wtPathLit} && npm install --prefer-offline) 2>/dev/null || true
+  if [ "$LOCK_WAS_CLEAN" = 1 ]; then
+    git -C ${wtPathLit} checkout HEAD -- package-lock.json 2>/dev/null || true
+  fi
+fi`;
+}
+
 /**
  * Write a shell script that sets up the worktree and launches claude.
  * The slow work (git fetch, worktree add, npm install) runs inside the
@@ -1066,10 +1084,7 @@ if git -C ${wtPathLit} ls-tree HEAD .garden-done 2>/dev/null | grep -q '\\.garde
 fi
 
 # Install dependencies if needed
-if [ -f ${wtPathLit}/package.json ]; then
-  printf '  Installing dependencies...\\n'
-  (cd ${wtPathLit} && npm install --prefer-offline) 2>/dev/null || true
-fi
+${npmInstallStep(wtPathLit)}
 if [ -f ${wtPathLit}/pyproject.toml ] && grep -q '\\[tool.poetry\\]' ${wtPathLit}/pyproject.toml 2>/dev/null; then
   printf '  Installing poetry deps...\\n'
   (cd ${wtPathLit} && poetry install --no-interaction) 2>/dev/null || true
