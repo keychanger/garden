@@ -132,9 +132,12 @@ when the process dies is therefore never revived by a later scan.
 Any harness-tracked background command counts, including a dev server
 left running across turns: it is running, and its exit would wake the
 worker. Processes the agent detaches itself (`nohup … &`) are invisible
-to the harness and are not tracked. Monitor watches are not tracked
-either: their events carry no `<status>`, so nothing in the transcript
-marks one ended. claude-code only — Codex records no such lifecycle.
+to the harness and are not tracked. A bounded Monitor is tracked: its
+per-event notifications carry no `<status>`, but the notification that
+ends its stream does, and that is what marks it finished. A `persistent`
+Monitor watches for the life of the session and never ends, so it is not
+a wait and is not tracked. claude-code only — Codex records no such
+lifecycle.
 
 ### Operator hold (paused)
 

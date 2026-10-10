@@ -267,7 +267,8 @@ describe("bootstrap dependency install (real git + stub npm)", () => {
     fs.writeFileSync(path.join(bin, "npm"), "#!/bin/sh\necho '{\"rewritten\": true}' > package-lock.json\n", { mode: 0o755 });
     const { npmInstallStep } = await import("../../src/dashboard/create.js");
     const { shellEscape } = await import("../../src/dashboard/tmux.js");
-    const r = spawnSync("bash", ["-c", npmInstallStep(shellEscape(projectPath))], {
+    // The bootstrap script runs under #!/bin/sh, so the step is exercised there.
+    const r = spawnSync("sh", ["-c", npmInstallStep(shellEscape(projectPath))], {
       encoding: "utf8",
       env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
     });
