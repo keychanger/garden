@@ -134,7 +134,10 @@ left running across turns: it is running, and its exit would wake the
 worker. Processes the agent detaches itself (`nohup … &`) are invisible
 to the harness and are not tracked. A bounded Monitor is tracked: its
 per-event notifications carry no `<status>`, but the notification that
-ends its stream does, and that is what marks it finished. A `persistent`
+ends its stream does, and that is what marks it finished. A Monitor whose
+timeout lapses first sends no `<status>` either: its last notification's
+event reads `[Monitor expired after …]`, and that marks it finished too.
+A `persistent`
 Monitor watches for the life of the session and never ends, so it is not
 a wait and is not tracked. claude-code only — Codex records no such
 lifecycle.

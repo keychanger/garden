@@ -82,6 +82,21 @@ describe("scanBackgroundTasks", () => {
     expect(scanBackgroundTasks(transcript, first)?.pending).toEqual([]);
   });
 
+  it("drops a Monitor whose timeout expired — its last notice carries no status", () => {
+    // A worker left `working bg` for two days on Monitors that expired at 30m.
+    append(monitorLaunch("bkyntrgbx"));
+    const first = scanBackgroundTasks(transcript, undefined);
+    append({
+      type: "queue-operation",
+      operation: "enqueue",
+      content: "<task-notification>\n<task-id>bkyntrgbx</task-id>\n"
+        + "<summary>Monitor event: \"descending fill puller: progress, done, errors\"</summary>\n"
+        + "<event>[Monitor expired after 30m with 4 events delivered. Re-arm it if you still need the watch.]</event>\n"
+        + "</task-notification>",
+    });
+    expect(scanBackgroundTasks(transcript, first)?.pending).toEqual([]);
+  });
+
   it("does not count a persistent Monitor, which runs for the life of the session", () => {
     append(monitorLaunch("bpersist1", true));
     expect(scanBackgroundTasks(transcript, undefined)?.pending).toEqual([]);

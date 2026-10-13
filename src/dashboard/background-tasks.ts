@@ -16,7 +16,9 @@
 //            the session and never finishes, so it is not a wait)
 //   finish:  a `<task-notification>` naming the `<task-id>` with a `<status>`
 //            (completed / failed / killed); a Monitor's per-event
-//            notifications carry no status, only its "stream ended" one does
+//            notifications carry no status, only its "stream ended" one does,
+//            and the notice it sends when its timeout lapses carries none
+//            either — that one's event reads `[Monitor expired after …]`
 //   stop:    a TaskStop (or legacy KillShell) tool call — it emits no
 //            notification, so a stopped task would otherwise stay pending
 //
@@ -108,7 +110,8 @@ function applyRecord(line: string, pending: Set<string>): void {
 }
 
 function finishFromNotification(text: string, pending: Set<string>): void {
-  if (!text.startsWith("<task-notification>") || !text.includes("<status>")) return;
+  if (!text.startsWith("<task-notification>")) return;
+  if (!text.includes("<status>") && !text.includes("<event>[Monitor expired")) return;
   const id = /<task-id>([^<]+)<\/task-id>/.exec(text)?.[1];
   if (id) pending.delete(id);
 }
