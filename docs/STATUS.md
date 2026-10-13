@@ -115,8 +115,10 @@ A background **command** fires no hook while it runs, so its evidence is
 the transcript, read at the one moment it matters: the `Stop` that
 parks the worker. Claude Code records each launch (a tool result whose
 `toolUseResult` carries `backgroundTaskId`, `isAsync` + `agentId` for
-an async Agent, or `taskId` + `timeoutMs` for a non-persistent Monitor) and each end (a `<task-notification>` with a `<status>`,
-or a `TaskStop` call, which emits no notification). The Stop hook scans
+an async Agent, or `taskId` + `timeoutMs` for a non-persistent Monitor)
+and each end (a `<task-notification>` with a `<status>`, a Monitor's
+expiry notice, or a `TaskStop` call, which emits no notification). The
+Stop hook scans
 what the transcript appended since its previous scan and stores the
 launched-but-unended ids with the scan's byte offset in
 `backgroundTasks` (`background-tasks.ts`); `isDelegating` renders an
@@ -137,9 +139,8 @@ per-event notifications carry no `<status>`, but the notification that
 ends its stream does, and that is what marks it finished. A Monitor whose
 timeout lapses first sends no `<status>` either: its last notification's
 event reads `[Monitor expired after …]`, and that marks it finished too.
-A `persistent`
-Monitor watches for the life of the session and never ends, so it is not
-a wait and is not tracked. claude-code only — Codex records no such
+A `persistent` Monitor watches for the life of the session and never
+ends, so it is not a wait and is not tracked. claude-code only — Codex records no such
 lifecycle.
 
 ### Operator hold (paused)
