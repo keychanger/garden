@@ -438,13 +438,13 @@ export function readConversation(
 
 function parseClaudeTurns(lines: Iterable<string>): Turn[] {
   const turns: Turn[] = [];
-  let pending: { tools: ToolUse[]; firstText: string; ts: string } | null = null;
+  let pending: { tools: ToolUse[]; firstText: string; ts: string; compacted?: boolean } | null = null;
   let seenUser = false;
 
   const flush = (): void => {
     if (pending && (pending.tools.length > 0 || pending.firstText)) {
       const { text, verb } = summarizeTurn(pending.tools, pending.firstText);
-      turns.push({ role: "assistant", text, verb, ts: pending.ts });
+      turns.push({ role: "assistant", text: pending.compacted ? `${text} · compacted` : text, verb, ts: pending.ts });
     }
     pending = null;
   };
@@ -459,6 +459,14 @@ function parseClaudeTurns(lines: Iterable<string>): Turn[] {
     }
     if (obj.isSidechain === true) continue; // subagent internals, not the conversation
     if (obj.isMeta === true) continue; // attachment surfacing ("[Image: source: …]"), system notes — not a real turn
+    // Claude Code's context-compaction summary is recorded as a user message,
+    // but it continues the prompt in flight rather than starting a new one.
+    // Fold it into that turn as a tag instead of painting a multi-KB summary
+    // as an operator prompt.
+    if (obj.isCompactSummary === true) {
+      if (pending) pending.compacted = true;
+      continue;
+    }
 
     const type = obj.type;
     const message = obj.message as { role?: string; content?: unknown } | undefined;
@@ -530,8 +538,11 @@ export interface ToolUse {
 //     the same way and collapses to a source-labeled marker.
 //   - an inline "[Image #N]" screenshot reference is stripped; `image` flags the
 //     turn so the view paints a clean "[screenshot]" marker instead.
+//   - Claude Code records pasted text inside `<pasted_content id="…">` tags.
+//     garden delivers every prompt as a bracketed paste, so the tags are
+//     stripped before the [garden]/handoff prefixes are matched.
 export function promptTurn(raw: string, ts: string, image = false): Turn | null {
-  const text = collapse(raw.replace(/\[Image #\d+\]/g, " "));
+  const text = collapse(raw.replace(/\[Image #\d+\]|<\/?pasted_content\b[^>]*>/g, " "));
   if (!text) return null;
   if (text.startsWith("[garden]")) return { role: "garden", text: gardenLabel(text), ts };
   const handoff = handoffSeedLabel(text);
@@ -732,14 +743,19 @@ export function formatConversationPane(turns: Turn[], opts: FormatOpts): string[
   // both the leading margin and the gap between gutter and text count.
   const textWidth = Math.max(10, opts.width - (LABEL_W + 2));
   const lines: string[] = [];
+  let shownDay: string | null = null;
 
   turns.forEach((turn, i) => {
     // Each exchange opens with a dim, timestamped divider rule — strong visual
     // separation between threads, and a "when did I ask this" cue. Both operator
-    // prompts and garden continuation markers are conversation boundaries.
+    // prompts and garden continuation markers are conversation boundaries. The
+    // first divider of each local day also carries the date, as the logs pane's
+    // day rule does, so yesterday's exchanges don't read as today's.
     if (turn.role !== "assistant") {
       if (i > 0) lines.push("");
-      lines.push(dividerLine(turn.ts, opts.width));
+      const day = dayKey(turn.ts);
+      lines.push(dividerLine(turn.ts, opts.width, day !== "" && day !== shownDay));
+      if (day) shownDay = day;
     }
     const label = turn.role === "user"
       ? paint("1", "you".padEnd(LABEL_W))
@@ -767,10 +783,12 @@ export function formatConversationPane(turns: Turn[], opts: FormatOpts): string[
 }
 
 // A dim full-width rule labelled with the local time of the exchange, e.g.
-// "─ 3:20pm ─────────────────────". Falls back to a plain rule without a time.
-function dividerLine(ts: string, width: number): string {
+// "─ 3:20pm ─────────────────────", or "─ Thu 10-15 · 3:20pm ────" when it opens
+// a new day. Falls back to a plain rule without a time.
+function dividerLine(ts: string, width: number, withDate: boolean): string {
   const t = formatClockTime(ts);
-  const label = t ? `─ ${t} ` : "─ ";
+  const stamp = t && withDate ? `${formatDay(ts)} · ${t}` : t;
+  const label = stamp ? `─ ${stamp} ` : "─ ";
   const fill = Math.max(0, width - label.length);
   return paint("2", label + "─".repeat(fill));
 }
@@ -787,6 +805,26 @@ function formatClockTime(ts: string): string {
   h = h % 12;
   if (h === 0) h = 12;
   return `${h}:${String(m).padStart(2, "0")}${ampm}`;
+}
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+function pad2(n: number): string {
+  return String(n).padStart(2, "0");
+}
+
+// The local calendar day of a timestamp, "" when missing/invalid.
+function dayKey(ts: string): string {
+  if (!ts) return "";
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+// ISO timestamp → local "Thu 10-15", the logs pane's day-rule format.
+function formatDay(ts: string): string {
+  const d = new Date(ts);
+  return `${WEEKDAYS[d.getDay()]} ${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
 }
 
 // Greedy word-wrap on a plain (un-styled) string.

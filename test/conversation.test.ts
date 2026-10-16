@@ -251,6 +251,38 @@ describe("readConversation", () => {
     ]);
   });
 
+  it("collapses a garden prompt recorded inside pasted_content tags", () => {
+    const p = writeTranscript([
+      user('\n\n<pasted_content id="5c98">\n[garden] Your branch was reviewed and merged into main.\n</pasted_content id="5c98">\n',
+        "2026-05-30T17:00:00Z", { promptSource: "typed" }),
+      assistant([{ type: "text", text: "Continuing." }]),
+    ]);
+    expect(readConversation(p)[0]).toEqual(
+      { role: "garden", text: "continue after merge", ts: "2026-05-30T17:00:00Z" });
+  });
+
+  it("keeps an operator's pasted text but drops the pasted_content tags", () => {
+    const p = writeTranscript([
+      user('I got this <pasted_content id="d451">\nerror: boom\n</pasted_content id="d451">',
+        "2026-05-30T17:00:00Z", { promptSource: "typed" }),
+      assistant([{ type: "text", text: "Looking." }]),
+    ]);
+    expect(readConversation(p)[0].text).toBe("I got this error: boom");
+  });
+
+  it("folds a compaction summary into the turn it interrupted", () => {
+    const p = writeTranscript([
+      user("fix it", "2026-05-30T17:00:00Z", { promptSource: "typed" }),
+      assistant([{ type: "tool_use", name: "Edit", input: { file_path: "src/a.ts" } }]),
+      user("This session is being continued from a previous conversation. Summary: ...",
+        "2026-05-30T17:30:00Z", { isCompactSummary: true, isVisibleInTranscriptOnly: true }),
+      assistant([{ type: "tool_use", name: "Edit", input: { file_path: "src/b.ts" } }], "2026-05-30T17:31:00Z"),
+    ]);
+    const turns = readConversation(p);
+    expect(turns.map(t => t.role)).toEqual(["user", "assistant"]);
+    expect(turns[1].text).toBe("edited a.ts, b.ts · compacted");
+  });
+
   it("captures a prompt with an image attachment (array content)", () => {
     const p = writeTranscript([
       user([{ type: "text", text: "look at this screenshot" }, { type: "image", source: {} }]),
@@ -502,11 +534,18 @@ describe("formatConversationPane", () => {
     expect(out[2]).toMatch(/^ worked\s+Patched the token check\.$/);
   });
 
-  it("labels the divider with the local time when a timestamp is present", () => {
-    const out = formatConversationPane(
-      [{ role: "user", text: "hi", ts: "2026-05-30T17:00:00Z" }], { width: 60 }).map(plain);
-    // Time is local, so don't assert the exact value — just the shape.
-    expect(out[0]).toMatch(/^─ \d{1,2}:\d{2}(am|pm) ─+$/);
+  it("labels the divider with the local time, and the date on the first exchange of each day", () => {
+    // Local noon, so the local calendar day is the same in every timezone.
+    const at = (day: number, h: number) => new Date(2026, 9, day, h, 0).toISOString();
+    const out = formatConversationPane([
+      { role: "user", text: "one", ts: at(15, 12) },
+      { role: "user", text: "two", ts: at(15, 13) },
+      { role: "user", text: "three", ts: at(16, 9) },
+    ], { width: 60 }).map(plain);
+    const dividers = out.filter(l => l.startsWith("─"));
+    expect(dividers[0]).toMatch(/^─ Thu 10-15 · 12:00pm ─+$/);
+    expect(dividers[1]).toMatch(/^─ 1:00pm ─+$/);
+    expect(dividers[2]).toMatch(/^─ Fri 10-16 · 9:00am ─+$/);
   });
 
   it("appends a dim [screenshot] marker to a prompt that carried an image", () => {
