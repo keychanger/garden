@@ -456,14 +456,17 @@ export interface LogsConfig {
   mode?: LogsMode;
 }
 
-// Post-merge auto-continue gate. `enabled` may be flipped automatically by the
-// poller when a usage meter crosses `usageThreshold`; in that case `pausedUntil`
-// records the latest resetsAt of the meters that tripped, and `pausedReason`
-// is a human-readable summary. If `resumeAfterReset` is true the gate auto-flips
-// `enabled` back on once `pausedUntil` is in the past. Sonnet usage is
-// intentionally excluded from the threshold check (Opus is the workhorse).
+// Post-merge auto-continue gate. With `usageAutoClose` on, the poller flips
+// `enabled` off when a usage meter crosses `usageThreshold`; in that case
+// `pausedUntil` records the latest resetsAt of the meters that tripped, and
+// `pausedReason` is a human-readable summary. If `resumeAfterReset` is true the
+// gate auto-flips `enabled` back on once `pausedUntil` is in the past. Sonnet
+// usage is intentionally excluded from the threshold check (Opus is the
+// workhorse). The usage closure is off by default: usage is capped on the
+// Anthropic side, so closing the gate here only strands merged workers.
 export interface AutoContinueConfig {
   enabled: boolean;
+  usageAutoClose: boolean;
   usageThreshold: number;
   resumeAfterReset: boolean;
   pausedUntil?: string;
@@ -472,6 +475,7 @@ export interface AutoContinueConfig {
 
 export const AUTO_CONTINUE_DEFAULTS: AutoContinueConfig = {
   enabled: true,
+  usageAutoClose: false,
   usageThreshold: 95,
   resumeAfterReset: false,
 };

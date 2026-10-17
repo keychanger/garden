@@ -1107,7 +1107,7 @@ export function autoContinueGateReason(projectName?: string, workerProvider?: st
     return usageExempt ? null : "usage-paused";
   }
 
-  if (usageExempt) return null;
+  if (usageExempt || !cfg.usageAutoClose) return null;
 
   const tripped = checkUsageThreshold(cfg.usageThreshold);
   if (tripped) {

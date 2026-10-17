@@ -280,8 +280,23 @@ describe("autoContinueGateReason", () => {
     expect(getAutoContinueConfig().enabled).toBe(false);
   });
 
+  it("leaves the gate open on high usage while usage close is off (the default)", async () => {
+    await initEmptyConfig();
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: { weekly: { pct: 99, resetsAt: "2099-01-01T00:00:00Z" } },
+    });
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason()).toBeNull();
+    expect(addAlertMock).not.toHaveBeenCalled();
+    const { getAutoContinueConfig } = await importConfig();
+    expect(getAutoContinueConfig().enabled).toBe(true);
+  });
+
   it("auto-disables and fires an alert when threshold trips", async () => {
     await initEmptyConfig();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({ usageAutoClose: true });
     mockGateDeps({
       fetchedAt: "2026-05-02T00:00:00Z",
       data: { weekly: { pct: 99, resetsAt: "2099-01-01T00:00:00Z" } },
@@ -387,6 +402,8 @@ describe("autoContinueGateReason per-project exemption", () => {
 
   it("skips the meter evaluation entirely for an exempt project", async () => {
     await initPooledProjects();
+    const { setAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({ usageAutoClose: true });
     mockGateDeps({
       fetchedAt: "2026-05-02T00:00:00Z",
       data: { weekly: { pct: 99, resetsAt: "2099-01-01T00:00:00Z" } },
@@ -446,6 +463,57 @@ describe("autoContinueGateReason per-project exemption", () => {
 // auto-resume after a token wall (no hooks or pushes to deliver the poke
 // that would run the merged-state sweep).
 // ---------------------------------------------------------------------------
+
+describe("garden auto usage-close", () => {
+  async function runAuto(args: string[]) {
+    const quiet = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { auto } = await import("../src/commands/auto.js");
+      await auto(args);
+    } finally {
+      quiet.mockRestore();
+    }
+  }
+
+  it("on arms the usage closure", async () => {
+    await initEmptyConfig();
+    await runAuto(["usage-close", "on"]);
+    const { getAutoContinueConfig } = await importConfig();
+    expect(getAutoContinueConfig().usageAutoClose).toBe(true);
+  });
+
+  it("off also lifts a usage pause the closure had set", async () => {
+    await initEmptyConfig();
+    const { setAutoContinueConfig, getAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      usageAutoClose: true,
+      pausedUntil: "2099-01-01T00:00:00Z",
+      pausedReason: "week at 97%",
+    });
+    await runAuto(["usage-close", "off"]);
+    const cfg = getAutoContinueConfig();
+    expect(cfg.usageAutoClose).toBe(false);
+    expect(cfg.enabled).toBe(true);
+    expect(cfg.pausedUntil).toBeUndefined();
+    expect(cfg.pausedReason).toBeUndefined();
+  });
+
+  it("off leaves a manual garden auto off in place", async () => {
+    await initEmptyConfig();
+    const { setAutoContinueConfig, getAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({ enabled: false, usageAutoClose: true });
+    await runAuto(["usage-close", "off"]);
+    const cfg = getAutoContinueConfig();
+    expect(cfg.usageAutoClose).toBe(false);
+    expect(cfg.enabled).toBe(false);
+  });
+
+  it("rejects anything but on or off", async () => {
+    await initEmptyConfig();
+    await expect(runAuto(["usage-close", "maybe"])).rejects.toThrow("garden auto usage-close on|off");
+  });
+});
 
 describe("pokeOnGateReset", () => {
   const triggerProjectPollMock = vi.fn();

@@ -50,7 +50,25 @@ export async function auto(args: string[]): Promise<void> {
       throw new Error(`Threshold must be a number 1-100, got '${raw}'`);
     }
     const cfg = setAutoContinueConfig({ usageThreshold: n });
-    console.log(`Threshold set to ${cfg.usageThreshold}%.`);
+    const note = cfg.usageAutoClose ? "" : " Usage close is off; 'garden auto usage-close on' arms it.";
+    console.log(`Threshold set to ${cfg.usageThreshold}%.${note}`);
+    return;
+  }
+
+  if (sub === "usage-close") {
+    const flag = args[1];
+    if (flag !== "on" && flag !== "off") {
+      throw new Error("Usage: garden auto usage-close on|off");
+    }
+    // Turning the closure off also lifts a pause it already made (a manual
+    // `garden auto off` carries no pausedUntil and is left alone).
+    const current = getAutoContinueConfig();
+    const liftPause = flag === "off" && !current.enabled && current.pausedUntil !== undefined;
+    setAutoContinueConfig(liftPause
+      ? { usageAutoClose: false, enabled: true, pausedUntil: undefined, pausedReason: undefined }
+      : { usageAutoClose: flag === "on" });
+    console.log(`Usage close is ${flag}.${liftPause ? " Lifted the usage pause it had set." : ""}`);
+    if (liftPause) wakePollers();
     return;
   }
 
@@ -70,7 +88,7 @@ export async function auto(args: string[]): Promise<void> {
 
   throw new Error(
     `Unknown subcommand: ${sub}. `
-    + `Usage: garden auto [on|off|status|threshold <N>|resume-on-reset on|off]`,
+    + `Usage: garden auto [on|off|status|usage-close on|off|threshold <N>|resume-on-reset on|off]`,
   );
 }
 
@@ -93,6 +111,7 @@ function formatStatusPretty(
 ): string {
   const lines: string[] = [];
   lines.push(`auto-continue: ${cfg.enabled ? "enabled" : "disabled"}`);
+  lines.push(`usage close:   ${cfg.usageAutoClose ? "on" : "off"}`);
   lines.push(`threshold:     ${cfg.usageThreshold}% (5h, week — sonnet ignored)`);
   lines.push(`resume on reset: ${cfg.resumeAfterReset ? "on" : "off"}`);
   if (!cfg.enabled && cfg.pausedReason) {

@@ -204,7 +204,8 @@ Dashboard:
                                  Add --bead <id> to stamp the bead↔worker join on the new worker's registry entry (no bd claim is made)
   reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate
-  auto threshold <N>             Set the usage-threshold percent (auto-disable above this)
+  auto usage-close on|off        Close the gate when usage crosses the threshold (default off)
+  auto threshold <N>             Set the usage percent at which usage-close closes the gate
   auto resume-on-reset on|off    Re-enable automatically after the usage window resets
   limits [status]                Show machine-wide resource budgets (garden-level)
   limits checks-slots <N|unset>  Cap concurrent checks-suite runs (default: cores/8)
