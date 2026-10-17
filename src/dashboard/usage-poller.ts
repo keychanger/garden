@@ -10,7 +10,7 @@
 // honors server Retry-After with margin and escalation, on both lanes alike.
 import { newDashboardWindow, windowExists, killWindowSafe } from "./tmux.js";
 import { usagePollerWindowName } from "./window-names.js";
-import { decideRefresh, readUsageSnapshot, refreshUsage } from "./usage.js";
+import { decideRefresh, readUsageSnapshot, refreshUsage, POLL_ERR_MS } from "./usage.js";
 import { refreshDashboard } from "./header.js";
 import { anyAnthropicMeteredProject, getAutoContinueConfig, loadConfig } from "../config.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
@@ -18,7 +18,15 @@ import { log } from "./log.js";
 
 export async function runUsagePollerLoop(): Promise<void> {
   log.info("usage-poller", "started");
-  while (true) {
+  while (true) await sleep(await usagePollerPass());
+}
+
+// One refresh; resolves to the milliseconds to sleep before the next. A throw
+// (a lock deadline, a failed write, a malformed snapshot) used to end the loop,
+// and the window with it, leaving the bars frozen with no log line. It now
+// costs one error-backoff interval.
+export async function usagePollerPass(): Promise<number> {
+  try {
     await refreshUsage(false, "poller");
     // refreshDashboard() rewrites the pre-baked status file (so the SIGUSR1
     // trap path picks up new usage bars) and then signals the pane. A plain
@@ -28,9 +36,12 @@ export async function runUsagePollerLoop(): Promise<void> {
     // Re-read so the sleep is computed against the snapshot we (or a sibling)
     // actually wrote, not the pre-fetch state. decideRefresh's nextAttemptInMs
     // already floors at POLL_MIN_MS.
-    const decision = decideRefresh(readUsageSnapshot(), Date.now(), "poller");
-    log.debug("usage-poller", "sleep", { data: { ms: decision.nextAttemptInMs } });
-    await sleep(decision.nextAttemptInMs);
+    const sleepMs = decideRefresh(readUsageSnapshot(), Date.now(), "poller").nextAttemptInMs;
+    log.debug("usage-poller", "sleep", { data: { ms: sleepMs } });
+    return sleepMs;
+  } catch (err) {
+    log.warn("usage-poller", "refresh failed", { data: { error: String(err), retryInMs: POLL_ERR_MS } });
+    return POLL_ERR_MS;
   }
 }
 
@@ -83,6 +94,15 @@ export function startUsagePoller(gardenRunner: string): void {
   // is the termination signal — no signal file, no FIFO.
   newDashboardWindow(window, "bash", "-c", `${gardenRunner} dashboard _usage-poll-loop 2>/dev/null`);
   log.info("usage-poller", "spawned window", { data: { window } });
+}
+
+// The watchdog's heal for a usage poller whose window is gone. Checks the
+// window first so a live poller costs one tmux call, and stays silent on a
+// provider-only fleet, where startUsagePoller would log its skip every tick.
+export function ensureUsagePoller(gardenRunner: string): void {
+  if (windowExists(usagePollerWindowName())) return;
+  if (!anyAnthropicMeteredProject()) return;
+  startUsagePoller(gardenRunner);
 }
 
 export function stopUsagePoller(): void {

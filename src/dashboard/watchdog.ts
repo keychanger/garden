@@ -726,7 +726,8 @@ export async function runWatchdogLoop(): Promise<void> {
   // resolveGardenRunner, so respawned pollers bake the same canonical garden
   // path the watchdog window itself was spawned with.
   const { resolveGardenRunner } = await import("./runner.js");
-  const { startProjectPoller } = await import("./poller.js");
+  const { startProjectPoller, restartDriftedPollers } = await import("./poller.js");
+  const { ensureUsagePoller } = await import("./usage-poller.js");
   // Dynamic-imported (like the poller above) to keep watchdog.ts's static import
   // surface minimal; header.ts is heavy and this module is start/stop-imported by
   // poller.ts. Re-bakes the status pane each tick so time-in-state suffixes tick.
@@ -772,9 +773,15 @@ export async function runWatchdogLoop(): Promise<void> {
       absorbSleep(gap);
       // Heal pollers before poking so a just-revived poller receives this
       // cycle's staleness poke (and resumes work) without waiting another tick.
-      healProjectPollers(
+      const ensured = healProjectPollers(
         (project) => startProjectPoller(project, gardenRunner),
       );
+      restartDriftedPollers(ensured, gardenRunner);
+      try {
+        ensureUsagePoller(gardenRunner);
+      } catch (err) {
+        log.warn("watchdog", "failed to ensure usage poller", { data: { error: String(err) } });
+      }
       tick(lastPokeAt, Date.now());
       // Re-file worker windows whose name disagrees with the worker their pane
       // holds (a misfiled rename makes a live worker invisible in the status

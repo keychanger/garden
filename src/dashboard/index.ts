@@ -394,7 +394,16 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     return;
   }
   if (sub === "_poll") {
-    poll(args[1]);
+    try {
+      poll(args[1]);
+    } catch (err) {
+      // The poller loop discards stderr, so without this a poll that throws
+      // every pass leaves a loop that looks alive, does nothing, and says nothing.
+      log.error("poller", "poll crashed", {
+        data: { project: args[1], error: String(err), stack: err instanceof Error ? err.stack : undefined },
+      });
+      throw err;
+    }
     return;
   }
   if (sub === "_trigger-poll") {
@@ -494,7 +503,10 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     return;
   }
   if (sub === "_post-rebuild-refresh") {
-    // Spawned via the rebuilt binary so respawnStatusPane bakes in the new code
+    // Spawned via the rebuilt binary so respawnStatusPane bakes in the new code.
+    // Project pollers are left running unless their loop command drifted (see
+    // restartLongLivedPollers): the merge that triggered this rebuild is still
+    // finishing in one of them.
     const { respawnStatusPane, respawnLogsPane } = await import("./create.js");
     const { resolveGardenRunner } = await import("./runner.js");
     const { readDashState } = await import("./state.js");

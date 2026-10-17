@@ -7,8 +7,12 @@
 // through workflow.stateHandlers. The default workflow points at the
 // existing handlers in poller-state/review/merge/resolve. See WORKFLOWS.md
 // Component 5a and src/dashboard/workflows/.
+import { createHash } from "node:crypto";
 import fs from "node:fs";
-import { newDashboardWindow, windowExists, windowIndices, killWindowsByName, dedupeWindows, shellEscape } from "./tmux.js";
+import {
+  newDashboardWindowPaned, windowExists, windowIndices, killWindowsByName, dedupeWindows, shellEscape,
+  setPaneVar, paneRunningOnlyShell, tmuxOutput,
+} from "./tmux.js";
 import {
   readRegistry, getWorkers, type WorkerEntry,
 } from "./registry.js";
@@ -202,32 +206,106 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
       });
       return;
     }
-    // Event-driven poller loop: poll once, then block on the FIFO until an
-    // event arrives. Per STATUS.md invariant 6, there is no fallback poll.
-    // Every transition is delivered by an event from one of these sources:
-    // Claude Code hooks, worker push hook, merge queue completion, tmux
-    // pane-died, or the auto-continue gate-reset wake (usage poller /
-    // `garden auto on`). The poller is a pure dispatcher that does one unit
-    // of work per wake.
-    //
-    // `exec 3<>${fifo}` holds the FIFO open in R+W mode for the loop's whole
-    // lifetime (not just the per-iteration `read`). Without this, the FIFO has
-    // no reader during `_poll`'s execution — which is exactly when lifecycle
-    // handlers fire scheduleDelayedPoke. The handler's detached writer would
-    // open R+W, write, close, and the byte would be reclaimed by the kernel
-    // before the loop's next `read` opened the FIFO again. Persistent fd 3
-    // keeps a reader present so buffered bytes survive until consumed.
-    const cmd = [
-      `exec 3<>${shellEscape(fifo)};`,
-      `while true; do`,
-      `  ${gardenRunner} dashboard _poll ${shellEscape(projectName)} 2>/dev/null;`,
-      `  read -u 3 2>/dev/null || true;`,
-      `done`,
-    ].join(" ");
-    newDashboardWindow(window, "bash", "-c", cmd);
+    const cmd = pollerLoopCommand(projectName, gardenRunner);
+    const paneId = newDashboardWindowPaned(window, "bash", "-c", cmd);
+    setPaneVar(paneId, POLLER_LOOP_VAR, pollerLoopStamp(cmd));
 
     log.info("poller", "started", { data: { project: projectName } });
   }, { name: `poller-spawn:${projectName}` });
+}
+
+// Event-driven poller loop: poll once, then block on the FIFO until an
+// event arrives. Per STATUS.md invariant 6, there is no fallback poll.
+// Every transition is delivered by an event from one of these sources:
+// Claude Code hooks, worker push hook, merge queue completion, tmux
+// pane-died, or the auto-continue gate-reset wake (usage poller /
+// `garden auto on`). The poller is a pure dispatcher that does one unit
+// of work per wake.
+//
+// `exec 3<>${fifo}` holds the FIFO open in R+W mode for the loop's whole
+// lifetime (not just the per-iteration `read`). Without this, the FIFO has
+// no reader during `_poll`'s execution — which is exactly when lifecycle
+// handlers fire scheduleDelayedPoke. The handler's detached writer would
+// open R+W, write, close, and the byte would be reclaimed by the kernel
+// before the loop's next `read` opened the FIFO again. Persistent fd 3
+// keeps a reader present so buffered bytes survive until consumed.
+export function pollerLoopCommand(projectName: string, gardenRunner: string): string {
+  return [
+    `exec 3<>${shellEscape(signalFifoPath(projectName))};`,
+    `while true; do`,
+    `  ${gardenRunner} dashboard _poll ${shellEscape(projectName)} 2>/dev/null;`,
+    `  read -u 3 2>/dev/null || true;`,
+    `done`,
+  ].join(" ");
+}
+
+// Pane option holding a hash of the loop command the poller window runs.
+const POLLER_LOOP_VAR = "garden_poller_loop";
+
+function pollerLoopStamp(command: string): string {
+  return createHash("sha256").update(command).digest("hex").slice(0, 16);
+}
+
+// Pane id and loop stamp of every pane in the dashboard session, by window
+// name. Throws when tmux does not answer, so a caller never reads an
+// unreachable server as "no pollers".
+function pollerLoopStamps(): Map<string, { paneId: string; stamp: string }[]> {
+  const byWindow = new Map<string, { paneId: string; stamp: string }[]>();
+  const out = tmuxOutput(
+    "list-panes", "-s", "-t", DASHBOARD_SESSION,
+    "-F", `#{window_name}\t#{pane_id}\t#{@${POLLER_LOOP_VAR}}`,
+  );
+  for (const line of out.split("\n")) {
+    const [windowName, paneId, stamp = ""] = line.split("\t");
+    if (!windowName || !paneId) continue;
+    const panes = byWindow.get(windowName) ?? [];
+    panes.push({ paneId, stamp });
+    byWindow.set(windowName, panes);
+  }
+  return byWindow;
+}
+
+// A running poller pins nothing but its loop command: every pass execs a
+// fresh `dashboard _poll`, so a rebuild reaches it at the next poll without a
+// restart, and a restart mid-poll cuts a rebase, push, or merge finalization
+// short. So a poller is restarted only when the command it runs differs from
+// the one this build would start — a moved runner path, a changed loop, or a
+// window older than the stamp — and only while it waits between polls. A busy
+// one is left for the watchdog's next tick.
+export function restartDriftedPollers(projects: Iterable<string>, gardenRunner: string): void {
+  let panes: Map<string, { paneId: string; stamp: string }[]>;
+  try {
+    panes = pollerLoopStamps();
+  } catch (err) {
+    log.debug("poller", "skipped poller drift check: tmux did not answer", {
+      data: { error: String(err) },
+    });
+    return;
+  }
+  for (const projectName of projects) {
+    try {
+      const live = panes.get(pollerWindowName(projectName));
+      // None is the heal's to spawn; duplicates are startProjectPoller's to collapse.
+      if (live?.length !== 1) continue;
+      const [{ paneId, stamp }] = live;
+      if (stamp === pollerLoopStamp(pollerLoopCommand(projectName, gardenRunner))) continue;
+      if (!paneRunningOnlyShell(paneId)) {
+        log.debug("poller", "deferred drifted poller restart: mid-poll", {
+          data: { project: projectName },
+        });
+        continue;
+      }
+      stopProjectPoller(projectName);
+      startProjectPoller(projectName, gardenRunner);
+      log.info("poller", "restarted poller on a changed loop command", {
+        data: { project: projectName, previousStamp: stamp || "(none)" },
+      });
+    } catch (err) {
+      log.warn("poller", "failed to restart drifted project poller", {
+        data: { project: projectName, error: String(err) },
+      });
+    }
+  }
 }
 
 export function stopProjectPoller(projectName: string): void {
@@ -257,8 +335,28 @@ export function projectPollerRunning(projectName: string): boolean {
   return windowExists(pollerWindowName(projectName));
 }
 
-// Pokes that land during the brief kill→spawn gap are dropped; the next event re-pokes.
+// Restart the two processes that keep the build they started with in memory —
+// the usage poller and the watchdog — plus any project poller whose loop
+// command drifted (restartDriftedPollers). Project pollers go first: the
+// restarted watchdog's first tick pokes every intake project, and a poke that
+// lands in a kill→spawn gap is dropped (the next event re-pokes).
 export function restartLongLivedPollers(gardenRunner: string): void {
+  try {
+    const registry = readRegistry();
+    const config = loadConfig();
+    const projects = new Set(
+      Object.entries(registry.workers)
+        .filter(([, entries]) => entries.length > 0)
+        .map(([projectName]) => projectName),
+    );
+    for (const [projectName, project] of Object.entries(config.projects)) {
+      if (project.beadIntake === true) projects.add(projectName);
+    }
+    restartDriftedPollers(projects, gardenRunner);
+  } catch (err) {
+    log.warn("poller", "failed to check project pollers for drift", { data: { error: String(err) } });
+  }
+
   try {
     stopUsagePoller();
     startUsagePoller(gardenRunner);
@@ -271,26 +369,5 @@ export function restartLongLivedPollers(gardenRunner: string): void {
     startWatchdog(gardenRunner);
   } catch (err) {
     log.warn("poller", "failed to restart watchdog", { data: { error: String(err) } });
-  }
-
-  const registry = readRegistry();
-  const config = loadConfig();
-  const projects = new Set(
-    Object.entries(registry.workers)
-      .filter(([, entries]) => entries.length > 0)
-      .map(([projectName]) => projectName),
-  );
-  for (const [projectName, project] of Object.entries(config.projects)) {
-    if (project.beadIntake === true) projects.add(projectName);
-  }
-  for (const projectName of projects) {
-    try {
-      stopProjectPoller(projectName);
-      startProjectPoller(projectName, gardenRunner);
-    } catch (err) {
-      log.warn("poller", "failed to restart project poller", {
-        data: { project: projectName, error: String(err) },
-      });
-    }
   }
 }
