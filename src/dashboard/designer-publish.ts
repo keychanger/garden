@@ -1,9 +1,9 @@
 // Designer publish: move an approved design artifact from the worker's uncommitted
 // working directory to a tracked docs/ path, commit it locally, and write the
-// .garden-done sentinel. The commit is NOT pushed here — the poller's skip-review
-// merge (handleWorking → merge-pending → mergeToBase) force-pushes the branch and
-// fast-forwards base, exactly as it does for any worker, so publish needs no
-// network and works inside the worker sandbox.
+// .garden-done sentinel. The commit is NOT pushed here: the poller pushes the
+// branch before queueing the skip-review merge (handleSkipReviewMerge), so the CI
+// gate can see it, then merges and fast-forwards base as it does for any worker.
+// Publish therefore needs no network and works inside the worker sandbox.
 //
 // The publish mutation path is CLI-only. Poller scope enforcement imports the
 // node:path-only designer-paths.ts leaf so this module never enters hook.js.

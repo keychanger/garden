@@ -318,6 +318,24 @@ function handleSkipReviewMerge(
     refreshDashboard();
     return true;
   }
+  // Publish before queueing. The merge queue checks CI for the SHA on GitHub
+  // before its own push, so an unpushed publish commit read as missing there
+  // and stayed blocked for good. A failed push leaves the worker working with
+  // its review still armed, so the poke below retries it.
+  try {
+    forcePushBranch(wtPath, entry.branchName ?? entry.name);
+  } catch (err) {
+    addAlert({
+      level: "warn",
+      source: "poller",
+      project: projectName,
+      worker: entry.name,
+      message: `Pushing ${entry.name}'s published design failed; retrying. ${String(err).slice(0, 200)}`,
+      dedupKey: `push-failed:${projectName}:${entry.name}`,
+    });
+    scheduleDelayedPoke(projectName, 30_000);
+    return true;
+  }
   log.info("poller", "designer publish: skipping review, merging directly", {
     worker: entry.name, data: { project: projectName },
   });

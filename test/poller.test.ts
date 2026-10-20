@@ -806,6 +806,37 @@ describe("poll — working state", () => {
     );
   });
 
+  // The merge queue checks CI for the SHA on GitHub before it pushes anything,
+  // so an unpushed publish commit read as missing and never merged.
+  it("designer publish is pushed before it enters the merge queue", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
+    ]);
+    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/notification-levels.md"]);
+
+    poll("myproject");
+
+    const push = vi.mocked(forcePushBranch).mock.invocationCallOrder[0];
+    const queued = vi.mocked(updateWorkerFields).mock.calls.findIndex(c => c[2].prState === "merge-pending");
+    expect(push).toBeLessThan(vi.mocked(updateWorkerFields).mock.invocationCallOrder[queued]);
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
+  });
+
+  it("a failed designer push stays working and retries instead of queueing an unpublished SHA", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
+    ]);
+    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/notification-levels.md"]);
+    vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("remote hung up"); });
+
+    poll("myproject");
+
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }));
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30_000);
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({ dedupKey: "push-failed:myproject:bold-ash" }));
+  });
+
   it("designer committing a file outside docs/ parks in failing with an operator alert", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),

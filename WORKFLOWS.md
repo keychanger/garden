@@ -2795,7 +2795,10 @@ the prose at the gate. The reviewer is launched from `handleWorking →
 launchReview`, so "skip review" lives in that handler, not the merge handler.
 `designerValidTransitions` diverges from default only on `working`
 (`["merge-pending", "failing", "done"]`, never `reviewing`). The CI/merge gate
-still applies. Designer is excluded from the holistic whole-task review
+still applies, which is why the branch is pushed before it enters merge-pending:
+the gate reads CI for the SHA on GitHub before the merge queue pushes anything,
+and an unpublished SHA reads as missing there. A failed push leaves the worker
+`working` with its review armed, and a 30s re-poke retries it. Designer is excluded from the holistic whole-task review
 (`evaluateHolisticGate`'s `workflow === "default"` clause), which would otherwise
 re-launch a reviewer and defeat skip-review.
 
