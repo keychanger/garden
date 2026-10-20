@@ -42,6 +42,25 @@ describe("resolveGardenRunner", () => {
     expect(result).toContain("/code/garden/src/cli.ts");
   });
 
+  // Hooks run dist/hook.js, whose dispatcher reads its first argument as the
+  // event: a route spawned with that path ran as event "dashboard" and did
+  // nothing (the Stop hook's usage refresh, the permission watcher, owed
+  // handoff callbacks, the alerts repaint).
+  it("runs the CLI beside the hook bundle when called from a hook", () => {
+    process.argv[1] = "/code/garden/dist/hook.js";
+    const result = resolveGardenRunner();
+    expect(result).toContain("/code/garden/dist/cli.js");
+    expect(result).not.toContain("hook.js");
+  });
+
+  it("runs the CLI source beside the hook entry under tsx", () => {
+    process.argv[1] = "/code/garden/src/hook-entry.ts";
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    const result = resolveGardenRunner();
+    expect(result).toContain("/code/garden/src/cli.ts");
+    expect(result).not.toContain("hook-entry.ts");
+  });
+
   it("falls back to npx tsx when tsx binary not found", () => {
     process.argv[1] = "/code/garden/src/cli.ts";
     vi.mocked(fs.existsSync).mockReturnValue(false);

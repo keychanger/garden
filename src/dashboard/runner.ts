@@ -59,8 +59,20 @@ export function resolveNodeBin(): string {
   return process.execPath;
 }
 
+// A process started on the hook entry point (dist/hook.js, or src/hook-entry.ts
+// under tsx) is the hook dispatcher, which reads its first argument as an event
+// name. A route a hook spawns has to run the CLI next to it, or
+// `dashboard _usage-refresh` and every other hook-spawned route lands in the
+// dispatcher as event "dashboard" and does nothing.
+function cliEntryPoint(entry: string): string {
+  const dir = path.dirname(entry);
+  if (path.basename(entry) === "hook.js") return path.join(dir, "cli.js");
+  if (path.basename(entry) === "hook-entry.ts") return path.join(dir, "cli.ts");
+  return entry;
+}
+
 export function resolveGardenRunner(): string {
-  const direct = path.resolve(process.argv[1]);
+  const direct = cliEntryPoint(path.resolve(process.argv[1]));
 
   // tsx/dev path — argv[1] points at a .ts source file, not a built dist.
   // Keep using it directly: dev mode is short-lived and the operator

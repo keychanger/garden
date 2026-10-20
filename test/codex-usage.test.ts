@@ -670,6 +670,32 @@ describe("codex usage meter", () => {
       expect(mod.readCodexUsage()).toBeNull();
       expect(mod.probeCodexUsageIfStale(Date.now())).toBe(false);
     });
+
+    // A probe that confirms nothing leaves the reading stale, and the Stop
+    // hook's usage lane calls this from a fresh process every ~90s, so without
+    // an attempt stamp on disk every refresh would spend another probe.
+    it("attempts one probe per interval even when no probe confirms a reading", async () => {
+      writeCodexProject();
+      const origPath = process.env.PATH;
+      const bin = path.join(home, "bin");
+      fs.mkdirSync(bin, { recursive: true });
+      fs.writeFileSync(path.join(bin, "codex"), `#!/bin/sh\necho probe >> "$HOME/probes"\nexit 0\n`, { mode: 0o755 });
+      process.env.PATH = `${bin}:${origPath}`;
+      const probes = () => fs.readFileSync(path.join(home, "probes"), "utf-8").split("\n").filter(Boolean).length;
+      try {
+        const mod = await import("../src/dashboard/codex-usage.js");
+        const now = Date.now();
+        mod.probeCodexUsageIfStale(now);
+        mod.probeCodexUsageIfStale(now + 90_000);
+        mod.probeCodexUsageIfStale(now + 2 * 90_000);
+        expect(probes()).toBe(1);
+
+        mod.probeCodexUsageIfStale(now + mod.CODEX_PROBE_INTERVAL_MS);
+        expect(probes()).toBe(2);
+      } finally {
+        process.env.PATH = origPath;
+      }
+    });
   });
 
   describe("probeCodexUsage", () => {

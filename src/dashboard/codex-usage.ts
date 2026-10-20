@@ -33,6 +33,7 @@ import os from "node:os";
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import { withFileLock } from "./file-lock.js";
 import { readRegistry } from "./registry.js";
 import { resolveProjectCrew } from "./crew.js";
 
@@ -343,5 +344,28 @@ export const CODEX_PROBE_INTERVAL_MS = 6 * 60 * 60_000;
 export function probeCodexUsageIfStale(nowMs: number = Date.now()): boolean {
   if (nowMs - (readCodexUsage()?.capturedAt ?? 0) < CODEX_PROBE_INTERVAL_MS) return false;
   if (!codexInFleet()) return false;
+  if (!claimProbeAttempt(nowMs)) return false;
   return probeCodexUsage();
+}
+
+const CODEX_PROBE_ATTEMPT_FILE = path.join(SESSIONS_DIR, "codex-probe-attempt");
+
+// At most one probe attempt per interval across every process, whatever its
+// outcome. A probe that confirms nothing (offline, out of quota, no populated
+// quota event) leaves capturedAt stale, so the age gate alone would let the
+// next caller probe again, and the Stop hook's usage lane is a fresh process
+// on every 90s refresh, so only state on disk can hold the line. The lock
+// makes concurrent refreshes probe once.
+function claimProbeAttempt(nowMs: number): boolean {
+  try {
+    return withFileLock(`${CODEX_PROBE_ATTEMPT_FILE}.lock`, () => {
+      let lastAttemptMs = Number.NaN;
+      try { lastAttemptMs = Number(fs.readFileSync(CODEX_PROBE_ATTEMPT_FILE, "utf-8")); } catch { /* never attempted */ }
+      if (nowMs - lastAttemptMs < CODEX_PROBE_INTERVAL_MS) return false;
+      atomicWriteFile(CODEX_PROBE_ATTEMPT_FILE, String(nowMs));
+      return true;
+    }, { name: "codex-probe", deadlineMs: 2_000 });
+  } catch {
+    return false;
+  }
 }
