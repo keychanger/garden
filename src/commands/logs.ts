@@ -1092,10 +1092,9 @@ async function handleModeSubcommand(args: string[]): Promise<boolean> {
   return false;
 }
 
-// `garden logs filter <expr...>` — escape hatch for setting the sticky filter
-// from a regular shell when the dashboard's command-prompt would garble the
-// expression (e.g. embedded single quotes). `garden logs filter` shows the
-// current value; `garden logs filter --clear` removes it.
+// `garden logs filter <expr...>` — the CLI form of the dashboard's ⌥/ prompt,
+// for setting the sticky filter from a regular shell. `garden logs filter`
+// shows the current value; `garden logs filter --clear` removes it.
 async function handleFilterSubcommand(args: string[]): Promise<boolean> {
   if (args[0] !== "filter") return false;
   const sub2 = args[1];

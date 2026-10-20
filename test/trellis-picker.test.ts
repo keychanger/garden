@@ -125,8 +125,10 @@ describe("buildPickerPlan", () => {
   it("scaffold action uses tmux command-prompt for name input", () => {
     const plan = buildPickerPlan("proj", [], RUNNER);
     const scaffoldItem = plan.items.find(i => i.key === "n")!;
-    expect(scaffoldItem.command).toMatch(/command-prompt/);
+    expect(scaffoldItem.command.startsWith("command-prompt ")).toBe(true);
     expect(scaffoldItem.command).toContain("Trellis name");
-    expect(scaffoldItem.command).toContain("trellis new");
+    // The name reaches _trellis-new as typed, never through a shell.
+    expect(scaffoldItem.command).toContain("_prompt-reply _trellis-new proj");
+    expect(scaffoldItem.command).not.toContain("%%\"");
   });
 });

@@ -46,7 +46,7 @@ import {
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, focusAlerts, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
-import { takePromptReply } from "./tmux.js";
+import { takePromptReply, tmuxDisplay } from "./tmux.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
 import { runWatchdogLoop, stopWatchdog } from "./watchdog.js";
@@ -374,10 +374,8 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     return;
   }
   if (sub === "_grow-plant") {
-    // The seed (args[2]) may contain spaces if it was substituted from
-    // tmux %% with a multi-word user input. tmux command-prompt %% is a
-    // single-token substitution by default, but operators can pass a
-    // pre-quoted seed via the CLI subcommand directly.
+    // The seed arrives as one argument via _prompt-reply; joining tolerates a
+    // caller that split it.
     if (args[1]) plantGrowFromPicker(args[1], args.slice(2).join(" "));
     return;
   }
@@ -391,6 +389,17 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_trellis-plant-author") {
     if (args[1]) spawnTrellisAuthor(args[1]);
+    return;
+  }
+  if (sub === "_trellis-new") {
+    // The picker's scaffold row: the typed name arrives via _prompt-reply.
+    if (!args[1] || !args[2]) return;
+    const { trellis } = await import("../commands/trellis.js");
+    try {
+      await trellis(["new", args[1], args[2]]);
+    } catch (err) {
+      tmuxDisplay(err instanceof Error ? err.message : String(err), { untilKey: true });
+    }
     return;
   }
   if (sub === "_trellis-revive-submenu") {

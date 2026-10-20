@@ -136,7 +136,8 @@ function formatMenuLabel(t: TrellisFileInfo): string {
 // A display-menu item's command is parsed by tmux as a TMUX command, not a
 // shell command — so a bare `${runner} …` fails with "unknown command:
 // <node>". menuRunShell wraps it in `run-shell`. The command-prompt helpers
-// (scaffold / grow) are already valid tmux commands and are not wrapped.
+// (scaffold / grow) are already valid tmux commands (promptCommand) and are
+// not wrapped.
 
 function shellCmdPlant(runner: string, project: string, trellisName: string): string {
   return menuRunShell(`${runner} dashboard _trellis-plant ${shellEscape(project)} ${shellEscape(trellisName)}`);
@@ -147,10 +148,8 @@ function shellCmdAuthor(runner: string, project: string): string {
 }
 
 function shellCmdScaffold(runner: string, project: string): string {
-  // Use tmux command-prompt for the trellis name input, then dispatch
-  // garden trellis new. command-prompt is a tmux command — no run-shell wrap.
-  const inner = `${runner} trellis new ${shellEscape(project)} %%`;
-  return `command-prompt -p "Trellis name: " "run-shell ${shellEscape(inner)}"`;
+  // tmux command-prompt for the trellis name, handed to `_trellis-new` as typed.
+  return promptCommand("Trellis name: ", runner, ["_trellis-new", project]);
 }
 
 function shellCmdReviveSubmenu(runner: string, project: string): string {

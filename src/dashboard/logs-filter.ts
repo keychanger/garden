@@ -26,7 +26,7 @@ export function openLogsFilterPrompt(): void {
   // as a format or shell syntax.
   const current = readStickyFilterExpr() ?? "";
   try {
-    execFileSync("tmux", promptArgv("logs filter:", runner, ["_logs-filter-apply"], current), { stdio: "ignore" });
+    execFileSync("tmux", promptArgv("logs filter: ", runner, ["_logs-filter-apply"], current), { stdio: "ignore" });
   } catch (err) {
     log.warn("logs-filter", "command-prompt failed", { data: { error: String(err) } });
   }
