@@ -18,6 +18,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getDiffAgainstBase: vi.fn(() => "diff content"),
   getCommitSummary: vi.fn(() => "abc1234 fix: something"),
   getChangedFiles: vi.fn(() => ["src/foo.ts"]),
+  readCommittedFiles: vi.fn(),
 }));
 
 vi.mock("../src/rules.js", () => ({
@@ -28,7 +29,9 @@ import {
   composePrompt, gatherPromptContext, makeContext,
   type PromptContext, type PromptSection,
 } from "../src/dashboard/prompt-compose.js";
-import { getDiffAgainstBase } from "../src/dashboard/git.js";
+import fs from "node:fs";
+import path from "node:path";
+import { getDiffAgainstBase, readCommittedFiles } from "../src/dashboard/git.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 function makeEntry(overrides?: Partial<WorkerEntry>): WorkerEntry {
@@ -56,8 +59,19 @@ function makeFixtureContext(): PromptContext {
   });
 }
 
+// The prompt builders read the worker's files as committed (readCommittedFiles);
+// serve those reads from the same readFileSync fixture each test sets up.
+function committedFromFixture(wtPath: string, paths: readonly string[]): Map<string, string> {
+  const files = new Map<string, string>();
+  for (const p of paths) {
+    try { files.set(p, String(fs.readFileSync(path.join(wtPath, p), "utf-8"))); } catch { /* absent at HEAD */ }
+  }
+  return files;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(readCommittedFiles).mockImplementation(committedFromFixture);
   vi.mocked(getDiffAgainstBase).mockReturnValue("diff content");
 });
 

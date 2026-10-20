@@ -148,6 +148,8 @@ vi.mock("../src/commands/status.js", () => ({
   resolveWorkerStatus: vi.fn(() => "idle"),
 }));
 
+import { gitSubcommandArgs } from "./helpers.js";
+import { SAFE_GIT_CONFIG } from "../src/dashboard/git-exec.js";
 import { handleClaudeHook } from "../src/dashboard/hook-dispatcher.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
@@ -192,6 +194,16 @@ beforeEach(() => {
   // header.ts caches identity-equal writes/refreshes; reset across tests so
   // each "first hook fires" scenario starts fresh.
   _resetHeaderCachesForTest();
+});
+
+// The hook handlers run unsandboxed in the worker's worktree on every Stop and
+// Bash tool call, so every git they issue must carry SAFE_GIT_CONFIG.
+afterEach(async () => {
+  const { execFileSync } = await import("node:child_process");
+  const unsafe = vi.mocked(execFileSync).mock.calls
+    .filter(([cmd, argv]) => cmd === "git" && !SAFE_GIT_CONFIG.every((arg, i) => (argv as string[])[i] === arg))
+    .map(([, argv]) => (argv as string[]).join(" "));
+  expect(unsafe).toEqual([]);
 });
 
 afterAll(() => {
@@ -688,7 +700,7 @@ describe("handleClaudeHook — core events", () => {
     });
     const { execFileSync } = await import("node:child_process");
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv && argv[0] === "rev-list") return "0" as unknown as Buffer;
       return "" as unknown as Buffer;
     });
@@ -715,7 +727,7 @@ describe("handleClaudeHook — core events", () => {
     vi.mocked(fs.existsSync).mockReturnValue(false);
     const { execFileSync } = await import("node:child_process");
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv && argv[0] === "rev-list") return "0" as unknown as Buffer;
       return "" as unknown as Buffer;
     });
@@ -738,7 +750,7 @@ describe("handleClaudeHook — core events", () => {
     vi.mocked(fs.existsSync).mockReturnValue(true);
     const { execFileSync } = await import("node:child_process");
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv && argv[0] === "rev-list") return "1" as unknown as Buffer;
       return "" as unknown as Buffer;
     });
@@ -764,7 +776,7 @@ describe("handleClaudeHook — core events", () => {
 
     const { execFileSync } = await import("node:child_process");
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv?.[0] === "rev-list") return "1" as unknown as Buffer;
       if (argv?.[0] === "status") throw new Error("git status timed out");
       return "" as unknown as Buffer;
@@ -800,7 +812,7 @@ describe("handleClaudeHook — core events", () => {
 
     const { execFileSync } = await import("node:child_process");
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv?.[0] === "rev-list") return "1" as unknown as Buffer;
       if (argv?.[0] === "status") return "?? poetry.lock\n" as unknown as Buffer;
       return "" as unknown as Buffer;
@@ -825,7 +837,7 @@ describe("handleClaudeHook — core events", () => {
 
     const { execFileSync } = await import("node:child_process");
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv?.[0] === "rev-list") return "1" as unknown as Buffer;
       if (argv?.[0] === "status") return " M src/a.ts\n" as unknown as Buffer;
       return "" as unknown as Buffer;
@@ -848,7 +860,7 @@ describe("handleClaudeHook — core events", () => {
 
     const { execFileSync } = await import("node:child_process");
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv?.[0] === "rev-list") return "1" as unknown as Buffer;
       return "" as unknown as Buffer;
     });
@@ -872,7 +884,7 @@ describe("handleClaudeHook — core events", () => {
 
     const { execFileSync } = await import("node:child_process");
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv?.[0] === "rev-list") return "0" as unknown as Buffer;
       return "" as unknown as Buffer;
     });
@@ -895,7 +907,7 @@ describe("handleClaudeHook — core events", () => {
     // Other execFileSync callers (e.g., git helpers, renderQuickStatus) should not
     // be disturbed, so only the rev-list call throws.
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv && argv[0] === "rev-list") {
         throw new Error("unknown revision origin/improvement/hardening");
       }
@@ -924,7 +936,7 @@ describe("handleClaudeHook — core events", () => {
 
     const { execFileSync } = await import("node:child_process");
     vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
-      const argv = args[1] as string[] | undefined;
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
       if (argv && argv[0] === "rev-list") {
         throw new Error("unknown revision");
       }

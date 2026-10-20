@@ -1,14 +1,19 @@
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import {
   tryResolveProvider, resolveBeadsDir, resolveSandboxWriteRoots, type ProjectConfig,
 } from "../config.js";
+import { getGitCommonDir } from "./git.js";
 
 export interface SandboxConfig {
   enabled: true;
   autoAllowBashIfSandboxed: true;
   filesystem: {
     allowWrite: string[];
+    // Takes precedence over allowWrite. Globs are applied in full on macOS;
+    // Claude Code warns that Linux support for them is partial.
+    denyWrite?: string[];
     // OS-enforced read-deny for sandboxed subprocesses. Emitted only when the
     // project sets sandboxDenyCredentials (default off). See config.ts.
     denyRead?: string[];
@@ -76,6 +81,10 @@ const DENIED_CREDENTIAL_PATHS: readonly string[] = [
   "~/.azure",
 ];
 
+// The files in a linked worktree's admin entry (<common>/worktrees/<name>/)
+// that tell git where its repository is and how it is configured.
+const WORKTREE_ADMIN_FILES: readonly string[] = ["config.worktree", "commondir", "gitdir"];
+
 export function buildSandboxConfig(opts: {
   worktreePath: string;
   project: ProjectConfig;
@@ -127,6 +136,20 @@ export function buildSandboxConfig(opts: {
     },
   };
 
+  // The sandbox can write the shared git common dir (Claude Code grants it so
+  // commits work), and with it every other worktree's admin entry. Claude Code
+  // write-protects the session's own config and commondir but not a sibling's,
+  // so a worker could point a sibling's commondir at a repository it controls,
+  // or put an fsmonitor, ssh command or filter driver in the sibling's
+  // config.worktree. Garden's own git in that worktree runs unsandboxed (the
+  // poller's fetch, a hook's git status) and would run it. A glob, so worktrees
+  // added after this session started are covered too.
+  const commonDir = getGitCommonDir(opts.project.path);
+  if (commonDir) {
+    const root = realpathOr(commonDir);
+    sandbox.filesystem.denyWrite = WORKTREE_ADMIN_FILES.map(file => path.join(root, "worktrees", "*", file));
+  }
+
   // Opt-in credential read-deny (default off; see ProjectConfig.sandboxDenyCredentials).
   // Emit both the purpose-built credentials guard and filesystem.denyRead so the
   // block holds across Claude Code versions.
@@ -138,4 +161,12 @@ export function buildSandboxConfig(opts: {
   }
 
   return sandbox;
+}
+
+function realpathOr(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
 }

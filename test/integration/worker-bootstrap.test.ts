@@ -164,9 +164,25 @@ describe("worker bootstrap (real fs + real git)", () => {
       fs.writeFileSync(file, oldGardenSettings);
       fs.chmodSync(file, 0o444);
       git(worktreePath, "update-index", "--skip-worktree", ".claude/settings.json");
+      // The installer runs unsandboxed and its restore is a path checkout, which
+      // fires post-checkout: plant one where the worktree's hooksPath points, and
+      // an fsmonitor in its config, as a worker could.
+      const marker = path.join(path.dirname(worktreePath), "ran");
+      const program = (name: string) => {
+        const p = path.join(path.dirname(worktreePath), name);
+        fs.writeFileSync(p, `#!/bin/sh\necho ${name} >> "${marker}"\nexit 1\n`);
+        fs.chmodSync(p, 0o755);
+        return p;
+      };
+      fs.mkdirSync(path.join(worktreePath, ".garden-hooks"), { recursive: true });
+      fs.copyFileSync(program("post-checkout"), path.join(worktreePath, ".garden-hooks", "post-checkout"));
+      git(worktreePath, "config", "extensions.worktreeConfig", "true");
+      git(worktreePath, "config", "--worktree", "core.hooksPath", path.join(worktreePath, ".garden-hooks"));
+      git(worktreePath, "config", "--worktree", "core.fsmonitor", program("fsmonitor"));
 
       claudeCodeAdapter.installRuntimeConfig(worktreePath, { path: projectPath }, { beforeLaunch: true });
 
+      expect(fs.existsSync(marker)).toBe(false);
       expect(fs.readFileSync(file, "utf-8")).toBe(repoSettings);
       expect(git(worktreePath, "ls-files", "-v", ".claude/settings.json")).toBe("H .claude/settings.json");
       expect(git(worktreePath, "status", "--porcelain")).toBe("");

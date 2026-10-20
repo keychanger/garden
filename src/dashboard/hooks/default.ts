@@ -14,7 +14,7 @@
 // retains the whole review/merge graph in the per-tool-call hook bundle.
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tryGetProject } from "../../config.js";
 import { addAlert, readAlerts } from "../alerts.js";
@@ -22,6 +22,7 @@ import {
   clearAwaitingInput, clearDoneSentinel, dispatchOwedHandoffCallbacks, isAwaitingInput, isDoneSet,
 } from "../continue.js";
 import { getWorkerBaseBranch } from "../git.js";
+import { runGit } from "../git-exec.js";
 import { findWorkerPaneId, refreshDashboard } from "../header.js";
 import { log } from "../log.js";
 // Import the FIFO wake primitive directly. The hook only signals the poller;
@@ -99,12 +100,7 @@ function hasRecentWorkerAlert(
 // and a hung git here stalls the Stop hook (see the rev-list call below).
 function worktreeHasUncommittedChanges(cwd: string): boolean | null {
   try {
-    const out = execFileSync("git", ["status", "--porcelain"], {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5000,
-    });
+    const out = runGit(cwd, ["status", "--porcelain"], { timeout: 5000, quietStderr: true });
     return out.trim().length > 0;
   } catch {
     return null;
@@ -123,11 +119,8 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
     // Returns "0" if no commits ahead, a positive number otherwise.
     // 5s timeout: a hung git here stalls the Stop hook AND the entire review
     // pipeline (no pendingReviewAt → no poller poke → worker never advances).
-    const out = execFileSync("git", ["rev-list", "--count", `origin/${baseBranch}..HEAD`], {
-      cwd,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-      timeout: 5000,
+    const out = runGit(cwd, ["rev-list", "--count", `origin/${baseBranch}..HEAD`], {
+      timeout: 5000, quietStderr: true,
     }).trim();
     const ahead = parseInt(out, 10);
     if (Number.isFinite(ahead) && ahead > 0) {
@@ -602,12 +595,7 @@ function mutatesWorktree(ctx: HookContext, toolName: string): boolean {
 // the tree. Null when git cannot answer, which callers treat as "changed".
 // Timeout matches worktreeHasUncommittedChanges: this runs inside a hook.
 function worktreeFingerprint(cwd: string): string | null {
-  const git = (args: string[]): string => execFileSync("git", args, {
-    cwd,
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 5000,
-  });
+  const git = (args: string[]): string => runGit(cwd, args, { timeout: 5000, quietStderr: true });
   try {
     const status = git(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all"]);
     const changed = git(["ls-files", "-z", "--modified", "--others", "--exclude-standard"]);

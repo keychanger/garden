@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import { SAFE_GIT_CONFIG } from "../src/dashboard/git-exec.js";
 
 vi.mock("node:child_process", () => ({
   execFileSync: vi.fn(() => ""),
@@ -42,6 +43,7 @@ import {
   getUnmergedFiles,
   cleanWorktree,
   fastForwardBase,
+  fetchBaseBranch,
   forcePushBranch,
   getChangedFiles,
   getCommitSummary,
@@ -56,6 +58,10 @@ import {
 } from "../src/dashboard/git.js";
 
 const mockExec = vi.mocked(execFileSync);
+
+// Every git garden runs in a worktree carries SAFE_GIT_CONFIG (hooks and
+// fsmonitor off); only commands on the operator's own checkout go without it.
+const safe = (...args: string[]) => [...SAFE_GIT_CONFIG, ...args];
 const mockFs = vi.mocked(fs);
 
 beforeEach(() => {
@@ -89,7 +95,7 @@ describe("resolveSpawnBase", () => {
     // Delegated to resolveBaseBranch -> currentBranch (git rev-parse).
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rev-parse", "--abbrev-ref", "HEAD"],
+      safe("rev-parse", "--abbrev-ref", "HEAD"),
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -199,7 +205,7 @@ describe("getBranchHeadSha", () => {
     expect(getBranchHeadSha("/tmp/wt")).toBe("abc123def");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rev-parse", "HEAD"],
+      safe("rev-parse", "HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -218,7 +224,7 @@ describe("getRemoteTrackingSha", () => {
     expect(getRemoteTrackingSha("/tmp/wt", "swift-oak")).toBe("def456abc");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rev-parse", "origin/swift-oak"],
+      safe("rev-parse", "origin/swift-oak"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -237,7 +243,7 @@ describe("getDiffAgainstBase", () => {
     expect(getDiffAgainstBase("/tmp/wt", "main")).toBe("diff --git a/file.ts b/file.ts\n+new line");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["diff", "origin/main...HEAD"],
+      safe("diff", "--no-ext-diff", "--no-textconv", "origin/main...HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -247,7 +253,7 @@ describe("getDiffAgainstBase", () => {
     getDiffAgainstBase("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["diff", "origin/develop...HEAD"],
+      safe("diff", "--no-ext-diff", "--no-textconv", "origin/develop...HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -272,9 +278,9 @@ describe("mergeToBase", () => {
     mergeToBase("/repo", "swift-oak", "main");
     const calls = mockExec.mock.calls;
     expect(calls[0]).toEqual(["git", ["fetch", "origin"], expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[1]).toEqual(["git", ["rev-parse", "origin/swift-oak"], expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[2]).toEqual(["git", ["rev-parse", "origin/main"], expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[3]).toEqual(["git", ["merge-base", "--is-ancestor", "def456", "abc123"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[1]).toEqual(["git", safe("rev-parse", "origin/swift-oak"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", safe("rev-parse", "origin/main"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[3]).toEqual(["git", safe("merge-base", "--is-ancestor", "def456", "abc123"), expect.objectContaining({ cwd: "/repo" })]);
     expect(calls[4]).toEqual(["git", ["push", "--no-verify", "origin", "abc123:refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
   });
 
@@ -287,7 +293,7 @@ describe("mergeToBase", () => {
       .mockReturnValueOnce("");          // push
     mergeToBase("/repo", "swift-oak", "develop");
     const calls = mockExec.mock.calls;
-    expect(calls[2]).toEqual(["git", ["rev-parse", "origin/develop"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", safe("rev-parse", "origin/develop"), expect.objectContaining({ cwd: "/repo" })]);
     expect(calls[4]).toEqual(["git", ["push", "--no-verify", "origin", "abc123:refs/heads/develop"], expect.objectContaining({ cwd: "/repo" })]);
   });
 
@@ -347,7 +353,7 @@ describe("cleanWorktree", () => {
     cleanWorktree("/tmp/wt");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["checkout", "--", "."],
+      safe("checkout", "--", "."),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -371,7 +377,7 @@ describe("rebaseBranch", () => {
     rebaseFails?: string;
   }) {
     mockExec.mockImplementation((_cmd, args) => {
-      const argv = args as string[];
+      const argv = (args as string[]).slice(SAFE_GIT_CONFIG.length);
       if (argv[0] === "merge-base") {
         if (!opts.baseIsAncestor) throw new Error("not an ancestor");
         return "";
@@ -387,7 +393,7 @@ describe("rebaseBranch", () => {
     expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "ok" });
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rebase", "origin/main"],
+      safe("rebase", "origin/main"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -397,7 +403,7 @@ describe("rebaseBranch", () => {
     rebaseBranch("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rebase", "origin/develop"],
+      safe("rebase", "origin/develop"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -417,7 +423,7 @@ describe("rebaseBranch", () => {
     expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "ok" });
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rebase", "--rebase-merges", "origin/main"],
+      safe("rebase", "--rebase-merges", "origin/main"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -448,7 +454,7 @@ describe("abortRebase", () => {
     abortRebase("/tmp/wt");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rebase", "--abort"],
+      safe("rebase", "--abort"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -499,7 +505,7 @@ describe("isAncestor", () => {
     expect(isAncestor("/tmp/wt", "origin/main", "HEAD")).toBe(true);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["merge-base", "--is-ancestor", "origin/main", "HEAD"],
+      safe("merge-base", "--is-ancestor", "origin/main", "HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -525,7 +531,7 @@ describe("ensureNoRebaseInProgress", () => {
     ensureNoRebaseInProgress("/tmp/wt");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rebase", "--abort"],
+      safe("rebase", "--abort"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -537,7 +543,7 @@ describe("ensureNoRebaseInProgress", () => {
     // Only git rev-parse calls, no rebase --abort
     expect(mockExec).not.toHaveBeenCalledWith(
       "git",
-      ["rebase", "--abort"],
+      safe("rebase", "--abort"),
       expect.anything(),
     );
   });
@@ -549,7 +555,7 @@ describe("getUnmergedFiles", () => {
     expect(getUnmergedFiles("/tmp/wt")).toEqual(["src/foo.ts", "src/bar.ts"]);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["diff", "--name-only", "--diff-filter=U"],
+      safe("diff", "--name-only", "--diff-filter=U"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -576,7 +582,7 @@ describe("forcePushBranch", () => {
     forcePushBranch("/tmp/wt", "my-branch");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["push", "--force-with-lease", "origin", "HEAD:my-branch"],
+      safe("push", "--force-with-lease", "origin", "HEAD:my-branch"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -595,7 +601,7 @@ describe("getChangedFiles", () => {
     expect(getChangedFiles("/tmp/wt", "main")).toEqual(["src/foo.ts", "src/bar.ts"]);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["diff", "--name-only", "origin/main...HEAD"],
+      safe("diff", "--name-only", "origin/main...HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -605,7 +611,7 @@ describe("getChangedFiles", () => {
     getChangedFiles("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["diff", "--name-only", "origin/develop...HEAD"],
+      safe("diff", "--name-only", "origin/develop...HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -629,7 +635,7 @@ describe("getCommitSummary", () => {
     expect(getCommitSummary("/tmp/wt", "main")).toBe("abc123 fix something\ndef456 add feature");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["log", "--oneline", "origin/main..HEAD"],
+      safe("log", "--oneline", "origin/main..HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -639,7 +645,7 @@ describe("getCommitSummary", () => {
     getCommitSummary("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["log", "--oneline", "origin/develop..HEAD"],
+      safe("log", "--oneline", "origin/develop..HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -681,7 +687,7 @@ describe("resolveBaseBranch", () => {
     expect(resolveBaseBranch("/repo")).toBe("develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rev-parse", "--abbrev-ref", "HEAD"],
+      safe("rev-parse", "--abbrev-ref", "HEAD"),
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -714,7 +720,7 @@ describe("branchExistsOnOrigin", () => {
     expect(branchExistsOnOrigin("/repo", "develop")).toBe(true);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["show-ref", "--verify", "--quiet", "refs/remotes/origin/develop"],
+      safe("show-ref", "--verify", "--quiet", "refs/remotes/origin/develop"),
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -734,6 +740,19 @@ describe("getWorkerBaseBranch", () => {
   it("falls back to resolveBaseBranch when entry has no pinned base", () => {
     mockExec.mockReturnValue("feature/x");
     expect(getWorkerBaseBranch({}, "/repo")).toBe("feature/x");
+  });
+});
+
+describe("fetchBaseBranch", () => {
+  it("fetches the base inside the worktree with hooks off and a bounded wait", () => {
+    // Runs on every review launch and merge pass; a fetch hung on a dead
+    // connection would otherwise hold the project's poller indefinitely.
+    fetchBaseBranch("/tmp/wt", "main");
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      safe("fetch", "origin", "main"),
+      expect.objectContaining({ cwd: "/tmp/wt", timeout: 60_000 }),
+    );
   });
 });
 
@@ -845,7 +864,7 @@ describe("currentBranch", () => {
     expect(currentBranch("/repo")).toBe("my-feature");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rev-parse", "--abbrev-ref", "HEAD"],
+      safe("rev-parse", "--abbrev-ref", "HEAD"),
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -891,7 +910,7 @@ describe("getGitCommonDir", () => {
     expect(getGitCommonDir("/repo/myproject")).toBe("/repo/myproject/.git");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["rev-parse", "--git-common-dir"],
+      safe("rev-parse", "--git-common-dir"),
       expect.objectContaining({ cwd: "/repo/myproject" }),
     );
   });

@@ -112,6 +112,42 @@ describe("codex worker config install (real fs + git)", () => {
     expect(agents).toContain("managed by garden");
   });
 
+  it("never composes a file the worker linked AGENTS.md to into its rules, and replaces the link", async () => {
+    // The installer runs unsandboxed and hands the composition back to the
+    // worker as its instructions; following the link would deliver a file the
+    // worker's own sandbox cannot read.
+    const { installCodexAgentsMd } = await import("../../src/dashboard/harness/codex.js");
+    const secret = path.join(tmp, "secret.txt");
+    fs.writeFileSync(secret, "OPERATOR-SECRET\n");
+    fs.symlinkSync(secret, path.join(wt, "AGENTS.md"));
+
+    installCodexAgentsMd(wt, "GARDEN RULES");
+
+    const agents = fs.readFileSync(path.join(wt, "AGENTS.md"), "utf-8");
+    expect(agents).toContain("GARDEN RULES");
+    expect(agents).not.toContain("OPERATOR-SECRET");
+    expect(fs.lstatSync(path.join(wt, "AGENTS.md")).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(secret, "utf-8")).toBe("OPERATOR-SECRET\n");
+  });
+
+  it("runs no fsmonitor from the worktree's config while refreshing rules", async () => {
+    fs.writeFileSync(path.join(wt, "AGENTS.md"), "# Repo agents\n");
+    git(wt, "add", "AGENTS.md");
+    git(wt, "commit", "-m", "add agents");
+    const marker = path.join(tmp, "ran");
+    const fsmonitor = path.join(tmp, "fsmonitor.sh");
+    fs.writeFileSync(fsmonitor, `#!/bin/sh\necho fsmonitor >> "${marker}"\nexit 1\n`);
+    fs.chmodSync(fsmonitor, 0o755);
+    git(wt, "config", "extensions.worktreeConfig", "true");
+    git(wt, "config", "--worktree", "core.fsmonitor", fsmonitor);
+    const { getHarness } = await import("../../src/dashboard/harness/index.js");
+
+    getHarness("codex").installRuntimeConfig(wt, { path: proj }, { rulesText: "GARDEN RULES" });
+
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(fs.readFileSync(path.join(wt, "AGENTS.md"), "utf-8")).toContain("# Repo agents");
+  });
+
   it("refreshes composed rules through the adapter while preserving repository rules", async () => {
     fs.writeFileSync(path.join(wt, "AGENTS.md"), "# repo rules\nRUN THE TESTS\n");
     git(wt, "add", "AGENTS.md");

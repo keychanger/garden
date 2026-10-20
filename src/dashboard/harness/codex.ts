@@ -16,10 +16,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import type { ProjectConfig } from "../../config.js";
 import { atomicWriteFile } from "../atomic-write.js";
 import { withFileLock } from "../file-lock.js";
+import { runGit } from "../git-exec.js";
+import { appendToStableFile, readStableRegularFile } from "../safe-read.js";
 import { AGENTS_MARKER, composeAgentsMd, stripGardenRules } from "./agents-md.js";
 import { codexCore } from "./codex-core.js";
 import type { HarnessAdapter } from "./types.js";
@@ -93,9 +94,7 @@ function ensureDirectoryTrust(targetDir: string): void {
 // itself; for a linked worktree it is the main checkout. Null if not a repo.
 function resolveRepoRoot(targetDir: string): string | null {
   try {
-    const commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {
-      encoding: "utf-8",
-    }).trim();
+    const commonDir = runGit(targetDir, ["rev-parse", "--git-common-dir"]).trim();
     const abs = path.isAbsolute(commonDir) ? commonDir : path.resolve(targetDir, commonDir);
     const root = path.dirname(abs);
     // Codex resolves symlinks before matching the trust entry (macOS /var ->
@@ -122,15 +121,17 @@ function resolveRepoRoot(targetDir: string): string | null {
 // the current file is only the fallback. This lets both Garden's rules and the
 // repository's own instructions advance without nesting markers. rulesText is
 // the same composed rules a Claude worker gets via --append-system-prompt-file.
+// Read unsandboxed, then delivered back to the worker as its instructions: a
+// symlink planted at AGENTS.md would otherwise hand the worker a file its own
+// sandbox cannot read. A file that is not plain counts as missing, and the
+// write below replaces it rather than following it.
+const MAX_AGENTS_MD_BYTES = 4 * 1024 * 1024;
+
 export function installCodexAgentsMd(targetDir: string, rulesText: string): void {
   const agentsPath = path.join(targetDir, "AGENTS.md");
   const tracked = isTracked(targetDir, "AGENTS.md");
-  let current = "";
-  try {
-    current = fs.readFileSync(agentsPath, "utf-8");
-  } catch {
-    /* missing AGENTS.md has an empty repository portion */
-  }
+  // A missing AGENTS.md has an empty repository portion.
+  const current = readStableRegularFile(agentsPath, targetDir, MAX_AGENTS_MD_BYTES)?.data.toString("utf-8") ?? "";
   // On the first install, preserve the worktree's actual repository content
   // (including a local edit) rather than replacing it with the index version.
   // Once Garden owns the file, its marker tells us the worktree copy may be
@@ -145,7 +146,7 @@ export function installCodexAgentsMd(targetDir: string, rulesText: string): void
   if (tracked) {
     // Keep the local composition out of `git status` / commits.
     try {
-      execFileSync("git", ["-C", targetDir, "update-index", "--skip-worktree", "AGENTS.md"]);
+      runGit(targetDir, ["update-index", "--skip-worktree", "AGENTS.md"]);
     } catch {
       /* best effort */
     }
@@ -157,9 +158,7 @@ export function installCodexAgentsMd(targetDir: string, rulesText: string): void
 
 function readTrackedAgentsMd(targetDir: string, current: string): string {
   try {
-    return execFileSync("git", ["-C", targetDir, "show", ":AGENTS.md"], {
-      encoding: "utf-8",
-    });
+    return runGit(targetDir, ["show", ":AGENTS.md"]);
   } catch {
     // A damaged/mid-operation index should not erase repository instructions.
     return stripGardenRules(current);
@@ -168,9 +167,7 @@ function readTrackedAgentsMd(targetDir: string, current: string): string {
 
 function isTracked(targetDir: string, relPath: string): boolean {
   try {
-    execFileSync("git", ["-C", targetDir, "ls-files", "--error-unmatch", relPath], {
-      stdio: ["ignore", "ignore", "ignore"],
-    });
+    runGit(targetDir, ["ls-files", "--error-unmatch", relPath], { quietStderr: true });
     return true;
   } catch {
     return false;
@@ -181,6 +178,8 @@ function isTracked(targetDir: string, relPath: string): boolean {
 // info/exclude. Accumulates alongside any .claude/ a claude worker added, so a
 // cross-harness worktree ends up excluding both — the full union is formalized
 // in the headless-config slice. Mirrors claude-code.ts's ensureWorktreeExcludes.
+const MAX_EXCLUDE_BYTES = 1024 * 1024;
+
 function ensureWorktreeExcludes(targetDir: string): void {
   // AGENTS.md: garden writes the worker rules here for Codex (installCodexAgentsMd).
   // Excluded so the untracked garden file never shows in the worker's git
@@ -189,9 +188,7 @@ function ensureWorktreeExcludes(targetDir: string): void {
   const patterns = [".codex/", ".garden-hooks/", ".garden/", ".garden-done", ".garden-awaiting-input", "AGENTS.md"];
   let commonDir: string;
   try {
-    commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {
-      encoding: "utf-8",
-    }).trim();
+    commonDir = runGit(targetDir, ["rev-parse", "--git-common-dir"]).trim();
   } catch {
     return;
   }
@@ -199,18 +196,18 @@ function ensureWorktreeExcludes(targetDir: string): void {
     ? commonDir
     : path.resolve(targetDir, commonDir);
   const excludeFile = path.join(resolvedCommonDir, "info", "exclude");
-  let current: string;
-  try {
-    current = fs.readFileSync(excludeFile, "utf-8");
-  } catch {
-    return;
-  }
+  // The shared git dir is worker-writable, and this runs unsandboxed: a
+  // symlink or FIFO planted at info/exclude must be neither followed nor
+  // written through.
+  const file = readStableRegularFile(excludeFile, resolvedCommonDir, MAX_EXCLUDE_BYTES);
+  if (!file) return; // No exclude file yet (rare; bootstrap will create one), or not a plain file.
+  const current = file.data.toString("utf-8");
   const lines = new Set(current.split("\n").map(l => l.trim()));
   const missing = patterns.filter(p => !lines.has(p));
   if (missing.length === 0) return;
   const tail = (current.endsWith("\n") ? "" : "\n") + missing.join("\n") + "\n";
   try {
-    fs.appendFileSync(excludeFile, tail);
+    appendToStableFile(excludeFile, file, tail);
   } catch {
     /* best effort */
   }

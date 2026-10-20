@@ -12,13 +12,12 @@
 // and increments on each call. Sections that don't number themselves don't
 // call it; conditional sections that early-return null don't perturb the
 // counter either.
-import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject } from "../config.js";
 import { buildRulesContext } from "../rules.js";
 import { stripGardenRules } from "./harness/agents-md.js";
 import {
-  getChangedFiles, getCommitSummary, getDiffAgainstBase,
+  getChangedFiles, getCommitSummary, getDiffAgainstBase, readCommittedFiles,
 } from "./git.js";
 import { log } from "./log.js";
 import type { WorkerEntry } from "./registry.js";
@@ -217,20 +216,15 @@ export function makeContext(
 }
 
 // I/O helpers for the gather function — exported so prompts.ts can re-export
-// them for backward compat with existing imports in test/prompts.test.ts.
+// them for backward compat with existing imports in test/prompts.test.ts. They
+// read the worker's files as committed at HEAD (readCommittedFiles), never from
+// the worktree: the clean-tree gate makes those the same bytes, and only the
+// committed copy cannot be a symlink or a FIFO the worker planted.
 
 export function findSpecFiles(wtPath: string, changedFiles: string[]): string[] {
-  const specs: string[] = [];
-  for (const file of changedFiles) {
-    if (!file.endsWith(".md")) continue;
-    try {
-      const content = fs.readFileSync(path.join(wtPath, file), "utf-8");
-      if (content.slice(0, 2000).includes(SPEC_MARKER)) {
-        specs.push(file);
-      }
-    } catch { /* file may have been renamed or deleted in the diff */ }
-  }
-  return specs;
+  // A doc renamed or deleted in the diff has no blob at HEAD and is skipped.
+  const docs = readCommittedFiles(wtPath, changedFiles.filter(file => file.endsWith(".md")));
+  return [...docs].filter(([, content]) => content.slice(0, 2000).includes(SPEC_MARKER)).map(([file]) => file);
 }
 
 // Architecture / overview docs handed to the reviewer so it can check the diff
@@ -247,12 +241,10 @@ function isAgentDocPointer(body: string): boolean {
 export function readDocSections(wtPath: string): string[] {
   const sections: string[] = [];
   const seen = new Set<string>();
+  const docs = readCommittedFiles(wtPath, DOC_FILES);
   for (const docFile of DOC_FILES) {
-    const fullPath = path.join(wtPath, docFile);
-    let content: string;
-    try {
-      content = fs.readFileSync(fullPath, "utf-8");
-    } catch { continue; /* file may not exist */ }
+    const content = docs.get(docFile);
+    if (content === undefined) continue;
     // On a Codex worktree, garden owns AGENTS.md and has prepended the worker
     // rules the prompt already carries. Review the repo's own content only.
     const body = stripGardenRules(content).trim();
@@ -266,18 +258,10 @@ export function readDocSections(wtPath: string): string[] {
 }
 
 export function readTestSections(wtPath: string, changedFiles: string[]): string[] {
-  const sections: string[] = [];
-  const seen = new Set<string>();
-  for (const file of changedFiles) {
-    const testFile = `test/${path.basename(file, path.extname(file))}.test.ts`;
-    // Same-named sources in different directories (src/commands/workers.ts and
-    // src/dashboard/workers.ts) map to one test file; inline it once.
-    if (seen.has(testFile)) continue;
-    seen.add(testFile);
-    try {
-      const content = fs.readFileSync(path.join(wtPath, testFile), "utf-8");
-      sections.push(`### ${testFile}\n\n${content}`);
-    } catch { /* no corresponding test file */ }
-  }
-  return sections;
+  // Same-named sources in different directories (src/commands/workers.ts and
+  // src/dashboard/workers.ts) map to one test file; readCommittedFiles reads it
+  // once, and a source with no test file has no entry.
+  const testFiles = changedFiles.map(file => `test/${path.basename(file, path.extname(file))}.test.ts`);
+  const tests = readCommittedFiles(wtPath, testFiles);
+  return [...tests].map(([testFile, content]) => `### ${testFile}\n\n${content}`);
 }

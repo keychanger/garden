@@ -9,7 +9,7 @@
 // node:path-only designer-paths.ts leaf so this module never enters hook.js.
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import { runGit } from "./git-exec.js";
 import { setDoneSentinel } from "./continue.js";
 import { log } from "./log.js";
 import { DESIGNER_PUBLISH_ROOT, isPublishablePath } from "./designer-paths.js";
@@ -69,10 +69,8 @@ export function publishDesignerArtifact(
 
   const name = path.basename(toRelPath, ".md");
   try {
-    execFileSync("git", ["add", "--", toRelPath], { cwd: worktreePath, stdio: "pipe" });
-    execFileSync("git", ["commit", "-m", `docs: publish ${name} (designer)`], {
-      cwd: worktreePath, stdio: "pipe",
-    });
+    runGit(worktreePath, ["add", "--", toRelPath]);
+    runGit(worktreePath, ["commit", "-m", `docs: publish ${name} (designer)`]);
   } catch (err) {
     return {
       ok: false,

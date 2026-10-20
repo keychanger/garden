@@ -171,8 +171,26 @@ vi.mock("../src/dashboard/git.js", () => ({
   resolveBaseBranch: vi.fn(() => "main"),
   getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
   getRemoteHost: vi.fn(() => "github.com"),
+  getGitCommonDir: vi.fn(() => null),
   worktreePath: vi.fn((project: string, worker: string) => `/worktrees/${project}/${worker}`),
 }));
+
+// The installers read and append worker-writable files (info/exclude) through
+// the stable-file helpers, whose refusals are covered in safe-read.test.ts.
+// Here they are served from, and recorded through, the mocked fs.
+vi.mock("../src/dashboard/safe-read.js", async () => {
+  const fs = (await import("node:fs")).default;
+  return {
+    readStableRegularFile: vi.fn((filePath: string) => {
+      try {
+        return { data: Buffer.from(String(fs.readFileSync(filePath, "utf-8"))), dev: 0, ino: 0 };
+      } catch {
+        return null;
+      }
+    }),
+    appendToStableFile: vi.fn((filePath: string, _file: unknown, text: string) => fs.appendFileSync(filePath, text)),
+  };
+});
 
 vi.mock("../src/dashboard/window-names.js", async () => {
   const actual = await vi.importActual("../src/dashboard/window-names.js");
@@ -180,6 +198,8 @@ vi.mock("../src/dashboard/window-names.js", async () => {
 });
 
 import fs from "node:fs";
+import { getGitCommonDir } from "../src/dashboard/git.js";
+import { readStableRegularFile } from "../src/dashboard/safe-read.js";
 import { claudeCodeAdapter } from "../src/dashboard/harness/claude-code.js";
 import { claudeSettingsPath } from "../src/dashboard/headless-paths.js";
 import {
@@ -234,6 +254,17 @@ describe("claude-code adapter installRuntimeConfig", () => {
     vi.mocked(fs.writeFileSync).mockClear();
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" }, { ultracode: true });
     expect(JSON.parse(settingsJsonContent()).ultracodeKeywordTrigger).toBe("on");
+  });
+
+  it("denies the worker writes to other worktrees' git admin files in the settings it launches with", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    vi.mocked(getGitCommonDir).mockReturnValueOnce("/repo/myproject/.git");
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
+    expect(JSON.parse(settingsJsonContent()).sandbox.filesystem.denyWrite).toEqual([
+      "/repo/myproject/.git/worktrees/*/config.worktree",
+      "/repo/myproject/.git/worktrees/*/commondir",
+      "/repo/myproject/.git/worktrees/*/gitdir",
+    ]);
   });
 
   it("launches workers on Claude Code's fullscreen renderer", () => {
@@ -380,6 +411,10 @@ describe("claude-code adapter installRuntimeConfig", () => {
 
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
 
+    // Read as a plain file contained in the shared git dir, which workers can write.
+    expect(readStableRegularFile).toHaveBeenCalledWith(
+      "/repo/myproject/.git/info/exclude", "/repo/myproject/.git", expect.any(Number),
+    );
     const appendCall = vi.mocked(fs.appendFileSync).mock.calls.find(
       c => String(c[0]).endsWith("info/exclude"),
     );

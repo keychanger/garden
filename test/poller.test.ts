@@ -237,6 +237,8 @@ vi.mock("../src/dashboard/git.js", () => ({
   isAncestor: vi.fn((_wt: string, _ancestor: string, descendant: string) =>
     !String(descendant).startsWith("origin/")),
   getUnmergedFiles: vi.fn(() => []),
+  fetchBaseBranch: vi.fn(),
+  readCommittedFiles: vi.fn(() => new Map<string, string>()),
 }));
 
 vi.mock("../src/rules.js", () => ({
@@ -315,7 +317,7 @@ import {
   getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase, cleanWorktree,
   fastForwardBase,
-  getChangedFiles, getChangedFilesBetween, getHeadSubject,
+  getChangedFiles, getChangedFilesBetween, getHeadSubject, readCommittedFiles, fetchBaseBranch,
   getCommitSummary, hasCommitsAhead, getNewCommitSummary, getDiffAgainstBase, getDiffStat,
   isWorktreeDirty,
   listModifiedTrackedFiles, revertChurn,
@@ -425,6 +427,9 @@ describe("poll — working state", () => {
     ]);
 
     poll("myproject");
+
+    // The base the reviewer rebases onto is refreshed through the bounded helper.
+    expect(fetchBaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "main");
 
     // The prompt file path matches the convention in poller.ts:87
     // (`${project}-${worker}-review-prompt.txt`). Bare toHaveBeenCalled would
@@ -3044,6 +3049,45 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  it("refreshes the base through the bounded fetch before merging, and warns when it times out", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "merge-pending", mergePendingAt: new Date(Date.now() - 1000).toISOString() }),
+    ]);
+    vi.mocked(fetchBaseBranch).mockImplementation(() => {
+      throw Object.assign(new Error("spawnSync git ETIMEDOUT"), { code: "ETIMEDOUT", signal: "SIGTERM" });
+    });
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(fetchBaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "main");
+    expect(log.warn).toHaveBeenCalledWith("poller", "fetch before merge timed out", expect.anything());
+    // A failed fetch is not fatal: the merge proceeds on the base it has.
+    expect(mergeToBase).toHaveBeenCalled();
+  });
+
+  it("wakes another pass after a merge, so a sibling queued behind it merges next", () => {
+    // Merges are serial: the pass that merged the older worker skipped the
+    // newer one. Garden's own push no longer runs the worktree's pre-push poll
+    // trigger, so the merge path has to wake that next pass itself.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "calm-bay", worktreePath: "/tmp/wt/myproject/calm-bay", branchName: "calm-bay",
+        prState: "merge-pending", mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+      makeWorker({ prState: "merge-pending", mergePendingAt: new Date(Date.now() - 5000).toISOString() }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalledTimes(1);
+    expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main", expect.anything());
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
+  });
+
   it("merges when HEAD is the SHA cleared for merge, and clears the rebased tip", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
@@ -5264,12 +5308,9 @@ describe("poll — reviewer prompt", () => {
   it("injects the spec warning when the diff modifies a spec file", () => {
     setupForReview();
     vi.mocked(getChangedFiles).mockReturnValue(["docs/STATUS.md"]);
-    vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
-      if (String(p).endsWith("STATUS.md")) {
-        return "# Spec\n\nIf the code disagrees with this document, the code is wrong.";
-      }
-      return "{}";
-    }) as typeof fs.readFileSync);
+    vi.mocked(readCommittedFiles).mockImplementation((_wt, paths) => new Map(paths
+      .filter(p => p.endsWith("STATUS.md"))
+      .map(p => [p, "# Spec\n\nIf the code disagrees with this document, the code is wrong."])));
 
     poll("myproject");
 
@@ -5299,12 +5340,9 @@ describe("poll — reviewer prompt", () => {
   it("does not treat a markdown file without the marker as a spec", () => {
     setupForReview();
     vi.mocked(getChangedFiles).mockReturnValue(["README.md"]);
-    vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
-      if (String(p).endsWith("README.md")) {
-        return "# Project Readme\n\nThis is a normal readme without spec markers.";
-      }
-      return "{}";
-    }) as typeof fs.readFileSync);
+    vi.mocked(readCommittedFiles).mockImplementation((_wt, paths) => new Map(paths
+      .filter(p => p === "README.md")
+      .map(p => [p, "# Project Readme\n\nThis is a normal readme without spec markers."])));
 
     poll("myproject");
 

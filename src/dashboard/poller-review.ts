@@ -4,7 +4,6 @@
 // The reviewer is a separate Claude process running `claude -p` inside the
 // worker's worktree, in a hidden tmux window. GARDEN_REVIEWER=1 marks its
 // hooks so they don't get treated as worker hooks.
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { type ProjectConfig, tryGetProject, getMaxConcurrentReviews } from "../config.js";
 import { addAlert } from "./alerts.js";
@@ -17,9 +16,10 @@ import { codexStderrSidecar } from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
 import {
-  abortRebase, forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
+  abortRebase, fetchBaseBranch, forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
   getDiffNumstat, hasCommitsAhead, getChangedFiles, hasRebaseInProgress, isWorktreeDirty,
 } from "./git.js";
+import { gitTimedOut } from "./git-exec.js";
 import { getWorkflow } from "./workflows/index.js";
 import { isPublishablePath } from "./designer-paths.js";
 import { refreshDashboard } from "./header.js";
@@ -1593,12 +1593,11 @@ function launchReview(
 
   // Fetch latest base branch so the reviewer can rebase onto it
   try {
-    execFileSync("git", ["fetch", "origin", baseBranch], {
-      cwd: wtPath,
-      stdio: "ignore",
-    });
+    fetchBaseBranch(wtPath, baseBranch);
   } catch (err) {
-    log.debug("poller", "fetch before review failed", { worker: entry.name, data: { project: projectName, error: String(err) } });
+    const data = { project: projectName, error: String(err) };
+    if (gitTimedOut(err)) log.warn("poller", "fetch before review timed out", { worker: entry.name, data });
+    else log.debug("poller", "fetch before review failed", { worker: entry.name, data });
   }
 
   const prompt = buildReviewPrompt(projectName, projectPath, baseBranch, entry);

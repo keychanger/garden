@@ -8,6 +8,7 @@ import type { WorkerEntry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { isGeneratedWorkerName } from "./names.js";
 import { log } from "./log.js";
+import { runGit, runGitBytes } from "./git-exec.js";
 
 const WORKTREE_BASE = path.join(
   process.env.HOME ?? "",
@@ -104,7 +105,7 @@ export type PublishResult = { ok: true } | { ok: false; error: string };
 // caller can surface the real reason instead of a generic remediation hint.
 export function tryPublishBranch(repoPath: string, branchName: string): PublishResult {
   try {
-    git(repoPath, "push", "-u", "origin", branchName);
+    operatorGit(repoPath, "push", "-u", "origin", branchName);
     log.info("git", "published branch to origin", { data: { branchName } });
     return { ok: true };
   } catch (err) {
@@ -198,11 +199,11 @@ export function createWorktree(
 ): void {
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
   if (opts.useExistingBranch) {
-    git(repoPath, "worktree", "add", wtPath, branchName);
+    operatorGit(repoPath, "worktree", "add", wtPath, branchName);
   } else if (opts.startPoint) {
-    git(repoPath, "worktree", "add", wtPath, "-b", branchName, opts.startPoint);
+    operatorGit(repoPath, "worktree", "add", wtPath, "-b", branchName, opts.startPoint);
   } else {
-    git(repoPath, "worktree", "add", wtPath, "-b", branchName);
+    operatorGit(repoPath, "worktree", "add", wtPath, "-b", branchName);
   }
   log.info("git", "created worktree", { data: { branchName } });
   installDeps(wtPath);
@@ -235,7 +236,7 @@ export function commitExists(repoPath: string, sha: string): boolean {
 // (not fail on) an offline origin.
 export function fetchOrigin(repoPath: string): boolean {
   try {
-    git(repoPath, "fetch", "origin");
+    operatorGit(repoPath, "fetch", "origin");
     return true;
   } catch {
     return false;
@@ -253,7 +254,7 @@ export function workerCleanupMarkerPath(project: string, worker: string): string
 // right for their callers and wrong for this one.
 export function gitCleanupStep(repoPath: string, args: string[]): string | null {
   try {
-    git(repoPath, ...args);
+    operatorGit(repoPath, ...args);
     return null;
   } catch (err) {
     return gitErrText(err) || `git ${args[0]} failed`;
@@ -268,7 +269,7 @@ export function gitCleanupOutput(
   args: string[],
 ): { ok: true; output: string } | { ok: false; error: string } {
   try {
-    return { ok: true, output: git(repoPath, ...args) };
+    return { ok: true, output: operatorGit(repoPath, ...args) };
   } catch (err) {
     return { ok: false, error: gitErrText(err) || `git ${args[0]} failed` };
   }
@@ -276,7 +277,7 @@ export function gitCleanupOutput(
 
 export function removeWorktree(repoPath: string, wtPath: string): void {
   try {
-    git(repoPath, "worktree", "remove", wtPath, "--force");
+    operatorGit(repoPath, "worktree", "remove", wtPath, "--force");
     log.info("git", "removed worktree");
   } catch (err) {
     log.warn("git", "failed to remove worktree", {
@@ -295,7 +296,7 @@ export function worktreeExists(wtPath: string): boolean {
 
 export function deleteBranch(repoPath: string, branchName: string): void {
   try {
-    git(repoPath, "branch", "-D", branchName);
+    operatorGit(repoPath, "branch", "-D", branchName);
     log.info("git", "deleted branch", { data: { branchName } });
   } catch (err) {
     log.warn("git", "failed to delete branch", {
@@ -325,7 +326,59 @@ export function getRemoteTrackingSha(wtPath: string, branchName: string): string
 }
 
 export function getDiffAgainstBase(wtPath: string, baseBranch: string): string {
-  return git(wtPath, "diff", `origin/${baseBranch}...HEAD`);
+  return git(wtPath, "diff", ...DIFF_SAFETY_ARGS, `origin/${baseBranch}...HEAD`);
+}
+
+// Refresh origin/<base> in a worker's worktree before a review or a merge reads
+// it. A failure is the caller's to log: neither path treats it as fatal.
+export function fetchBaseBranch(wtPath: string, baseBranch: string): void {
+  git(wtPath, "fetch", "origin", baseBranch);
+}
+
+// Regular files as committed at `rev`, read from the object store rather than
+// the worktree. The prompt builders read these from the unsandboxed poller, and
+// the worktree is the worker's: a committed symlink makes a plain read follow it
+// to a credential file, or to the poller's own FIFO, which never reaches EOF. A
+// symlink or submodule entry is skipped, so a symlinked CLAUDE.md -> AGENTS.md
+// pair is read once. The result keeps the input order and omits paths with no
+// regular file at `rev`; it is empty when git fails.
+export function readCommittedFiles(
+  wtPath: string,
+  paths: readonly string[],
+  rev = "HEAD",
+): Map<string, string> {
+  const files = new Map<string, string>();
+  const wanted = [...new Set(paths)].filter(Boolean);
+  if (wanted.length === 0) return files;
+  try {
+    const blobs = new Map<string, string>();
+    // Names come from the worker's branch; a leading ":(" must not read as pathspec magic.
+    const listing = runGit(wtPath, ["--literal-pathspecs", "ls-tree", "-z", rev, "--", ...wanted]);
+    for (const record of listing.split("\0")) {
+      const entry = record.match(/^(100644|100755) blob ([0-9a-f]+)\t(.+)$/s);
+      if (entry) blobs.set(entry[3], entry[2]);
+    }
+    const oids = [...new Set(blobs.values())];
+    if (oids.length === 0) return files;
+    // One record per object, in input order: "<oid> blob <size>\n<bytes>\n".
+    const out = runGitBytes(wtPath, ["cat-file", "--batch"], oids.map(oid => `${oid}\n`).join(""));
+    const contents = new Map<string, string>();
+    let pos = 0;
+    for (const oid of oids) {
+      const eol = out.indexOf(0x0a, pos);
+      const size = Number(out.toString("utf-8", pos, eol).split(" ")[2]);
+      contents.set(oid, out.toString("utf-8", eol + 1, eol + 1 + size));
+      pos = eol + 1 + size + 1;
+    }
+    for (const file of wanted) {
+      const oid = blobs.get(file);
+      if (oid !== undefined) files.set(file, contents.get(oid) ?? "");
+    }
+  } catch (err) {
+    log.warn("git", "readCommittedFiles failed", { data: { rev, error: String(err) } });
+    files.clear();
+  }
+  return files;
 }
 
 export function cleanWorktree(
@@ -432,10 +485,7 @@ export function hasRebaseInProgress(worktreePath: string): boolean {
 // Used by the resolver verification to confirm the branch is rebased onto base.
 export function isAncestor(worktreePath: string, ancestor: string, descendant: string): boolean {
   try {
-    execFileSync("git", ["merge-base", "--is-ancestor", ancestor, descendant], {
-      cwd: worktreePath,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    git(worktreePath, "merge-base", "--is-ancestor", ancestor, descendant);
     return true;
   } catch {
     return false;
@@ -484,18 +534,14 @@ export function mergeToBase(
   baseBranch: string,
   ctx?: { project?: string; worker?: string },
 ): void {
-  git(repoPath, "fetch", "origin");
+  operatorGit(repoPath, "fetch", "origin");
   // Resolve to concrete SHAs so we can verify fast-forward and push without
   // needing a clean working tree or switching branches in the project checkout.
   const branchSha = git(repoPath, "rev-parse", `origin/${branchName}`);
   const baseSha = git(repoPath, "rev-parse", `origin/${baseBranch}`);
   // Verify fast-forward: branch must be a descendant of current base
   try {
-    execFileSync("git", ["merge-base", "--is-ancestor", baseSha, branchSha], {
-      cwd: repoPath,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    git(repoPath, "merge-base", "--is-ancestor", baseSha, branchSha);
   } catch {
     throw new Error(
       `Cannot fast-forward: origin/${branchName} (${branchSha}) is not a descendant of origin/${baseBranch} (${baseSha})`,
@@ -509,7 +555,7 @@ export function mergeToBase(
   // veto it. Such a guard was shadowed by the core.hooksPath leak until
   // scopeHooksPathToWorktree fixed the leak, which silently re-armed it and
   // blocked every merge with a bare "failed to push some refs".
-  git(repoPath, "push", "--no-verify", "origin", `${branchSha}:refs/heads/${baseBranch}`);
+  operatorGit(repoPath, "push", "--no-verify", "origin", `${branchSha}:refs/heads/${baseBranch}`);
   log.info("git", "merged to base branch", {
     worker: ctx?.worker,
     data: { branchName, baseBranch, ...(ctx?.project ? { project: ctx.project } : {}) },
@@ -553,12 +599,12 @@ export function fastForwardBase(
   const current = currentBranch(repoPath);
   if (current === baseBranch) {
     try {
-      git(repoPath, "fetch", "origin", baseBranch);
+      operatorGit(repoPath, "fetch", "origin", baseBranch);
     } catch (err) {
       return { ok: false, reason: "stuck", error: gitErrText(err) };
     }
     try {
-      git(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
+      operatorGit(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
       log.info("git", "fast-forwarded local base checkout", { worker, data: baseData });
       return { ok: true, advanced: "worktree" };
     } catch (err) {
@@ -576,7 +622,7 @@ export function fastForwardBase(
         // move, since its content already matches. Never reset a dirty tree:
         // that would destroy uncommitted operator work.
         try {
-          git(repoPath, "reset", "--hard", `origin/${baseBranch}`);
+          operatorGit(repoPath, "reset", "--hard", `origin/${baseBranch}`);
           log.info("git", "auto-healed redundant local base divergence onto origin", {
             worker,
             data: baseData,
@@ -609,12 +655,12 @@ export function fastForwardBase(
   // Off-base: refresh the tracking ref (so divergence math below is accurate),
   // then advance the local branch ref without touching the working tree.
   try {
-    git(repoPath, "fetch", "origin", baseBranch);
+    operatorGit(repoPath, "fetch", "origin", baseBranch);
   } catch (err) {
     return { ok: false, reason: "stuck", error: gitErrText(err) };
   }
   try {
-    git(repoPath, "fetch", "origin", `${baseBranch}:${baseBranch}`);
+    operatorGit(repoPath, "fetch", "origin", `${baseBranch}:${baseBranch}`);
     log.info("git", "advanced off-base local base ref to origin", {
       worker,
       data: { ...baseData, currentBranch: current },
@@ -656,7 +702,7 @@ function gitErrText(err: unknown): string {
 // caller never resets onto origin under uncertainty.
 function treeMatchesOrigin(repoPath: string, baseBranch: string): boolean {
   try {
-    git(repoPath, "diff", "--quiet", "HEAD", `origin/${baseBranch}`);
+    git(repoPath, "diff", "--quiet", ...DIFF_SAFETY_ARGS, "HEAD", `origin/${baseBranch}`);
     return true;
   } catch {
     return false;
@@ -687,9 +733,9 @@ export function deleteRemoteBranch(
 ): void {
   const projectData = ctx?.project ? { project: ctx.project } : {};
   try {
-    const refs = git(repoPath, "ls-remote", "--heads", "origin", branchName);
+    const refs = operatorGit(repoPath, "ls-remote", "--heads", "origin", branchName);
     if (!refs.trim()) return;
-    git(repoPath, "push", "origin", "--delete", branchName);
+    operatorGit(repoPath, "push", "origin", "--delete", branchName);
     log.info("git", "deleted remote branch", {
       worker: ctx?.worker,
       data: { branchName, ...projectData },
@@ -741,7 +787,7 @@ export function getDiffStat(
   files: string[] = [],
 ): string {
   try {
-    const args = ["diff", "--stat", range];
+    const args = ["diff", "--stat", ...DIFF_SAFETY_ARGS, range];
     if (files.length > 0) args.push("--", ...files);
     return git(wtPath, ...args).trim();
   } catch (err) {
@@ -771,7 +817,7 @@ export function getDiffNumstat(
 ): DiffNumstat {
   const total: DiffNumstat = { files: 0, insertions: 0, deletions: 0 };
   try {
-    const out = git(wtPath, "diff", "--numstat", `${fromSha}..${toSha}`).trim();
+    const out = git(wtPath, "diff", "--numstat", ...DIFF_SAFETY_ARGS, `${fromSha}..${toSha}`).trim();
     if (!out) return total;
     for (const line of out.split("\n")) {
       const parts = line.split("\t");
@@ -827,7 +873,7 @@ export function resolveHolisticDiff(
   touchedFiles: string[],
 ): string {
   try {
-    const args = ["diff", `${fromSha}..${toRef}`];
+    const args = ["diff", ...DIFF_SAFETY_ARGS, `${fromSha}..${toRef}`];
     if (touchedFiles.length > 0) args.push("--", ...touchedFiles);
     return git(wtPath, ...args);
   } catch (err) {
@@ -968,7 +1014,7 @@ export function revertChurn(repoPath: string, before: ReadonlySet<string>): stri
   const churn = listModifiedTrackedFiles(repoPath).filter(p => !before.has(p));
   if (churn.length === 0) return [];
   try {
-    git(repoPath, "checkout", "--", ...churn);
+    operatorGit(repoPath, "checkout", "--", ...churn);
     return churn;
   } catch (err) {
     // A failed revert leaves the churn in place, which is exactly the state
@@ -1004,12 +1050,7 @@ export function countCommitsAheadOfBase(
 // The newest commit as `<short sha> <subject>`, or "" when git cannot say.
 export function getHeadSubject(wtPath: string): string {
   try {
-    return execFileSync("git", ["log", "-1", "--oneline", "HEAD"], {
-      cwd: wtPath,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10_000,
-    }).trim();
+    return runGit(wtPath, ["log", "-1", "--oneline", "HEAD"], { timeout: 10_000 }).trim();
   } catch {
     return "";
   }
@@ -1017,14 +1058,7 @@ export function getHeadSubject(wtPath: string): string {
 
 export function getCommitSummary(wtPath: string, baseBranch: string): string {
   try {
-    return execFileSync("git", [
-      "log", "--oneline", `origin/${baseBranch}..HEAD`,
-    ], {
-      cwd: wtPath,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10_000,
-    }).trim();
+    return runGit(wtPath, ["log", "--oneline", `origin/${baseBranch}..HEAD`], { timeout: 10_000 }).trim();
   } catch (err) {
     log.warn("git", "getCommitSummary failed", { data: { baseBranch, error: String(err) } });
     return "";
@@ -1040,14 +1074,7 @@ export function getCommitSummary(wtPath: string, baseBranch: string): string {
 // caller needs is the yes/no.
 export function hasCommitsAhead(wtPath: string, baseBranch: string): boolean | null {
   try {
-    const out = execFileSync("git", [
-      "rev-list", "--count", `origin/${baseBranch}..HEAD`,
-    ], {
-      cwd: wtPath,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10_000,
-    }).trim();
+    const out = runGit(wtPath, ["rev-list", "--count", `origin/${baseBranch}..HEAD`], { timeout: 10_000 }).trim();
     return parseInt(out, 10) > 0;
   } catch (err) {
     log.warn("git", "hasCommitsAhead failed", { data: { baseBranch, error: String(err) } });
@@ -1058,14 +1085,7 @@ export function hasCommitsAhead(wtPath: string, baseBranch: string): boolean | n
 export function getNewCommitSummary(wtPath: string, sinceSha: string | undefined): string {
   if (!sinceSha) return "";
   try {
-    return execFileSync("git", [
-      "log", "--oneline", `${sinceSha}..HEAD`,
-    ], {
-      cwd: wtPath,
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10_000,
-    }).trim();
+    return runGit(wtPath, ["log", "--oneline", `${sinceSha}..HEAD`], { timeout: 10_000 }).trim();
   } catch (err) {
     log.warn("git", "getNewCommitSummary failed", { data: { sinceSha, error: String(err) } });
     return "";
@@ -1074,7 +1094,7 @@ export function getNewCommitSummary(wtPath: string, sinceSha: string | undefined
 
 export function pruneWorktrees(repoPath: string): void {
   try {
-    git(repoPath, "worktree", "prune");
+    operatorGit(repoPath, "worktree", "prune");
   } catch {
     // best effort
   }
@@ -1220,15 +1240,20 @@ export function getRemoteHost(repoPath: string): string | null {
   }
 }
 
+// Hooks and fsmonitor off (see git-exec.ts): every helper here may be handed a
+// worker's worktree. operatorGit keeps them, for the commands garden runs in
+// the operator's own checkout.
 function git(cwd: string, ...args: string[]): string {
-  return execFileSync("git", args, {
-    cwd,
-    encoding: "utf-8",
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 60_000,
-    maxBuffer: 256 * 1024 * 1024,
-  }).trim();
+  return runGit(cwd, args).trim();
 }
+
+function operatorGit(cwd: string, ...args: string[]): string {
+  return runGit(cwd, args, { operatorHooks: true }).trim();
+}
+
+// Diff drivers and textconv filters are programs named in git config, which a
+// Codex worker's sandbox can write, so content diffs garden builds run neither.
+const DIFF_SAFETY_ARGS = ["--no-ext-diff", "--no-textconv"] as const;
 
 // Absolute path to the repo's shared git common dir (`<main>/.git`) — the
 // object store and refs every linked worktree writes through. A worktree's own

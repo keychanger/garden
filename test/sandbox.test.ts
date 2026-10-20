@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { execFileSync } from "node:child_process";
 import { describe, it, expect, vi } from "vitest";
 import { buildSandboxConfig } from "../src/dashboard/sandbox.js";
 
@@ -41,6 +42,29 @@ describe("buildSandboxConfig", () => {
       spy.mockRestore();
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("denies writes to every worktree's admin pointers and config in the project's git dir", () => {
+    // The sandbox can write the shared git dir, which holds every sibling
+    // worktree's admin entry; garden's own unsandboxed git trusts those files.
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "garden-sandbox-git-"));
+    try {
+      execFileSync("git", ["init", "-q", repo]);
+      const cfg = buildSandboxConfig({ worktreePath: "/wt", project: { path: repo }, remoteHost: null });
+      const worktrees = path.join(fs.realpathSync(repo), ".git", "worktrees");
+      expect(cfg.filesystem.denyWrite).toEqual([
+        path.join(worktrees, "*", "config.worktree"),
+        path.join(worktrees, "*", "commondir"),
+        path.join(worktrees, "*", "gitdir"),
+      ]);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("denies no writes when the project path is not a git repository", () => {
+    const cfg = buildSandboxConfig({ worktreePath: "/wt", project: { path: "/repo" }, remoteHost: null });
+    expect(cfg.filesystem.denyWrite).toBeUndefined();
   });
 
   it("enables local test servers only for projects that opt in", () => {

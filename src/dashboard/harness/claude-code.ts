@@ -14,10 +14,11 @@
 // atomic-write, config, registry types) are safe imports.
 import fs from "node:fs";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import type { ProjectConfig } from "../../config.js";
 import { atomicWriteFile } from "../atomic-write.js";
 import { getRemoteHost } from "../git.js";
+import { runGit } from "../git-exec.js";
+import { appendToStableFile, readStableRegularFile } from "../safe-read.js";
 import { claudeSettingsPath } from "../headless-paths.js";
 import { log } from "../log.js";
 import { resolveHookRunner, hookCompileCachePrefix, resolveNodeBin } from "../runner.js";
@@ -234,8 +235,8 @@ function retireWorktreeSettings(targetDir: string): void {
     }
     // A worker may have hidden the overwritten file with skip-worktree, the
     // workaround before this fix; checkout skips such a path, so clear it first.
-    execFileSync("git", ["-C", targetDir, "update-index", "--no-skip-worktree", "--", rel], { stdio: "pipe" });
-    execFileSync("git", ["-C", targetDir, "checkout", "--", rel], { stdio: "pipe" });
+    runGit(targetDir, ["update-index", "--no-skip-worktree", "--", rel]);
+    runGit(targetDir, ["checkout", "--", rel]);
   } catch (err) {
     log.warn("workers", "old garden settings.json not retired; hooks may double", {
       data: { dir: targetDir, error: String(err) },
@@ -245,7 +246,7 @@ function retireWorktreeSettings(targetDir: string): void {
 
 function isTracked(dir: string, rel: string): boolean {
   try {
-    execFileSync("git", ["-C", dir, "ls-files", "--error-unmatch", "--", rel], { stdio: "ignore" });
+    runGit(dir, ["ls-files", "--error-unmatch", "--", rel], { quietStderr: true });
     return true;
   } catch {
     return false;
@@ -273,6 +274,8 @@ function isGardenSettings(content: string): boolean {
 //
 // The exclude file lives at the git common dir (shared across worktrees);
 // a missing entry is added once and persists.
+const MAX_EXCLUDE_BYTES = 1024 * 1024;
+
 function ensureWorktreeExcludes(targetDir: string): void {
   // The patterns must stay in sync with the bootstrap script's `for pattern`
   // loop in create.ts. .claude/ + .garden-hooks/ shipped with
@@ -283,9 +286,7 @@ function ensureWorktreeExcludes(targetDir: string): void {
   const patterns = [".claude/", ".garden-hooks/", ".garden/", ".garden-done", ".garden-awaiting-input"];
   let commonDir: string;
   try {
-    commonDir = execFileSync("git", ["-C", targetDir, "rev-parse", "--git-common-dir"], {
-      encoding: "utf-8",
-    }).trim();
+    commonDir = runGit(targetDir, ["rev-parse", "--git-common-dir"]).trim();
   } catch {
     return; // Worktree may not exist yet on first hook installation.
   }
@@ -295,18 +296,18 @@ function ensureWorktreeExcludes(targetDir: string): void {
     ? commonDir
     : path.resolve(targetDir, commonDir);
   const excludeFile = path.join(resolvedCommonDir, "info", "exclude");
-  let current: string;
-  try {
-    current = fs.readFileSync(excludeFile, "utf-8");
-  } catch {
-    return; // No exclude file yet (rare; bootstrap will create one).
-  }
+  // The shared git dir is worker-writable, and this runs unsandboxed: a
+  // symlink or FIFO planted at info/exclude must be neither followed nor
+  // written through.
+  const file = readStableRegularFile(excludeFile, resolvedCommonDir, MAX_EXCLUDE_BYTES);
+  if (!file) return; // No exclude file yet (rare; bootstrap will create one), or not a plain file.
+  const current = file.data.toString("utf-8");
   const lines = new Set(current.split("\n").map(l => l.trim()));
   const missing = patterns.filter(p => !lines.has(p));
   if (missing.length === 0) return;
   const tail = (current.endsWith("\n") ? "" : "\n") + missing.join("\n") + "\n";
   try {
-    fs.appendFileSync(excludeFile, tail);
+    appendToStableFile(excludeFile, file, tail);
   } catch {
     /* best effort — exclude is informational, not load-bearing */
   }

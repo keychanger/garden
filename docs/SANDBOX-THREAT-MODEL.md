@@ -27,9 +27,10 @@ Two trust levels matter:
   sandbox; that is the repo owner's committed config, at the trust level of its hooks. A Codex worker runs inside
   Codex's own `workspace-write` sandbox. The Codex *review family* is the exception and
   is not in this tier — see residuals.
-- **Unsandboxed** — the poller, watchdog, and the operator's own shell run with the
-  operator's full privileges. They read the worker registry and the operator's git
-  checkout, and they execute git operations that fire git hooks.
+- **Unsandboxed** — the poller, watchdog, garden's Claude Code hook handlers, and the
+  operator's own shell run with the operator's full privileges. They read the worker
+  registry and files in workers' worktrees, and they run git both in the operator's
+  checkout and inside workers' worktrees.
 
 The danger is any path by which sandboxed code influences what unsandboxed code later
 reads or runs.
@@ -53,7 +54,40 @@ reads or runs.
   `.garden-hooks/` was installed last — so any worker could plant a `pre-commit` that the
   operator's next commit executed unsandboxed. The scoped install closes that: the main
   checkout runs its own default `.git/hooks`, and the operator's own hooks (e.g. a
-  block-push-to-main guard) stay armed.
+  block-push-to-main guard) stay armed. The scoping still left garden's own git exposed:
+  the poller pushes, fetches, rebases and checks out inside the worktree, where
+  `.garden-hooks/` is worker-writable and git-excluded, so a planted `pre-push` ran
+  unsandboxed on the next verdict push. Every git command garden runs now goes through
+  `runGit` (`src/dashboard/git-exec.ts`) with `core.hooksPath=/dev/null` and
+  `core.fsmonitor=false`; only garden's operations on the operator's own checkout
+  (fast-forward, base push, `worktree add`, branch cleanup) keep that checkout's hooks,
+  which belong to the operator (board's beads hooks import on post-merge).
+- **Git admin-file isolation.** Claude Code write-protects the session's own repository
+  config: probed from inside a worker sandbox on Claude Code 2.1.304, `.git/config`,
+  `.git/config.worktree`, `.git/hooks`, the worktree's `.git` pointer, and its admin
+  entry's `config.worktree` and `commondir` are all denied. The shared git dir is
+  otherwise writable (commits need it), and with it every *other* worktree's admin entry
+  under `<main>/.git/worktrees/<name>/`. A worker could point a sibling's `commondir` at
+  a repository it controls, or put an fsmonitor, ssh command or filter driver in the
+  sibling's `config.worktree`, and garden's unsandboxed git in that worktree would run
+  it. `buildSandboxConfig` adds `filesystem.denyWrite` globs for
+  `<main>/.git/worktrees/*/{config.worktree,commondir,gitdir}`, which cover worktrees
+  created after the session started. Claude Code applies the globs fully on macOS and
+  warns that Linux support for them is partial.
+- **Reads of worker-controlled files.** Garden never follows a path the worker controls
+  from an unsandboxed process. The review prompt's documentation, test-file and spec
+  inputs are read as committed regular-file blobs at HEAD (`readCommittedFiles` in
+  `src/dashboard/git.ts`), never from the worktree; a committed symlink is skipped rather
+  than followed, which kept a symlinked `DESIGN.md` from inlining a credential file the
+  worker's own sandbox cannot read, or the poller's signal FIFO, which never reaches EOF.
+  The grow goal and log files, which are git-excluded and edited mid-loop, are read with
+  `readStableRegularFile` (`src/dashboard/safe-read.ts`): no-follow, non-blocking (a FIFO
+  is refused at fstat instead of blocking the open), contained within the worktree,
+  single-link, and size-capped. The same reader serves the Codex installer's read of the
+  worktree `AGENTS.md`, which it composes back into the worker's own instructions (a
+  symlink there would otherwise deliver a file the worker's sandbox cannot read), the
+  handoff dispatcher's seed copies, and both installers' `info/exclude` heal, whose
+  append goes only to the file that was read (`appendToStableFile`).
 - **Review-channel integrity.** Reviewer, resolver, and CI-fix prompts, results, and
   harness sidecars live under `~/.garden/control/headless`, outside the worker's
   `~/.garden/sessions` write grant. Durable holistic shadow reports live under
@@ -106,10 +140,15 @@ reads or runs.
     widens nothing). That grant
     still includes `hooks/` and `config`, so a Codex worker can write `<main>/.git/hooks/*`
     (which the main checkout now runs, post git-hook isolation) or repoint `core.hooksPath`
-    via `config`. Narrowing the grant to exclude `hooks/`/`config` is pending validation
-    that Codex's `writable_roots` supports the required granularity and that commit/push
-    still work — until then, treat Codex workers as **do not run on untrusted repo
-    content**.
+    via `config`. It can also write every worktree's `config.worktree` and `commondir`,
+    which the claude-code sandbox denies. Garden's own git still runs with hooks,
+    fsmonitor, external diff drivers and textconv off, but other command-running keys
+    cannot be neutralized from the command line — an ssh command on fetch and push,
+    filter drivers on checkout and status, a signing program on rebase — so only removing
+    the write grant closes them. Narrowing the grant to exclude these files is pending
+    validation that Codex's `writable_roots` supports the required granularity and that
+    commit/push still work — until then, treat Codex workers as **do not run on untrusted
+    repo content**.
 - **A Codex reviewer runs with no sandbox at all.** `buildHeadlessCommand`
   (`src/dashboard/harness/codex-core.ts`) invokes `codex exec
   --dangerously-bypass-approvals-and-sandbox`, so a Codex reviewer/resolver/ci-fix agent
@@ -128,6 +167,19 @@ reads or runs.
   fix — moving the registry out of the worker-writable set and routing worker-initiated
   mutations (`garden workers grow`) through a validated request file the poller applies
   — remains required.
+- **Workers can still move git state they cannot execute through.** The shared refs
+  (including `refs/remotes/origin/*` and `packed-refs`), a sibling's `HEAD` and index, and
+  new `info/attributes`, `shallow` and `objects/info/alternates` files in the shared git
+  dir are all writable. None of them makes git run a program — attributes can only select
+  drivers, and the files that define drivers are denied — but they can point garden at a
+  different commit or a truncated history. Review sees the resulting diff, and a worker
+  already holds push credentials, so this is an integrity gap rather than an escape.
+- **Non-handoff seeds still pass through the worker-writable sessions dir.** A new
+  worker's first prompt for `workers new --seed`, grow, designer and loop spawns is
+  written under `~/.garden/sessions` and read back by the unsandboxed seeder a few seconds
+  later, so another worker could replace it before delivery: a FIFO there stalls the
+  seed, and a substituted file becomes the new worker's task. Handoff seeds are copied
+  into `~/.garden/control/handoff` before use; the other seeds are due to move there too.
 - **`postMerge`/`checks` commands are trusted.** They come from `~/.garden/config.yml`,
   which is not in any sandbox write grant, so a worker cannot set them. Do not move
   `config.yml` into a writable location.

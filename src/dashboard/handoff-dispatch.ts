@@ -23,6 +23,7 @@ import { getCrew } from "./crew.js";
 import { isWorkerEffort } from "./worker-effort.js";
 import { loadConfig } from "../config.js";
 import { log } from "./log.js";
+import { readStableRegularFile, type StableFile } from "./safe-read.js";
 
 const UUID_SOURCE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const HANDOFF_ID_RE = new RegExp(`^${UUID_SOURCE}$`, "i");
@@ -181,63 +182,6 @@ export function withdrawPendingHandoffRequest(id: string): boolean {
     return true;
   } catch {
     return false;
-  }
-}
-
-interface StableFile {
-  data: Buffer;
-  dev: number;
-  ino: number;
-}
-
-function sameFile(a: Pick<fs.Stats, "dev" | "ino">, b: Pick<fs.Stats, "dev" | "ino">): boolean {
-  return a.dev === b.dev && a.ino === b.ino;
-}
-
-function withinDirectory(root: string, file: string): boolean {
-  const relative = path.relative(root, file);
-  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
-}
-
-// Read an untrusted file through a pinned descriptor. Containment is checked
-// both before and after the read, the final component may not be a symlink or
-// hard link, and inode/timestamps must stay stable for the whole operation.
-// The returned bytes no longer depend on the worker-writable pathname.
-function readStableRegularFile(filePath: string, rootDir: string, maxBytes: number): StableFile | null {
-  let fd: number | null = null;
-  try {
-    const rootBefore = fs.lstatSync(rootDir);
-    if (!rootBefore.isDirectory()) return null;
-    const realRootBefore = fs.realpathSync(rootDir);
-    const realFileBefore = fs.realpathSync(filePath);
-    if (!withinDirectory(realRootBefore, realFileBefore)) return null;
-
-    fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    const before = fs.fstatSync(fd);
-    const pathBefore = fs.statSync(filePath);
-    if (!before.isFile() || before.nlink !== 1 || !sameFile(before, pathBefore)) return null;
-    if (before.size > maxBytes) return null;
-
-    const data = fs.readFileSync(fd);
-    const after = fs.fstatSync(fd);
-    const rootAfter = fs.lstatSync(rootDir);
-    const realRootAfter = fs.realpathSync(rootDir);
-    const realFileAfter = fs.realpathSync(filePath);
-    const pathAfter = fs.statSync(filePath);
-    if (!rootAfter.isDirectory() || !sameFile(rootBefore, rootAfter)) return null;
-    if (realRootAfter !== realRootBefore || !withinDirectory(realRootAfter, realFileAfter)) return null;
-    if (!sameFile(before, after) || !sameFile(after, pathAfter)) return null;
-    if (before.size !== after.size
-        || before.mtimeMs !== after.mtimeMs
-        || before.ctimeMs !== after.ctimeMs
-        || data.byteLength !== after.size) return null;
-    return { data, dev: after.dev, ino: after.ino };
-  } catch {
-    return null;
-  } finally {
-    if (fd !== null) {
-      try { fs.closeSync(fd); } catch { /* ignore */ }
-    }
   }
 }
 

@@ -20,6 +20,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getCommitSummary: vi.fn(() => "abc1234 fix: something"),
   getChangedFiles: vi.fn(() => ["src/foo.ts"]),
   resolveHolisticDiff: vi.fn(() => "holistic diff content"),
+  readCommittedFiles: vi.fn(),
 }));
 
 vi.mock("../src/rules.js", () => ({
@@ -27,9 +28,10 @@ vi.mock("../src/rules.js", () => ({
 }));
 
 import fs from "node:fs";
+import path from "node:path";
 import { tryGetProject } from "../src/config.js";
 import { buildRulesContext } from "../src/rules.js";
-import { getDiffAgainstBase, getDiffStat, getChangedFiles, resolveHolisticDiff } from "../src/dashboard/git.js";
+import { getDiffAgainstBase, getDiffStat, getChangedFiles, readCommittedFiles, resolveHolisticDiff } from "../src/dashboard/git.js";
 import { buildReviewPrompt, buildResolvePrompt, buildCiFixPrompt, buildHolisticFinalReviewPrompt, findSpecFiles, buildSpecWarning, readDocSections, readTestSections } from "../src/dashboard/prompts.js";
 import { MAX_REVIEW_PROMPT_BYTES } from "../src/dashboard/prompt-compose.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -45,8 +47,19 @@ function makeEntry(overrides?: Partial<WorkerEntry>): WorkerEntry {
   };
 }
 
+// The prompt builders read the worker's files as committed (readCommittedFiles);
+// serve those reads from the same readFileSync fixture each test sets up.
+function committedFromFixture(wtPath: string, paths: readonly string[]): Map<string, string> {
+  const files = new Map<string, string>();
+  for (const p of paths) {
+    try { files.set(p, String(fs.readFileSync(path.join(wtPath, p), "utf-8"))); } catch { /* absent at HEAD */ }
+  }
+  return files;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(readCommittedFiles).mockImplementation(committedFromFixture);
   vi.mocked(getDiffAgainstBase).mockReturnValue("diff content");
   vi.mocked(getChangedFiles).mockReturnValue(["src/foo.ts"]);
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject", checks: null } as ReturnType<typeof tryGetProject>);

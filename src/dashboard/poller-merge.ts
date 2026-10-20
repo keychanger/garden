@@ -5,7 +5,7 @@
 // The serial merge gate (only the earliest mergePendingAt worker proceeds)
 // lives here. When a rebase conflict appears, control transfers to the
 // resolver lifecycle in poller-resolve.ts.
-import { execSync, execFileSync, spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -21,10 +21,11 @@ import { dispatchDelayedGrowContinue } from "./grow-continue.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   abortRebase, cleanWorktree, deleteRemoteBranch, ensureNoRebaseInProgress,
-  fastForwardBase, forcePushBranch, getBranchHeadSha, getChangedFiles,
+  fastForwardBase, fetchBaseBranch, forcePushBranch, getBranchHeadSha, getChangedFiles,
   getChangedFilesBetween, getCommitSummary, getHeadSubject, getWorkerBaseBranch, isAncestor, listModifiedTrackedFiles,
   mergeToBase, rebaseBranch, revertChurn, syncWorktreeToRemote,
 } from "./git.js";
+import { gitTimedOut } from "./git-exec.js";
 import { refreshDashboard, setupStatusBar } from "./header.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { log } from "./log.js";
@@ -162,12 +163,11 @@ export function handleMergePending(
   // Fetch latest base branch (before the CI gate and the resume check, both
   // of which read origin/<base>).
   try {
-    execFileSync("git", ["fetch", "origin", baseBranch], {
-      cwd: wtPath,
-      stdio: "ignore",
-    });
+    fetchBaseBranch(wtPath, baseBranch);
   } catch (err) {
-    log.debug("poller", "fetch before merge failed", { worker: entry.name, data: { project: projectName, error: String(err) } });
+    const data = { project: projectName, error: String(err) };
+    if (gitTimedOut(err)) log.warn("poller", "fetch before merge timed out", { worker: entry.name, data });
+    else log.debug("poller", "fetch before merge failed", { worker: entry.name, data });
   }
 
   // Resume an interrupted merge. mergeToBase fast-forward-pushes the worker's
@@ -605,6 +605,11 @@ function completeFinalization(
   notifyPostMerge(projectName, projectPath, baseBranch, entry, preMergeChangedFiles);
   transitionToTerminal(projectName, projectPath, baseBranch, branchName, entry, sentinelPresent, sync, preMergeChangedFiles);
   refreshDashboard();
+  // Merges are serial, so the pass that merged this worker skipped any sibling
+  // queued behind it. Wake the next pass now. Garden's own push used to supply
+  // that wake through the worktree's pre-push poll trigger, which garden's git
+  // no longer runs (git-exec.ts).
+  scheduleDelayedPoke(projectName, 0);
 }
 
 // Phase 1 of finalizeMerge: bring the worker's worktree forward to the

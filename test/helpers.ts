@@ -2,6 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { beforeEach, afterEach, vi } from "vitest";
+import { SAFE_GIT_CONFIG } from "../src/dashboard/git-exec.js";
+
+// A git argv as the subcommand sees it: garden prefixes its own git with
+// SAFE_GIT_CONFIG (hooks and fsmonitor off), which mocks routing on the
+// subcommand should look past.
+export function gitSubcommandArgs(argv: readonly string[] | undefined): readonly string[] | undefined {
+  if (!argv) return argv;
+  const prefixed = SAFE_GIT_CONFIG.every((arg, i) => argv[i] === arg);
+  return prefixed ? argv.slice(SAFE_GIT_CONFIG.length) : argv;
+}
 
 let tmpHome: string;
 let originalHome: string | undefined;

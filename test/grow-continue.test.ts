@@ -9,6 +9,22 @@ vi.mock("node:fs", () => ({
   },
 }));
 
+// The goal and log files are read through the stable-file reader, whose own
+// refusals (symlinks, FIFOs, hard links) are covered in safe-read.test.ts.
+// Here it is served from the readFileSync fixture each test sets up.
+vi.mock("../src/dashboard/safe-read.js", async () => {
+  const fs = (await import("node:fs")).default;
+  return {
+    readStableRegularFile: vi.fn((filePath: string) => {
+      try {
+        return { data: Buffer.from(String(fs.readFileSync(filePath, "utf-8"))), dev: 0, ino: 0 };
+      } catch {
+        return null;
+      }
+    }),
+  };
+});
+
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(),
   SESSIONS_DIR: "/tmp/garden-sessions-test",
@@ -38,6 +54,7 @@ import {
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
 import { tryGetProject } from "../src/config.js";
 import fs from "node:fs";
+import { readStableRegularFile } from "../src/dashboard/safe-read.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 function makeGrow(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
@@ -303,6 +320,30 @@ describe("buildGrowContinuePrompt — goal-file resolution", () => {
     const prompt = buildGrowContinuePrompt(entry);
     expect(prompt).toContain("amended goal: focus on test coverage");
     expect(prompt).not.toContain("original goal: hardening");
+  });
+
+  it("reads the goal and log files through the stable-file reader, rooted at the worktree", () => {
+    // The poller pastes both into the worker's next prompt, so neither may be
+    // read in a way that follows a symlink the worker planted.
+    buildGrowContinuePrompt(makeGrow());
+    expect(readStableRegularFile).toHaveBeenCalledWith(
+      "/tmp/wt/myproject/tall-fern/.garden/grow-goal.md", "/tmp/wt/myproject/tall-fern", 1024 * 1024,
+    );
+    expect(readStableRegularFile).toHaveBeenCalledWith(
+      "/tmp/wt/myproject/tall-fern/.garden/grow-log.md", "/tmp/wt/myproject/tall-fern", 1024 * 1024,
+    );
+  });
+
+  it("falls back to entry.grow.seed when the reader refuses the goal file", () => {
+    // A symlink or FIFO at the path: readable to a plain read, refused here.
+    stubGoalFile("contents of whatever the worker linked to");
+    vi.mocked(readStableRegularFile).mockReturnValueOnce(null);
+    const entry = makeGrow({
+      grow: { seed: "original goal: hardening", iteration: 1, maxIterations: 5 },
+    });
+    const prompt = buildGrowContinuePrompt(entry);
+    expect(prompt).toContain("original goal: hardening");
+    expect(prompt).not.toContain("contents of whatever the worker linked to");
   });
 
   it("falls back to entry.grow.seed when the goal file is missing", () => {

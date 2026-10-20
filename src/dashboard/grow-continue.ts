@@ -8,7 +8,6 @@
 // The budget check therefore lives in `maybeAutoContinue` (poller-merge.ts),
 // not at preflight — by the time iter K = max completes and merges, the loop
 // is done; no extra respawn fires.
-import fs from "node:fs";
 import path from "node:path";
 import { tryGetProject } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -17,6 +16,7 @@ import {
   type LoopHooks,
 } from "./loop.js";
 import { log } from "./log.js";
+import { readStableRegularFile } from "./safe-read.js";
 import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
 } from "./registry.js";
@@ -189,15 +189,19 @@ export function buildGrowIteration1Seed(seed: string, maxIter: number): string {
 
 // --- Helpers -------------------------------------------------------------
 
-function readGrowLogFile(worktreePath: string | undefined): string | null {
+// The poller reads these unsandboxed and pastes them into the worker's next
+// prompt, so a symlink planted at either path would hand the worker a file its
+// own sandbox cannot read.
+const MAX_GROW_FILE_BYTES = 1024 * 1024;
+
+function readGrowWorktreeFile(worktreePath: string | undefined, rel: string): string | null {
   if (!worktreePath) return null;
-  const logPath = path.join(worktreePath, GROW_LOG_FILE_REL);
-  try {
-    const content = fs.readFileSync(logPath, "utf-8").trim();
-    return content || null;
-  } catch {
-    return null;
-  }
+  const file = readStableRegularFile(path.join(worktreePath, rel), worktreePath, MAX_GROW_FILE_BYTES);
+  return file?.data.toString("utf-8").trim() || null;
+}
+
+function readGrowLogFile(worktreePath: string | undefined): string | null {
+  return readGrowWorktreeFile(worktreePath, GROW_LOG_FILE_REL);
 }
 
 // Read .garden/grow-goal.md from the worktree. The convert CLI writes
@@ -207,14 +211,7 @@ function readGrowLogFile(worktreePath: string | undefined): string | null {
 // take effect on the next iteration without any explicit "amend"
 // command.
 function readGrowGoalFile(worktreePath: string | undefined): string | null {
-  if (!worktreePath) return null;
-  const goalPath = path.join(worktreePath, GROW_GOAL_FILE_REL);
-  try {
-    const content = fs.readFileSync(goalPath, "utf-8").trim();
-    return content || null;
-  } catch {
-    return null;
-  }
+  return readGrowWorktreeFile(worktreePath, GROW_GOAL_FILE_REL);
 }
 
 // Write the seed text to .garden/grow-goal.md in the worktree. Used by
