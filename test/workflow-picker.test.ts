@@ -30,13 +30,14 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../src/dashboard/tmux.js", () => ({
+vi.mock("../src/dashboard/tmux.js", async (importOriginal) => ({
   shellEscape: vi.fn((s: string) =>
     /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`),
   tmuxDisplay: vi.fn(),
   // Mirrors the real helper: a menu item command must be run-shell wrapped so
   // tmux dispatches it to the shell instead of parsing it as a tmux command.
   menuRunShell: vi.fn((s: string) => `run-shell "${s.replace(/[\\$"`]/g, "\\$&")}"`),
+  promptCommand: (await importOriginal<typeof import("../src/dashboard/tmux.js")>()).promptCommand,
 }));
 
 // stageSpawnDraft re-opens the picker (the form feel), which would shell out to
@@ -109,9 +110,9 @@ describe("buildWorkflowPickerPlan", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
     expect(rows[2].tmux).toContain("_trellis-picker");
     expect(rows[2].tmux!.startsWith("run-shell ")).toBe(true);
-    expect(rows[3].tmux).toContain("command-prompt");
-    expect(rows[3].tmux).toContain("_grow-plant");
-    expect(rows[3].tmux).toContain("%%");
+    expect(rows[3].tmux!.startsWith("command-prompt ")).toBe(true);
+    // The seed reaches _grow-plant as typed, never through a shell.
+    expect(rows[3].tmux).toContain("_prompt-reply _grow-plant proj");
   });
 
   it("the designer row spawns instantly — no command-prompt for a design brief", () => {

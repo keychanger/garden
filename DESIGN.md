@@ -190,7 +190,7 @@ Requires terminal setup: iTerm2 → Profiles → Keys → Left Option key → "E
 | `⌥a` | Focus alerts view (lower-left); also acknowledges the alert badge |
 | `⌥h` | Focus history view (lower-left): the focused worker's prompt history + brief assistant summaries |
 | `⌥d` | Focus diary view (lower-left): the focused project's diary open in `$EDITOR` |
-| `⌥/` | Edit the sticky logs filter via `tmux command-prompt` (pre-filled with current value); empty input clears |
+| `⌥/` | Edit the sticky logs filter via `tmux command-prompt` (pre-filled with current value; the reply arrives as typed, via `promptArgv`); empty input clears |
 | `⌥.` | Clear the sticky logs filter immediately (no prompt) |
 
 ## Pane Management

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shellEscape } from "../src/dashboard/tmux.js";
+import { shellEscape, tmuxLiteral, menuRunShell, promptArgv, promptCommand } from "../src/dashboard/tmux.js";
 
 describe("shellEscape", () => {
   it("passes through simple alphanumeric strings", () => {
@@ -67,5 +67,43 @@ describe("shellEscape", () => {
     // Round-trip: the shell would interpret this as the literal input string
     expect(result.startsWith("'")).toBe(true);
     expect(result.endsWith("'")).toBe(true);
+  });
+});
+
+describe("tmuxLiteral", () => {
+  it("doubles every #, so one format pass yields the text unchanged", () => {
+    expect(tmuxLiteral("a #(id) #{x} #[fg=red] ## b")).toBe("a ##(id) ##{x} ##[fg=red] #### b");
+    expect(tmuxLiteral("plain")).toBe("plain");
+  });
+});
+
+describe("menuRunShell", () => {
+  // run-shell expands its command as a format before /bin/sh sees it.
+  it("escapes # for run-shell's own format pass", () => {
+    expect(menuRunShell("garden x 'b#(id)'")).toBe("run-shell \"garden x 'b##(id)'\"");
+  });
+});
+
+describe("promptArgv", () => {
+  it("stores the reply in an option and names the route that reads it", () => {
+    const argv = promptArgv("Seed: ", "garden", ["_grow-plant", "proj"]);
+    expect(argv).toEqual([
+      "command-prompt", "-l", "-p", "Seed: ",
+      "set-option -g @garden_prompt_reply \"%%%\" ; run-shell \"garden dashboard _prompt-reply _grow-plant proj\"",
+    ]);
+  });
+
+  it("escapes a pre-fill, which tmux expands as a format", () => {
+    const argv = promptArgv("f: ", "garden", ["_logs-filter-apply"], "w:a #(id),b");
+    expect(argv.slice(4, 6)).toEqual(["-I", "w:a ##(id),b"]);
+  });
+});
+
+describe("promptCommand", () => {
+  it("quotes only the arguments that need it", () => {
+    expect(promptCommand("Crew name: ", "garden", ["_crew-save", "proj"])).toBe(
+      "command-prompt -l -p \"Crew name: \" "
+      + "\"set-option -g @garden_prompt_reply \\\"%%%\\\" ; run-shell \\\"garden dashboard _prompt-reply _crew-save proj\\\"\"",
+    );
   });
 });

@@ -17,7 +17,7 @@ import { readDashState } from "./state.js";
 import { tryGetProject, loadConfig } from "../config.js";
 import { getWorkers, updateWorkerFields, type WorkerEntry } from "./registry.js";
 import { resolveGardenRunner } from "./runner.js";
-import { shellEscape, tmuxDisplay, tmuxDoubleQuote } from "./tmux.js";
+import { shellEscape, tmuxDisplay, tmuxDoubleQuote, promptCommand } from "./tmux.js";
 import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
 import { refreshDashboard } from "./header.js";
 import { parseWorkerSuffix } from "./window-names.js";
@@ -114,7 +114,7 @@ export function buildWorkerModelSubmenuPlan(project: string, worker: string, cur
     key: String(i + 1),
     run: `${runner} dashboard _worker-set-bounce ${pw} model ${shellEscape(m)}`,
   }));
-  rows.push({ label: "(c) custom model id…", key: "c", tmux: `command-prompt -p "Model (sets + bounces): " ${tmuxDoubleQuote(`run-shell ${tmuxDoubleQuote(`${runner} dashboard _worker-set-bounce ${pw} model %%`)}`)}` });
+  rows.push({ label: "(c) custom model id…", key: "c", tmux: promptCommand("Model (sets + bounces): ", runner, ["_worker-set-bounce", project, worker, "model"]) });
   rows.push({ label: "(0) clear — account default", key: "0", run: `${runner} dashboard _worker-set-bounce ${pw} model ${shellEscape("")}` });
   return { title: `Model for ${worker} (sets + bounces to apply)`, rows };
 }

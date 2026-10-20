@@ -6,7 +6,7 @@
 import { loadConfig, tryGetProject } from "../config.js";
 import { readDashState } from "./state.js";
 import { resolveGardenRunner } from "./runner.js";
-import { shellEscape, tmuxDisplay, menuRunShell } from "./tmux.js";
+import { shellEscape, tmuxDisplay, menuRunShell, promptCommand } from "./tmux.js";
 import { runMenu } from "./menu.js";
 import { refreshDashboard } from "./header.js";
 import { log } from "./log.js";
@@ -151,13 +151,9 @@ function dims(model?: string, effort?: string): string {
   return joined ? ` ${joined}` : "";
 }
 
-// tmux command-prompt for the new crew's name. Already a tmux command, so it is
-// NOT run-shell wrapped (the inner dispatch is). The name replaces %% verbatim;
-// a name with shell metacharacters breaks the dispatch, which is why the CLI
-// (`garden crew add`) stays the path for anything exotic.
+// tmux command-prompt for the new crew's name, handed to `_crew-save` as typed.
 function crewNamePrompt(runner: string, projectName: string): string {
-  const inner = `${runner} dashboard _crew-save ${shellEscape(projectName)} %%`;
-  return `command-prompt -p "Crew name: " "run-shell ${shellEscape(inner)}"`;
+  return promptCommand("Crew name: ", runner, ["_crew-save", projectName]);
 }
 
 // A dimension submenu: the curated choices for one field, plus a clear row for

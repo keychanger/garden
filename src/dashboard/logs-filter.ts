@@ -11,7 +11,7 @@ import { focusLogs } from "./navigate.js";
 import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
 import { respawnLogsPane } from "./create.js";
-import { shellEscape, setPaneLabel, getFirstPaneId } from "./tmux.js";
+import { promptArgv, setPaneLabel, getFirstPaneId } from "./tmux.js";
 import { log } from "./log.js";
 
 // Triggered by ⌥/. Switches to the logs view (so the operator sees the
@@ -21,19 +21,12 @@ import { log } from "./log.js";
 export function openLogsFilterPrompt(): void {
   focusLogs();
   const runner = resolveGardenRunner();
+  // The pre-fill comes from logs.filter.json, which any worker sandbox can
+  // write, so it and the reply both travel the promptArgv way: as text, never
+  // as a format or shell syntax.
   const current = readStickyFilterExpr() ?? "";
-  // tmux command-prompt's %% substitutes the typed string verbatim into the
-  // template. Single-quoting via shellEscape keeps shell metachars inert,
-  // but a literal ' in the input would break out — operators with such
-  // exprs use `garden logs filter <expr>` from a regular shell instead.
-  const inner = `${runner} dashboard _logs-filter-apply %%`;
   try {
-    execFileSync("tmux", [
-      "command-prompt",
-      "-p", "logs filter:",
-      "-I", current,
-      `run-shell ${shellEscape(inner)}`,
-    ], { stdio: "ignore" });
+    execFileSync("tmux", promptArgv("logs filter:", runner, ["_logs-filter-apply"], current), { stdio: "ignore" });
   } catch (err) {
     log.warn("logs-filter", "command-prompt failed", { data: { error: String(err) } });
   }

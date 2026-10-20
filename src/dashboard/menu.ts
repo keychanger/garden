@@ -15,7 +15,7 @@
 // collides with tmux's own flag parser ("unknown flag -i"). Identity/status
 // facts a menu wants to show go in the `title` instead.
 import { execFileSync } from "node:child_process";
-import { menuRunShell } from "./tmux.js";
+import { menuRunShell, tmuxLiteral } from "./tmux.js";
 import { log } from "./log.js";
 
 export interface MenuRow {
@@ -46,8 +46,14 @@ export interface MenuSpec {
 // Build the `tmux display-menu` argv for a spec. Pure (menuRunShell is pure), so
 // tests assert the argv without driving tmux. A separator pushes ONE token (the
 // empty name); a normal row pushes three (label, key, command).
+//
+// tmux expands the title, every item name, and every item command as formats
+// the moment the menu opens, so a `#(...)` in a branch name or a registry field
+// would run as the operator. None of these menus uses a format on purpose, so
+// all three go through tmuxLiteral; a run-shell command gets its own second
+// escape from menuRunShell for the expansion run-shell itself makes.
 export function buildMenuArgv(spec: MenuSpec): string[] {
-  const argv = ["display-menu", "-O", "-T", spec.title, "-x", "C", "-y", "C"];
+  const argv = ["display-menu", "-O", "-T", tmuxLiteral(spec.title), "-x", "C", "-y", "C"];
   // tmux rejects a negative -C, and only honors it at all for a menu opened
   // from a key binding rather than the mouse — which is every menu garden opens.
   if (spec.startingChoice !== undefined && spec.startingChoice >= 0) {
@@ -59,7 +65,7 @@ export function buildMenuArgv(spec: MenuSpec): string[] {
       continue;
     }
     const command = row.tmux ?? (row.run ? menuRunShell(row.run) : "");
-    argv.push(row.label, row.key ?? "", command);
+    argv.push(tmuxLiteral(row.label), row.key ?? "", tmuxLiteral(command));
   }
   return argv;
 }

@@ -71,6 +71,7 @@ import {
   cleanPaneTitle,
   stripControlSequences,
   pasteAndSubmit,
+  takePromptReply,
   __setTmuxExecAllowedForTests,
 } from "../src/dashboard/tmux.js";
 
@@ -556,6 +557,33 @@ describe("tmuxDisplay", () => {
     mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
     tmuxDisplay("msg");
     expect(log.debug).toHaveBeenCalledWith("tmux", "tmuxDisplay failed");
+  });
+
+  // display-message expands its text as a format, and messages carry branch
+  // names, worker names and git stderr.
+  it("shows a message's # sequences as text", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    tmuxDisplay("bad ref #{session_name} #(id)");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      ["display-message", "-t", "garden-dashboard", "bad ref ##{session_name} ##(id)"],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+  });
+});
+
+describe("takePromptReply", () => {
+  it("returns the stored reply and clears the option", () => {
+    mockExecFileSync.mockImplementation((_cmd: string, args: string[]) =>
+      args[0] === "show-options" ? "a reply #{x}\n" : undefined);
+    expect(takePromptReply()).toBe("a reply #{x}");
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux", ["set-option", "-gu", "@garden_prompt_reply"], { stdio: ["ignore", "ignore", "pipe"] });
+  });
+
+  it("returns null when no reply is waiting", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("invalid option: @garden_prompt_reply"); });
+    expect(takePromptReply()).toBeNull();
   });
 });
 

@@ -410,9 +410,18 @@ export function readPaneCursorState(paneId: string): PaneCursorState | null {
 
 // untilKey holds the message in the status line until a key is pressed, for a
 // failure the operator would otherwise miss in the default 750ms display.
+// tmux expands `#` sequences in the format slots garden fills with text it did
+// not write — menu titles, item names and commands, display-message text, a
+// command-prompt pre-fill — and a `#(...)` in a menu runs a shell command as
+// the operator when the menu opens. Doubling each `#` makes text pass through
+// one expansion verbatim.
+export function tmuxLiteral(s: string): string {
+  return s.replace(/#/g, "##");
+}
+
 export function tmuxDisplay(msg: string, opts: { untilKey?: boolean } = {}): void {
   try {
-    tmux("display-message", ...(opts.untilKey ? ["-d", "0"] : []), "-t", DASHBOARD_SESSION, msg);
+    tmux("display-message", ...(opts.untilKey ? ["-d", "0"] : []), "-t", DASHBOARD_SESSION, tmuxLiteral(msg));
   } catch { log.debug("tmux", "tmuxDisplay failed"); }
 }
 
@@ -872,10 +881,50 @@ export function tmuxDoubleQuote(s: string): string {
 }
 
 // Wrap a shell command so it is a valid COMMAND for a tmux `display-menu`
-// item or key binding. Those command slots are parsed by tmux as tmux
-// commands, NOT shell commands — a bare `<node> <cli.js> ...` fails with
-// "unknown command: <node>". `run-shell` hands the whole string to /bin/sh;
-// tmuxDoubleQuote keeps tmux from re-interpreting $/`/\/" before it gets there.
+// item. That command slot is parsed by tmux as a tmux command, NOT a shell
+// command — a bare `<node> <cli.js> ...` fails with "unknown command: <node>".
+// `run-shell` hands the whole string to /bin/sh; tmuxDoubleQuote keeps tmux
+// from re-interpreting $/`/\/" before it gets there, and tmuxLiteral covers
+// the format pass run-shell makes over its argument first.
 export function menuRunShell(shellCommand: string): string {
-  return `run-shell ${tmuxDoubleQuote(shellCommand)}`;
+  return `run-shell ${tmuxDoubleQuote(tmuxLiteral(shellCommand))}`;
+}
+
+const PROMPT_REPLY_OPTION = "@garden_prompt_reply";
+
+// argv for a command-prompt whose reply reaches
+// `garden dashboard <route...> <reply>` as one argument, exactly as typed.
+// Substituted into a run-shell, a reply went through a tmux format pass and
+// then /bin/sh, so a `#(...)`, `$(...)` or quote in it ran or broke the
+// command. Here tmux writes it, quotes escaped (`%%%`), into a global option —
+// set-option neither expands nor parses it — and `_prompt-reply` reads it
+// back. `-l` keeps commas from splitting the pre-fill, which tmux expands as a
+// format, so it is escaped.
+export function promptArgv(label: string, runner: string, route: string[], prefill?: string): string[] {
+  const reply = menuRunShell(`${runner} dashboard _prompt-reply ${route.map(shellEscape).join(" ")}`);
+  return [
+    "command-prompt", "-l", "-p", label,
+    ...(prefill === undefined ? [] : ["-I", tmuxLiteral(prefill)]),
+    `set-option -g ${PROMPT_REPLY_OPTION} "%%%" ; ${reply}`,
+  ];
+}
+
+// promptArgv as one tmux command string, for a menu row.
+export function promptCommand(label: string, runner: string, route: string[]): string {
+  return promptArgv(label, runner, route)
+    .map(arg => /^[\w-]+$/.test(arg) ? arg : tmuxDoubleQuote(arg))
+    .join(" ");
+}
+
+// The reply a promptArgv prompt stored, cleared once read. null when no reply
+// is waiting (tmux reports an unset option as an error).
+export function takePromptReply(): string | null {
+  let reply: string;
+  try {
+    reply = tmuxOutput("show-options", "-gv", PROMPT_REPLY_OPTION);
+  } catch {
+    return null;
+  }
+  try { tmux("set-option", "-gu", PROMPT_REPLY_OPTION); } catch { /* the next prompt overwrites it */ }
+  return reply;
 }

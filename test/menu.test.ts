@@ -49,4 +49,21 @@ describe("buildMenuArgv", () => {
     const argv = buildMenuArgv({ title: "t", rows: [{ label: "R", tmux: "command-prompt -p x", run: "ignored" }] });
     expect(argv.slice(-1)).toEqual(["command-prompt -p x"]);
   });
+
+  // tmux expands all three as formats when the menu opens; a `#(...)` in a
+  // branch name or registry field would run as the operator.
+  it("doubles every # in the title, labels and commands", () => {
+    const argv = buildMenuArgv({
+      title: "base #(id)",
+      rows: [
+        { label: "#{session_name}", key: "1", run: "garden x 'b#(id)'" },
+        { label: "raw", key: "2", tmux: "display-popup -E 'a#b'" },
+      ],
+    });
+    expect(argv[3]).toBe("base ##(id)");
+    expect(argv.slice(8)).toEqual([
+      "##{session_name}", "1", "run-shell \"garden x 'b####(id)'\"",
+      "raw", "2", "display-popup -E 'a##b'",
+    ]);
+  });
 });

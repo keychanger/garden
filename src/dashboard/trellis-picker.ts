@@ -19,7 +19,7 @@ import { log } from "./log.js";
 import { newWorker } from "./workers.js";
 import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
-import { shellEscape, tmuxDisplay, menuRunShell } from "./tmux.js";
+import { shellEscape, tmuxDisplay, menuRunShell, promptCommand } from "./tmux.js";
 import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
 import { loadConfig, type GardenConfig, type ProjectConfig } from "../config.js";
 import { listCrews, listMembers, findMember, getCrew, projectWorkerMemberName } from "./crew.js";
@@ -356,10 +356,8 @@ function buildIteration1Seed(
 // tmux command-prompt for a single-line task description and dispatches
 // `_grow-plant`.
 //
-// The grow command-prompt input is single-line and shell-substituted via
-// tmux's `%%` placeholder, which means seeds containing single quotes or
-// other shell metacharacters can break the dispatch. Operators with
-// multi-line or special-character seeds use the CLI:
+// The grow command-prompt input is single-line (it reaches `_grow-plant` as
+// typed, via promptCommand). Operators with multi-line seeds use the CLI:
 // `garden workers new --workflow grow --seed-file <path>`.
 
 // Suggested models for a claude-code build member — the everyday Anthropic
@@ -854,10 +852,6 @@ function shellCmdTrellisPicker(runner: string, project: string): string {
 }
 
 function shellCmdGrowPlant(runner: string, project: string): string {
-  // tmux command-prompt with %% substitution. The user's input replaces %%
-  // verbatim — single quotes / shell metacharacters in the seed will break
-  // the dispatch. Operators with complex seeds use the CLI plant path.
-  const inner = `${runner} dashboard _grow-plant ${shellEscape(project)} %%`;
-  return `command-prompt -p "Task description: " "run-shell ${shellEscape(inner)}"`;
+  return promptCommand("Task description: ", runner, ["_grow-plant", project]);
 }
 

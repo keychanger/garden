@@ -46,6 +46,7 @@ import {
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, focusAlerts, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
+import { takePromptReply } from "./tmux.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
 import { runWatchdogLoop, stopWatchdog } from "./watchdog.js";
@@ -129,6 +130,13 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     // focused project's diary file path, or nothing when no project is focused.
     const project = readDashState().activeProject;
     if (project) console.log(diaryFilePath(project));
+    return;
+  }
+  if (sub === "_prompt-reply") {
+    // The second half of a promptArgv prompt: the reply it stored becomes the
+    // last argument of the route it names.
+    const reply = takePromptReply();
+    if (reply !== null && args[1]) await dashboard([...args.slice(1), reply]);
     return;
   }
   if (sub === "_logs-filter") return openLogsFilterPrompt();
