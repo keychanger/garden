@@ -109,7 +109,10 @@ reads or runs.
   `src/dashboard/registry.ts`) type-checks the trusted fields (`prState`, `agentStatus`,
   `baseBranch`, `branchName`, `worktreePath`, `sessionId`, `handoffRequestId`, `bead`) so a forged wrong-typed value
   cannot flow into a path/git/dispatch consumer. This stops malformed forgery; it does
-  not stop a well-formed malicious entry (see residuals).
+  not stop a well-formed malicious entry (see residuals). Values that reach git are also
+  checked where git is called (`git-refs.ts`): a SHA must be an object name, a branch is
+  passed as a full ref, and `--end-of-options` precedes them, so a forged `lastSeenSha` of
+  `--output=<path>` no longer makes `git log` write a file as the operator.
 - **Credential read-deny (opt-in).** With `sandboxDenyCredentials` set on a project,
   the sandbox additionally denies read of the operator's credential paths (`~/.claude`,
   `~/.ssh`, cloud creds — `DENIED_CREDENTIAL_PATHS`) via Claude Code's
@@ -163,7 +166,10 @@ reads or runs.
 - **The registry is writable by workers.** Moving review exchange files closes verdict
   replacement, but it does not make `~/.garden/sessions` a trusted control store. The
   registry type guard is defense-in-depth; a worker with a valid-looking forged entry
-  can still manipulate fleet state (e.g. retarget its own merge base). The principled
+  can still manipulate fleet state: retarget its own merge base, or set a `branchName`
+  that names another branch, which garden then force-pushes the worker's HEAD to and
+  deletes after merge. A worker's branch always carries its name, but nothing yet
+  enforces that on a forged entry. The principled
   fix — moving the registry out of the worker-writable set and routing worker-initiated
   mutations (`garden workers grow`) through a validated request file the poller applies
   — remains required.
@@ -172,8 +178,13 @@ reads or runs.
   new `info/attributes`, `shallow` and `objects/info/alternates` files in the shared git
   dir are all writable. None of them makes git run a program — attributes can only select
   drivers, and the files that define drivers are denied — but they can point garden at a
-  different commit or a truncated history. Review sees the resulting diff, and a worker
-  already holds push credentials, so this is an integrity gap rather than an escape.
+  different commit or a truncated history. Garden names origin's branch in full and reads
+  branch names back from full refs, so a tag or branch merely named `origin/<base>` no
+  longer stands in for it and a tag named `main` no longer renames the checked-out branch,
+  but a worker can rewrite `refs/remotes/origin/<base>` itself between a fetch and the
+  read that follows.
+  Review sees the resulting diff, and a worker already holds push credentials, so this is
+  an integrity gap rather than an escape.
 - **Non-handoff seeds still pass through the worker-writable sessions dir.** A new
   worker's first prompt for `workers new --seed`, grow, designer and loop spawns is
   written under `~/.garden/sessions` and read back by the unsandboxed seeder a few seconds

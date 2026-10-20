@@ -16,7 +16,7 @@ running.
 - **Node 24 LTS recommended**, or Node 22.12+ within the 22.x line. The locked
   build/test dependencies do not support Node 22.1–22.11 or Node 23.
   See [Node releases](https://nodejs.org/en/about/previous-releases).
-- **Git** and **tmux** on your PATH. Apple's Command Line Tools supply Git
+- **Git 2.30+** and **tmux** on your PATH. Apple's Command Line Tools supply Git
   (`xcode-select --install`), or install it through Homebrew.
 - **Claude Code**, installed and logged in with your own account. The default
   workers and reviewers use the `claude` CLI. Follow the

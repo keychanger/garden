@@ -85,7 +85,7 @@ describe("buildReviewPrompt — initial review", () => {
     // different SHAs, which cascades into unresolvable dup-SHA conflicts
     // in the merge queue.
     const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
-    expect(result).toContain("git rebase origin/main");
+    expect(result).toContain("git rebase refs/remotes/origin/main");
     expect(result).not.toMatch(/git rebase main\b/);
   });
 
@@ -152,10 +152,10 @@ describe("buildReviewPrompt — oversized diff", () => {
 
     expect(result).not.toContain(oversized);
     expect(result).toContain("too large to inline");
-    expect(result).toContain("git diff origin/main...HEAD -- <path>");
+    expect(result).toContain("git diff refs/remotes/origin/main...HEAD -- <path>");
     expect(result).toContain("1 file changed");
     expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(MAX_REVIEW_PROMPT_BYTES);
-    expect(getDiffStat).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "origin/main...HEAD");
+    expect(getDiffStat).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "refs/remotes/origin/main...HEAD");
   });
 
   it("tells the reviewer to name the files it could not read", () => {
@@ -171,7 +171,7 @@ describe("buildReviewPrompt — oversized diff", () => {
     vi.mocked(getDiffStat).mockReturnValue("");
     const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
     expect(result).toContain("summary unavailable");
-    expect(result).toContain("git diff origin/main...HEAD -- <path>");
+    expect(result).toContain("git diff refs/remotes/origin/main...HEAD -- <path>");
   });
 
   it("leaves a diff that fits completely untouched", () => {
@@ -191,7 +191,8 @@ describe("buildReviewPrompt — oversized diff", () => {
 
     expect(result).not.toContain(oversized);
     expect(result).toContain("Diff under review (too large to inline");
-    expect(result).toContain("git diff origin/main...HEAD -- <path>");
+    expect(result).toContain("git diff refs/remotes/origin/main...HEAD -- <path>");
+    expect(getDiffStat).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "refs/remotes/origin/main...HEAD");
   });
 
   it("degrades the whole-task holistic range the same way", () => {
@@ -203,9 +204,9 @@ describe("buildReviewPrompt — oversized diff", () => {
     const result = buildHolisticFinalReviewPrompt("myproject", "/repo/myproject", "main", entry)!;
 
     expect(result).not.toContain(oversized);
-    expect(result).toContain("git diff base123..origin/main -- <path>");
+    expect(result).toContain("git diff base123..refs/remotes/origin/main -- <path>");
     expect(getDiffStat).toHaveBeenCalledWith(
-      "/tmp/wt/myproject/bold-ash", "base123..origin/main", ["src/foo.ts"],
+      "/tmp/wt/myproject/bold-ash", "base123..refs/remotes/origin/main", ["src/foo.ts"],
     );
   });
 });
@@ -323,7 +324,7 @@ describe("buildResolvePrompt", () => {
 
   it("includes base branch in rebase instruction", () => {
     const result = buildResolvePrompt("myproject", "/repo/myproject", "develop", makeEntry());
-    expect(result).toContain("git rebase origin/develop");
+    expect(result).toContain("git rebase refs/remotes/origin/develop");
   });
 
   it("instructs resolver not to push", () => {

@@ -11,6 +11,7 @@ import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
+import { isValidBranchName } from "./git-refs.js";
 
 export const SPAWN_DRAFT_MAX_AGE_MS = 5 * 60_000;
 
@@ -46,7 +47,7 @@ export function readSpawnDraft(project: string): SpawnDraftPatch {
     const parsed = JSON.parse(fs.readFileSync(draftPath(project), "utf-8")) as { base?: string; crew?: string; member?: string; model?: string; effort?: string; ts?: number };
     if (typeof parsed.ts !== "number" || Date.now() - parsed.ts > SPAWN_DRAFT_MAX_AGE_MS) return {};
     return {
-      ...(parsed.base ? { base: parsed.base } : {}),
+      ...(parsed.base && isValidBranchName(parsed.base) ? { base: parsed.base } : {}),
       ...(parsed.crew ? { crew: parsed.crew } : {}),
       ...(parsed.member ? { member: parsed.member } : {}),
       ...(parsed.model ? { model: parsed.model } : {}),

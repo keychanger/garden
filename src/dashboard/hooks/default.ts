@@ -23,6 +23,7 @@ import {
 } from "../continue.js";
 import { getWorkerBaseBranch } from "../git.js";
 import { runGit } from "../git-exec.js";
+import { remoteBranchRef } from "../git-refs.js";
 import { findWorkerPaneId, refreshDashboard } from "../header.js";
 import { log } from "../log.js";
 // Import the FIFO wake primitive directly. The hook only signals the poller;
@@ -119,7 +120,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
     // Returns "0" if no commits ahead, a positive number otherwise.
     // 5s timeout: a hung git here stalls the Stop hook AND the entire review
     // pipeline (no pendingReviewAt → no poller poke → worker never advances).
-    const out = runGit(cwd, ["rev-list", "--count", `origin/${baseBranch}..HEAD`], {
+    const out = runGit(cwd, ["rev-list", "--count", "--end-of-options", `${remoteBranchRef(baseBranch)}..HEAD`], {
       timeout: 5000, quietStderr: true,
     }).trim();
     const ahead = parseInt(out, 10);

@@ -264,6 +264,25 @@ describe("runWorkerCleanup (real git)", () => {
     },
   );
 
+  it("deletes origin's branch, not a tag that shares its name", async () => {
+    const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+    const origin = path.join(env.home, "origin.git");
+    spawnSync("git", ["init", "--bare", "-q", "-b", "main", origin], { stdio: "ignore" });
+    git(env.repoPath, "remote", "add", "origin", origin);
+    // A worker can push a tag named after itself or a sibling. A bare-name
+    // `push --delete` then fails as ambiguous on every attempt.
+    git(env.repoPath, "push", "-q", "origin",
+      "refs/heads/numb-clear-vow:refs/heads/numb-clear-vow",
+      "refs/heads/numb-clear-vow:refs/tags/numb-clear-vow");
+    const file = await seed();
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(git(env.repoPath, "ls-remote", "origin", "refs/heads/numb-clear-vow")).toBe("");
+    expect(git(env.repoPath, "ls-remote", "origin", "refs/tags/numb-clear-vow")).not.toBe("");
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
   it("keeps the request when a configured origin cannot be inspected", async () => {
     const { runWorkerCleanup, readWorkerCleanupRequest } =
       await import("../../src/dashboard/worker-cleanup.js");

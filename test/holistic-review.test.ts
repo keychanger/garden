@@ -106,7 +106,7 @@ describe("holistic final-review prompt", () => {
   });
 
   it("embeds the assembled whole-task diff scoped to the base SHA", () => {
-    expect(fix).toContain("4276499c..origin/main");
+    expect(fix).toContain("4276499c..refs/remotes/origin/main");
     expect(fix).toContain("cross-phase change");
   });
 

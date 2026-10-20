@@ -31,11 +31,23 @@ function tryRun(bin: string, args: string[]): string | null {
   }
 }
 
+// Garden ends the options it hands git with --end-of-options, which
+// `git rev-parse` accepts from 2.30. An unparseable version fails closed.
+export function gitMeetsFloor(version: string): boolean {
+  const m = version.match(/(\d+)\.(\d+)/);
+  const major = m ? Number(m[1]) : 0;
+  const minor = m ? Number(m[2]) : 0;
+  return major > 2 || (major === 2 && minor >= 30);
+}
+
 function checkGit(): Check {
   const v = tryRun("git", ["--version"]);
-  return v
+  if (!v) {
+    return { name: "git", status: "fail", detail: "not available — workers need Git; on macOS run 'xcode-select --install' or 'brew install git'" };
+  }
+  return gitMeetsFloor(v)
     ? { name: "git", status: "ok", detail: v }
-    : { name: "git", status: "fail", detail: "not available — workers need Git; on macOS run 'xcode-select --install' or 'brew install git'" };
+    : { name: "git", status: "fail", detail: `${v} — garden needs Git 2.30 or later; run 'brew install git'` };
 }
 
 function checkTmux(): Check {

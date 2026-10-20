@@ -28,6 +28,7 @@ import {
 import {
   getBranchHeadSha, getCommitLogRange, getRemoteTrackingSha, syncWorktreeToBase,
 } from "./git.js";
+import { remoteBranchRef } from "./git-refs.js";
 import { refreshDashboard } from "./header.js";
 import { resolveReviewRole } from "./roles.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
@@ -168,7 +169,7 @@ function launchHolisticFinalReview(
 
   // Cross-phase rationale for the deliberate-decision guardrail. Computed from
   // the project checkout, which has both baseBranchSha and the current base tip.
-  const toSha = getRemoteTrackingSha(projectPath, baseBranch) ?? `origin/${baseBranch}`;
+  const toSha = getRemoteTrackingSha(projectPath, baseBranch) ?? remoteBranchRef(baseBranch);
   const rationale = getCommitLogRange(projectPath, fromSha, toSha, files);
 
   // Advance the worker's already-merged branch to the base tip so a reviewer fix

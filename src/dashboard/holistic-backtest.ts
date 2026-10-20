@@ -21,19 +21,23 @@ import { execFileSync } from "node:child_process";
 import { SESSIONS_DIR, tryGetProject } from "../config.js";
 import { findWorkerByName, type WorkerEntry } from "./registry.js";
 import {
-  getChangedFilesBetween, getCommitLogRange, resolveHolisticDiff,
+  getChangedFilesBetween, getCommitLogRange, resolveCommitSha, resolveHolisticDiff,
 } from "./git.js";
 import { buildHolisticFinalReviewPrompt } from "./prompts.js";
+import { runGit } from "./git-exec.js";
+import { assertBranchName, branchRef, isValidBranchName } from "./git-refs.js";
 
 const LOG_FILE = path.join(SESSIONS_DIR, "dashboard.log");
 
 interface ReflogEntry { epoch: number; sha: string; }
 
 // Parse `git reflog show <ref> --date=unix` → ascending-by-time [{epoch, sha}].
-function readBaseReflog(repoPath: string, baseBranch: string): ReflogEntry[] {
-  const out = execFileSync("git", ["reflog", "show", baseBranch, "--date=unix"], {
-    cwd: repoPath, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"],
-  });
+// The base can come from the worker-writable registry, so it is validated and
+// passed as a full ref; --no-abbrev keeps the SHAs whole, so no ref can shadow them.
+export function readBaseReflog(repoPath: string, baseBranch: string): ReflogEntry[] {
+  const out = runGit(repoPath, [
+    "reflog", "show", "--no-abbrev", "--date=unix", "--end-of-options", branchRef(assertBranchName(baseBranch)),
+  ], { quietStderr: true });
   const entries: ReflogEntry[] = [];
   for (const line of out.split("\n")) {
     const m = line.match(/^(\w+)\s+\S+@\{(\d+)\}:/);
@@ -97,6 +101,10 @@ export async function runHolisticBacktest(args: string[]): Promise<void> {
 
   const entry = findWorkerByName(project, worker);
   const baseBranch = flags.base ?? entry?.baseBranch ?? "main";
+  if (!isValidBranchName(baseBranch)) {
+    console.error(`Not a valid git branch name: ${JSON.stringify(baseBranch)}. Pass --base <branch>.`);
+    return;
+  }
   const logText = fs.existsSync(LOG_FILE) ? fs.readFileSync(LOG_FILE, "utf-8") : "";
   const mergeEpochs = workerMergeEpochs(logText, worker);
   const mergeCount = mergeEpochs.length;
@@ -131,6 +139,16 @@ export async function runHolisticBacktest(args: string[]): Promise<void> {
     toRef = toRef ?? reflog[lastIdx].sha;           // base state AFTER the last merge
     console.log(`Reconstructed endpoints (verify): from=${fromSha} to=${toRef} (${mergeCount} merges, base ${baseBranch})`);
   }
+
+  // The range helpers take commit SHAs only; --from/--to may name any revision.
+  const fromCommit = resolveCommitSha(repoPath, fromSha);
+  const toCommit = resolveCommitSha(repoPath, toRef);
+  if (!fromCommit || !toCommit) {
+    console.error(`Could not resolve ${fromCommit ? toRef : fromSha} to a commit in ${repoPath}.`);
+    return;
+  }
+  fromSha = fromCommit;
+  toRef = toCommit;
 
   const touchedFiles = getChangedFilesBetween(repoPath, fromSha, toRef);
   if (touchedFiles.length === 0) {

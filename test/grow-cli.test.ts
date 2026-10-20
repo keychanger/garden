@@ -436,6 +436,19 @@ describe("garden workers new --workflow default — grow flag rejection", () => 
   });
 });
 
+describe("--base", () => {
+  it("refuses a name that is not a valid git branch name before spawning anything", async () => {
+    // The worker's bootstrap hands the base to git; a flag-shaped value never
+    // gets this far, as the flag parser reads it as a missing value.
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+    await expect(workers(["new", "proj", "--base", "a..b"]))
+      .rejects.toThrow(/--base: not a valid git branch name/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+});
+
 describe("--workflow whitelist", () => {
   it("rejects unknown workflows", async () => {
     await setupProject("proj");

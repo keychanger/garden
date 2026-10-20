@@ -15,6 +15,7 @@ import {
 import { tryGetProject } from "../config.js";
 import { buildRulesContext } from "../rules.js";
 import { getCommitSummary, getDiffStat, resolveHolisticDiff } from "./git.js";
+import { remoteBranchRef } from "./git-refs.js";
 import { log } from "./log.js";
 import type { WorkerEntry } from "./registry.js";
 
@@ -85,6 +86,9 @@ export const reviewSpecWarningSection: PromptSection = {
   },
 };
 
+// The git commands handed to review-side agents spell origin's branch out in
+// full: an abbreviated origin/<base> resolves through git's lookup order, so a
+// same-named tag or branch in the shared refs store would stand in for it.
 export const reviewRebaseStepSection: PromptSection = {
   name: "rebase-step",
   render(ctx) {
@@ -92,10 +96,10 @@ export const reviewRebaseStepSection: PromptSection = {
     return [
       `## Step ${step}: Rebase onto origin/${ctx.baseBranch}`,
       "",
-      `Run \`git rebase origin/${ctx.baseBranch}\` in the worktree, with two exceptions:`,
-      `- If \`git merge-base --is-ancestor origin/${ctx.baseBranch} HEAD\` succeeds, the branch`,
+      `Run \`git rebase ${remoteBranchRef(ctx.baseBranch)}\` in the worktree, with two exceptions:`,
+      `- If \`git merge-base --is-ancestor ${remoteBranchRef(ctx.baseBranch)} HEAD\` succeeds, the branch`,
       "  already sits on top of the base. Skip the rebase entirely — there is nothing to replay.",
-      `- If \`git rev-list --merges origin/${ctx.baseBranch}..HEAD\` is non-empty, the branch`,
+      `- If \`git rev-list --merges ${remoteBranchRef(ctx.baseBranch)}..HEAD\` is non-empty, the branch`,
       "  contains a merge commit. Rebase with `--rebase-merges` so the merge topology survives;",
       "  a plain rebase drops it and replays every commit from the merged-in side.",
       "",
@@ -217,7 +221,7 @@ export const reviewDiffSection: PromptSection = {
     if (ctx.data.diffStat !== undefined) {
       return pagedDiffBlock(
         "## Diff (too large to inline — file summary only)",
-        `git diff origin/${ctx.baseBranch}...HEAD -- <path>`,
+        `git diff ${remoteBranchRef(ctx.baseBranch)}...HEAD -- <path>`,
         ctx.data.diffStat,
       );
     }
@@ -396,8 +400,8 @@ export const resolveStepsSection: PromptSection = {
       "1. Run `git status`. If a rebase is already in progress (output mentions",
       "   `rebase in progress` or `You are currently rebasing`), run `git rebase --abort`.",
       "",
-      `2. Run \`git rebase origin/${ctx.baseBranch}\` — except if`,
-      `   \`git rev-list --merges origin/${ctx.baseBranch}..HEAD\` is non-empty, in which case the`,
+      `2. Run \`git rebase ${remoteBranchRef(ctx.baseBranch)}\` — except if`,
+      `   \`git rev-list --merges ${remoteBranchRef(ctx.baseBranch)}..HEAD\` is non-empty, in which case the`,
       "   branch contains a merge commit and you must rebase with `--rebase-merges`. A plain",
       "   rebase drops the merge topology and linearizes the merged-in commits; if they came from",
       "   the base, it can also replay them against a tree that already contains their content.",
@@ -411,7 +415,7 @@ export const resolveStepsSection: PromptSection = {
       `     contradictory designs), run \`git rebase --abort\` and output \`FAILED\`.`,
       "",
       `4. When the rebase is complete, confirm with \`git status\` (should say clean) and`,
-      `   \`git log --oneline origin/${ctx.baseBranch}..HEAD\` (should list your branch's commits).`,
+      `   \`git log --oneline ${remoteBranchRef(ctx.baseBranch)}..HEAD\` (should list your branch's commits).`,
       "",
       "5. Do **not** push. The poller handles the push after verifying your work.",
     ].join("\n");
@@ -566,7 +570,7 @@ export const ciFixDiffSection: PromptSection = {
     if (ctx.data.diffStat !== undefined) {
       return pagedDiffBlock(
         "## Diff under review (too large to inline — file summary only)",
-        `git diff origin/${ctx.baseBranch}...HEAD -- <path>`,
+        `git diff ${remoteBranchRef(ctx.baseBranch)}...HEAD -- <path>`,
         ctx.data.diffStat,
       );
     }
@@ -707,7 +711,7 @@ export const holisticDiffSection: PromptSection = {
   name: "holistic-diff",
   render(ctx) {
     const from = ctx.entry.baseBranchSha ?? "base";
-    const range = `${from}..origin/${ctx.baseBranch}`;
+    const range = `${from}..${remoteBranchRef(ctx.baseBranch)}`;
     if (ctx.data.diffStat !== undefined) {
       return pagedDiffBlock(
         `## Assembled whole-task diff (\`${range}\`, scoped to touched files) — too large to inline`,
@@ -780,7 +784,7 @@ export function buildReviewPrompt(
   if (!ctx) return null;
   const wtPath = entry.worktreePath ?? projectPath;
   return composeWithinCeiling(reviewSections, ctx,
-    () => getDiffStat(wtPath, `origin/${baseBranch}...HEAD`));
+    () => getDiffStat(wtPath, `${remoteBranchRef(baseBranch)}...HEAD`));
 }
 
 // CI-fix context: full review I/O (diff + commits + rules-equivalent context
@@ -797,7 +801,7 @@ export function buildCiFixPrompt(
   if (!ctx) return null;
   const wtPath = entry.worktreePath ?? projectPath;
   return composeWithinCeiling(ciFixSections, ctx,
-    () => getDiffStat(wtPath, `origin/${baseBranch}...HEAD`));
+    () => getDiffStat(wtPath, `${remoteBranchRef(baseBranch)}...HEAD`));
 }
 
 // Resolver context: minimal I/O — only the commits the resolver needs to
@@ -826,7 +830,7 @@ export function buildHolisticFinalReviewPrompt(
   entry: WorkerEntry,
   // The `to` endpoint of the whole-task range. Production leaves this at the
   // live base tip; the offline backtest passes a reconstructed historical ref.
-  toRef: string = `origin/${baseBranch}`,
+  toRef: string = remoteBranchRef(baseBranch),
 ): string | null {
   const wtPath = entry.worktreePath ?? projectPath;
   const fromSha = entry.baseBranchSha;

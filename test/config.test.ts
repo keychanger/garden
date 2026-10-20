@@ -1436,6 +1436,15 @@ describe("config baseBranch key", () => {
     await expect(config(["garden", "baseBranch", "   "]))
       .rejects.toThrow(/non-empty branch name/);
   });
+
+  it("rejects a name git would read as an option, and keeps the old base", async () => {
+    // Every worker spawned afterwards hands this to `git fetch origin <base>`.
+    const { config, loadConfig } = await setup();
+    await config(["garden", "baseBranch", "develop"]);
+    await expect(config(["garden", "baseBranch", "--upload-pack=touch /tmp/x"]))
+      .rejects.toThrow(/not a valid git branch name/);
+    expect(loadConfig().projects.garden.baseBranch).toBe("develop");
+  });
 });
 
 // `garden config <p> crew [<name>]` — sugar that sets the worker harness plus

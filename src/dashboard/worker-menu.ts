@@ -26,6 +26,7 @@ import { reviewerMembers, crewNameFor } from "./crew.js";
 import { listBranches, branchExistsOnOrigin } from "./git.js";
 import { bounceWorker } from "./workers.js";
 import { log } from "./log.js";
+import { isValidBranchName } from "./git-refs.js";
 
 const DEFAULT_LABEL = "(default)";
 // Common worker models offered directly; anything else via the command-prompt
@@ -227,6 +228,10 @@ export function applyWorkerSet(project: string, worker: string, field: string, v
   const t = resolveTarget(project, worker);
   if (!t) return;
   const clearing = value === "";
+  if (field === "baseBranch" && !clearing && !isValidBranchName(value)) {
+    tmuxDisplay(`Not a valid git branch name: ${value}`);
+    return;
+  }
   updateWorkerFields(project, worker, { [field]: clearing ? undefined : value });
   if (field === "baseBranch" && !clearing) {
     const proj = tryGetProject(project);

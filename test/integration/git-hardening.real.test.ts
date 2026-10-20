@@ -189,3 +189,166 @@ describe("review prompt inputs", () => {
     expect(findSpecFiles(wt, ["docs/spec.md"])).toEqual([]);
   });
 });
+
+describe("what garden hands git", () => {
+  it("reads origin's branch by its full name, so a tag or branch named origin/main cannot stand in for it", async () => {
+    const { getDiffAgainstBase, getChangedFiles, hasCommitsAhead, countCommitsAheadOfBase, rebaseBranch } =
+      await import("../../src/dashboard/git.js");
+    // Both shadows sit at the worker's own tip: an abbreviated origin/main
+    // would then make the worker's commit vanish from everything below.
+    git(wt, "tag", "origin/main", "HEAD");
+    git(wt, "branch", "origin/main", "HEAD");
+
+    expect(getDiffAgainstBase(wt, "main")).toContain("+work");
+    expect(getChangedFiles(wt, "main")).toEqual(["work.txt"]);
+    expect(hasCommitsAhead(wt, "main")).toBe(true);
+    expect(countCommitsAheadOfBase(wt, "main")).toBe(1);
+    expect(rebaseBranch(wt, "main")).toEqual({ kind: "up-to-date" });
+  });
+
+  it("refuses option-shaped SHAs and ranges from the registry without git writing anything", async () => {
+    const {
+      getNewCommitSummary, getDiffStat, getChangedFilesBetween, getCommitLogRange, commitExists, isAncestor,
+      getDiffNumstat, resolveHolisticDiff,
+    } = await import("../../src/dashboard/git.js");
+    // git diff and git log take an output-file option; a forged lastSeenSha or
+    // preReviewSha of this shape made the unsandboxed poller create the file.
+    const out = path.join(env.home, "written-by-git");
+    const option = `--output=${out}`;
+
+    expect(getNewCommitSummary(wt, option)).toBe("");
+    expect(getDiffStat(wt, `${option}..HEAD`)).toBe("");
+    expect(getChangedFilesBetween(wt, option, "HEAD")).toEqual([]);
+    expect(getCommitLogRange(wt, option, "HEAD")).toBe("");
+    expect(commitExists(env.repoPath, option)).toBe(false);
+    expect(isAncestor(wt, option, "HEAD")).toBe(false);
+    // preReviewSha and baseBranchSha reach these two.
+    expect(getDiffNumstat(wt, option, "HEAD")).toEqual({ files: 0, insertions: 0, deletions: 0 });
+    expect(resolveHolisticDiff(wt, option, "HEAD", ["work.txt"])).toBe("");
+    // git names the file after the whole range argument, suffix and all.
+    expect(fs.readdirSync(env.home).filter(name => name.startsWith("written-by-git"))).toEqual([]);
+  });
+
+  it("syncs a worktree to origin's copy of its branch, not a tag of the same name", async () => {
+    const { syncWorktreeToRemote } = await import("../../src/dashboard/git.js");
+    git(wt, "push", "-q", "origin", "bold-ash");
+    const pushed = git(wt, "rev-parse", "HEAD");
+    git(wt, "tag", "origin/bold-ash", git(wt, "rev-parse", "refs/remotes/origin/main"));
+    fs.writeFileSync(path.join(wt, "extra.txt"), "extra\n");
+    git(wt, "add", "extra.txt");
+    git(wt, "commit", "-q", "-m", "unpushed");
+
+    expect(syncWorktreeToRemote(wt, "bold-ash")).toEqual({ ok: true });
+    expect(git(wt, "rev-parse", "HEAD")).toBe(pushed);
+  });
+
+  it("fast-forwards a merged worktree to origin's base, not a tag of the same name", async () => {
+    const { syncWorktreeToBase } = await import("../../src/dashboard/git.js");
+    const merged = path.join(env.home, ".garden", "worktrees", "repo", "calm-fir");
+    git(env.repoPath, "worktree", "add", "-q", "-b", "calm-fir", merged, "refs/remotes/origin/main");
+    const oldTip = git(merged, "rev-parse", "HEAD");
+    advanceOrigin("next.txt");
+    git(merged, "tag", "origin/main", oldTip);
+
+    expect(syncWorktreeToBase(merged, "main")).toEqual({ ok: true });
+    expect(git(merged, "rev-parse", "HEAD")).not.toBe(oldTip);
+    expect(git(merged, "rev-parse", "HEAD")).toBe(git(merged, "rev-parse", "refs/remotes/origin/main"));
+  });
+
+  it("counts the merge commits a branch adds over origin's real base", async () => {
+    const { branchMergeCommits } = await import("../../src/dashboard/git.js");
+    git(wt, "checkout", "-q", "-b", "side", "refs/remotes/origin/main");
+    fs.writeFileSync(path.join(wt, "side.txt"), "side\n");
+    git(wt, "add", "side.txt");
+    git(wt, "commit", "-q", "-m", "side");
+    git(wt, "checkout", "-q", "bold-ash");
+    git(wt, "merge", "-q", "--no-ff", "-m", "merge side", "side");
+    // A tag at the tip would empty an abbreviated origin/main..HEAD range.
+    git(wt, "tag", "origin/main", "HEAD");
+
+    expect(branchMergeCommits(wt, "main")).toEqual([git(wt, "rev-parse", "HEAD")]);
+  });
+
+  it("names the checkout's branch from its full ref, so a same-named tag cannot rename it", async () => {
+    const { currentBranch, listBranches, resolveSpawnBase, fastForwardBase } = await import("../../src/dashboard/git.js");
+    // A worker can create both in the shared refs store. With them, git's
+    // short forms answer "heads/main".
+    git(env.repoPath, "branch", "origin/main", "HEAD");
+    git(env.repoPath, "tag", "main", "HEAD");
+
+    expect(currentBranch(env.repoPath)).toBe("main");
+    expect(resolveSpawnBase({ path: env.repoPath })).toBe("main");
+    const listed = listBranches(env.repoPath);
+    expect(listed).toContain("main");
+    expect(listed.filter(name => /^(heads|remotes)\//.test(name))).toEqual([]);
+    // A misread name sent the merge queue down its off-base path, which never
+    // advanced the checkout or ran postMerge.
+    advanceOrigin("next.txt");
+    expect(fastForwardBase(env.repoPath, "main")).toEqual({ ok: true, advanced: "worktree" });
+  });
+
+  it("reads the backtest's base reflog for a branch name only, as full SHAs", async () => {
+    const { readBaseReflog } = await import("../../src/dashboard/holistic-backtest.js");
+    const out = path.join(env.home, "written-by-git");
+    expect(() => readBaseReflog(env.repoPath, `--output=${out}`)).toThrow(/not a valid git branch name/);
+    expect(fs.existsSync(out)).toBe(false);
+
+    const entries = readBaseReflog(env.repoPath, "main");
+    expect(entries.length).toBeGreaterThan(0);
+    for (const entry of entries) expect(entry.sha).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it("counts how far a build trails origin's real branch, not a same-named tag", async () => {
+    const { commitsBehindOrigin } = await import("../../src/dashboard/git.js");
+    const build = git(wt, "rev-parse", "HEAD");
+    advanceOrigin("next.txt");
+    git(wt, "fetch", "-q", "origin");
+    git(wt, "tag", "origin/main", build);
+
+    expect(commitsBehindOrigin(wt, build, "main")).toBe(1);
+  });
+
+  it("resolves the backtest's --from and --to refs to commits before building its range", async () => {
+    fs.writeFileSync(path.join(env.gardenDir, "config.yml"), `projects:\n  repo:\n    path: ${env.repoPath}\n`);
+    fs.writeFileSync(path.join(env.repoPath, "feature.txt"), "feature\n");
+    git(env.repoPath, "add", "feature.txt");
+    git(env.repoPath, "commit", "-q", "-m", "feature");
+    const out = fs.mkdtempSync(path.join(env.home, "backtest-"));
+    const tmpdir = process.env.TMPDIR;
+    process.env.TMPDIR = out;
+    try {
+      const { runHolisticBacktest } = await import("../../src/dashboard/holistic-backtest.js");
+      await runHolisticBacktest(["repo", "bold-ash", "--from", "main~1", "--to", "main"]);
+      expect(fs.readFileSync(path.join(out, "holistic-backtest-bold-ash.diff.txt"), "utf8")).toContain("+feature");
+    } finally {
+      process.env.TMPDIR = tmpdir;
+    }
+  });
+
+  it("never runs a forged base as a fetch option", async () => {
+    const { fetchBaseBranch } = await import("../../src/dashboard/git.js");
+    expect(() => fetchBaseBranch(wt, `--upload-pack=touch ${marker}`)).toThrow();
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it("returns non-ASCII paths as themselves, not git's quoted form", async () => {
+    const { getChangedFiles, getChangedFilesBetween, listModifiedTrackedFiles, revertChurn } =
+      await import("../../src/dashboard/git.js");
+    fs.mkdirSync(path.join(wt, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(wt, "docs", "café.md"), "doc\n");
+    git(wt, "add", "-A");
+    git(wt, "commit", "-q", "-m", "accented doc");
+    expect(getChangedFiles(wt, "main")).toEqual(["docs/café.md", "work.txt"]);
+    const base = git(wt, "rev-parse", "refs/remotes/origin/main");
+    expect(getChangedFilesBetween(wt, base, "HEAD")).toEqual(["docs/café.md", "work.txt"]);
+
+    // The postMerge churn revert lists and restores the same way.
+    fs.writeFileSync(path.join(env.repoPath, "çà.txt"), "tracked\n");
+    git(env.repoPath, "add", "çà.txt");
+    git(env.repoPath, "commit", "-q", "-m", "accented file");
+    fs.writeFileSync(path.join(env.repoPath, "çà.txt"), "churned\n");
+    expect(listModifiedTrackedFiles(env.repoPath)).toEqual(["çà.txt"]);
+    expect(revertChurn(env.repoPath, new Set())).toEqual(["çà.txt"]);
+    expect(fs.readFileSync(path.join(env.repoPath, "çà.txt"), "utf8")).toBe("tracked\n");
+  });
+});

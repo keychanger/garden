@@ -24,7 +24,7 @@ vi.mock("node:fs", async (orig) => {
   return { ...actual, existsSync: () => h.configExists };
 });
 
-import { doctor, nodeMeetsFloor } from "../src/commands/doctor.js";
+import { doctor, gitMeetsFloor, nodeMeetsFloor } from "../src/commands/doctor.js";
 import { output } from "../src/output.js";
 
 const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "");
@@ -64,6 +64,17 @@ describe("garden doctor", () => {
     expect(output).toHaveBeenLastCalledWith(expect.objectContaining({
       checks: expect.arrayContaining([expect.objectContaining({
         name: "git", status: "fail", detail: expect.stringContaining("xcode-select --install"),
+      })]),
+    }));
+  });
+
+  it("fails a Git too old for --end-of-options, which merges depend on", async () => {
+    h.isTTY = false;
+    h.responses = { "git --version": ok("git version 2.25.1") };
+    await doctor();
+    expect(output).toHaveBeenLastCalledWith(expect.objectContaining({
+      checks: expect.arrayContaining([expect.objectContaining({
+        name: "git", status: "fail", detail: expect.stringContaining("Git 2.30 or later"),
       })]),
     }));
   });
@@ -128,6 +139,14 @@ describe("garden doctor", () => {
     expect(nodeMeetsFloor("v20.11.0")).toBe(false);
     // Unparseable input fails closed (warn), never falsely passes.
     expect(nodeMeetsFloor("garbage")).toBe(false);
+  });
+
+  it("git floor is the first release whose rev-parse takes --end-of-options", () => {
+    expect(gitMeetsFloor("git version 2.29.2")).toBe(false);
+    expect(gitMeetsFloor("git version 2.30.0")).toBe(true);
+    expect(gitMeetsFloor("git version 2.39.5 (Apple Git-154)")).toBe(true);
+    expect(gitMeetsFloor("git version 3.0.0")).toBe(true);
+    expect(gitMeetsFloor("garbage")).toBe(false);
   });
 
   it("emits JSON when not a TTY", async () => {

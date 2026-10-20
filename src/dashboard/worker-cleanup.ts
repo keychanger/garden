@@ -37,6 +37,7 @@ import { isGeneratedWorkerName } from "./names.js";
 import { findWorkerByName } from "./registry.js";
 import { withFileLock } from "./file-lock.js";
 import { reapAndLog } from "./worker-reap.js";
+import { branchRef } from "./git-refs.js";
 
 // Filename prefix the watchdog sweep scans for. Kept next to the path builder
 // it must agree with (workerCleanupMarkerPath in git.ts) — project and worker
@@ -344,11 +345,15 @@ function executeWorkerCleanup(req: WorkerCleanupRequest): void {
         failures.push(`inspect origin: ${origin.error}`);
       }
     } else {
-      const remote = gitCleanupOutput(repoPath, ["ls-remote", "--heads", "origin", branchName]);
+      // Full ref, as in deleteRemoteBranch: a bare name also matches a tag.
+      const remote = gitCleanupOutput(
+        repoPath,
+        ["ls-remote", "--heads", "--end-of-options", "origin", branchRef(branchName)],
+      );
       if (!remote.ok) {
         failures.push(`inspect origin branch: ${remote.error}`);
       } else if (remote.output.trim() !== "") {
-        const err = gitCleanupStep(repoPath, ["push", "origin", "--delete", branchName]);
+        const err = gitCleanupStep(repoPath, ["push", "--delete", "--end-of-options", "origin", branchRef(branchName)]);
         if (err) failures.push(`push origin --delete: ${err}`);
       }
     }

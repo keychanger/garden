@@ -112,6 +112,22 @@ describe("resurrectWorker (real fs/git)", () => {
     expect(readTelemetryEvents().some(e => e.event === "worker.resurrected")).toBe(true);
   });
 
+  it("rebuilds from a base that exists only as a local branch", async () => {
+    git(projectPath, "checkout", "-q", "-b", "local-only");
+    fs.writeFileSync(path.join(projectPath, "local.txt"), "local\n");
+    git(projectPath, "add", "local.txt");
+    git(projectPath, "commit", "-q", "-m", "local");
+    const localSha = git(projectPath, "rev-parse", "HEAD");
+    git(projectPath, "checkout", "-q", "main");
+    const t = await tombstoneFor({ baseBranch: "local-only", lastSeenSha: localSha });
+
+    const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+    const outcome = resurrectWorker(t);
+
+    expect(outcome.startedFrom).toBe("local-only");
+    expect(git(worktreePath, "rev-parse", "HEAD")).toBe(localSha);
+  });
+
   it("restores unmerged work from the object store when the branch was deleted", async () => {
     // Simulate the killed worker's unmerged commit: create it on a branch,
     // then delete the branch — the commit survives unreferenced, exactly the

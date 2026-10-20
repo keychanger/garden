@@ -23,6 +23,7 @@ import {
   isAncestor, localBranchExists, resolveBaseBranch, worktreeExists,
   worktreePath as defaultWorktreePath, workerCleanupMarkerPath,
 } from "./git.js";
+import { branchRef, remoteBranchRef } from "./git-refs.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
 import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
@@ -257,11 +258,12 @@ function rebuildWorktree(
     return `existing local branch ${branch}`;
   }
   const base = entry.baseBranch ?? resolveBaseBranch(repoPath);
-  const baseRef = branchExistsOnOrigin(repoPath, base) ? `origin/${base}`
-    : localBranchExists(repoPath, base) ? base
+  // git gets the full ref; the operator's output names it the usual way.
+  const baseRef = branchExistsOnOrigin(repoPath, base) ? { ref: remoteBranchRef(base), label: `origin/${base}` }
+    : localBranchExists(repoPath, base) ? { ref: branchRef(base), label: base }
     : null;
   const tip = entry.lastSeenSha;
-  if (tip && commitExists(repoPath, tip) && (!baseRef || !isAncestor(repoPath, tip, baseRef))) {
+  if (tip && commitExists(repoPath, tip) && (!baseRef || !isAncestor(repoPath, tip, baseRef.ref))) {
     createWorktree(repoPath, wtPath, branch, { startPoint: tip });
     notes.push(`recovered unmerged work: branch restored at ${tip.slice(0, 9)}`);
     return `unmerged tip ${tip.slice(0, 9)}`;
@@ -271,6 +273,6 @@ function rebuildWorktree(
       `Base branch '${base}' exists neither on origin nor locally in ${repoPath} — cannot rebuild the worktree.`,
     );
   }
-  createWorktree(repoPath, wtPath, branch, { startPoint: baseRef });
-  return baseRef;
+  createWorktree(repoPath, wtPath, branch, { startPoint: baseRef.ref });
+  return baseRef.label;
 }

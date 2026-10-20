@@ -69,6 +69,11 @@ describe("spawn draft", () => {
     expect(consumeSpawnDraft("nope")).toEqual({});
   });
 
+  it("drops a base that is not a valid branch name, since workers can write the draft", () => {
+    fs.writeFileSync(draftFile("lex"), JSON.stringify({ base: "--upload-pack=x", crew: "all-codex", ts: Date.now() }));
+    expect(readSpawnDraft("lex")).toEqual({ crew: "all-codex" });
+  });
+
   it("ignores a stale draft (older than the max age)", () => {
     const stale = { base: "old", ts: Date.now() - SPAWN_DRAFT_MAX_AGE_MS - 1000 };
     fs.writeFileSync(draftFile("lex"), JSON.stringify(stale));

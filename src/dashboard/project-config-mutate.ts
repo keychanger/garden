@@ -30,6 +30,7 @@ import {
   RESERVED_LOG_COLOR_PROJECT,
   isValidLogColorKey,
 } from "../log-palette.js";
+import { isValidBranchName } from "./git-refs.js";
 
 // The flat, single-value config keys settable via `garden config <p> <key>
 // <value>` and the project menu. `path` is deliberately excluded (set via
@@ -296,6 +297,8 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
         message = `Cleared ${key} for ${projectName} (workers follow the project checkout at spawn)`;
       } else if (!value.trim()) {
         throw new Error("baseBranch requires a non-empty branch name");
+      } else if (!isValidBranchName(value.trim())) {
+        throw new Error(`baseBranch: not a valid git branch name: ${JSON.stringify(value)}`);
       } else {
         const branch = value.trim();
         project.baseBranch = branch;

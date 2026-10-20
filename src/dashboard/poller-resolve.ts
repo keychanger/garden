@@ -13,6 +13,7 @@ import {
   abortRebase, forcePushBranch, getBranchHeadSha, getRemoteTrackingSha,
   getUnmergedFiles, hasRebaseInProgress, isAncestor,
 } from "./git.js";
+import { remoteBranchRef } from "./git-refs.js";
 import { refreshDashboard } from "./header.js";
 import { launchHeadlessAgent } from "./headless-agent.js";
 import { log } from "./log.js";
@@ -246,7 +247,7 @@ export function handleResolving(
   const rebaseStuck = hasRebaseInProgress(wtPath);
   const headSha = getBranchHeadSha(wtPath);
   const rebased = headSha !== null &&
-    isAncestor(wtPath, `origin/${baseBranch}`, headSha);
+    isAncestor(wtPath, remoteBranchRef(baseBranch), headSha);
   const madeProgress = headSha !== null && entry.preResolveSha !== undefined &&
     headSha !== entry.preResolveSha;
 

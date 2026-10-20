@@ -78,7 +78,7 @@ import {
 } from "./git.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
 import { getBuildBranch, loadConfig } from "../config.js";
-import { GARDEN_VERSION } from "../version.js";
+import { GARDEN_COMMIT } from "../version.js";
 import { withFileLock } from "./file-lock.js";
 import { enforceAwake } from "./awake.js";
 import {
@@ -380,10 +380,10 @@ export function pokeBeadIntakeProjects(): string[] {
 // install not running out of a git checkout — nothing to measure there, and the
 // bar stays normal rather than nagging about something unknowable.
 export function refreshBuildStaleness(): boolean {
-  if (GARDEN_VERSION === "dev") return false;
+  if (!GARDEN_COMMIT) return false;
   const repo = gardenInstallRepo();
   if (!repo) return false;
-  const behind = commitsBehindOrigin(repo, GARDEN_VERSION, getBuildBranch());
+  const behind = commitsBehindOrigin(repo, GARDEN_COMMIT, getBuildBranch());
   let changed = false;
   withStateLock(() => {
     const state = readDashState();

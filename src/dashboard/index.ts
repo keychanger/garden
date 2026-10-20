@@ -561,6 +561,14 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     // and Stop hook all rebase against the new base from this point on.
     const [, projectName, workerName, newBase, oldBase] = args;
     if (!projectName || !workerName || !newBase) return;
+    // The fallback name is origin's default branch as ls-remote reported it.
+    const { isValidBranchName } = await import("./git-refs.js");
+    if (!isValidBranchName(newBase)) {
+      log.warn("bootstrap", "rebase: refused invalid base name", {
+        worker: workerName, data: { project: projectName, newBase },
+      });
+      return;
+    }
     try {
       const { updateWorkerFields } = await import("./registry.js");
       updateWorkerFields(projectName, workerName, { baseBranch: newBase });

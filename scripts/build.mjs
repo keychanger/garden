@@ -15,15 +15,16 @@ const BUNDLES = [
   { entry: "src/hook-entry.ts", outfile: "dist/hook.js" },
 ];
 
-function buildVersion() {
+function headSha(...flags) {
   try {
-    return execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf-8" }).trim();
+    return execFileSync("git", ["rev-parse", ...flags, "HEAD"], { encoding: "utf-8" }).trim();
   } catch {
     return "";
   }
 }
 
-const version = buildVersion();
+const version = headSha("--short");
+const commit = headSha();
 fs.mkdirSync("dist", { recursive: true });
 for (const { entry, outfile } of BUNDLES) {
   const result = await build({
@@ -36,7 +37,7 @@ for (const { entry, outfile } of BUNDLES) {
     outfile,
     write: false,
     banner: { js: "#!/usr/bin/env node" },
-    define: { __GARDEN_VERSION__: JSON.stringify(version) },
+    define: { __GARDEN_VERSION__: JSON.stringify(version), __GARDEN_COMMIT__: JSON.stringify(commit) },
   });
   const [output] = result.outputFiles;
   const tmp = `${outfile}.${process.pid}.tmp`;

@@ -49,12 +49,14 @@ import {
   getCommitSummary,
   pruneWorktrees,
   resolveBaseBranch,
+  listBranches,
   resolveSpawnBase,
   currentBranch,
   getRemoteHost,
   branchExistsOnOrigin,
   getWorkerBaseBranch,
   getGitCommonDir,
+  tryPublishBranch,
 } from "../src/dashboard/git.js";
 
 const mockExec = vi.mocked(execFileSync);
@@ -62,6 +64,8 @@ const mockExec = vi.mocked(execFileSync);
 // Every git garden runs in a worktree carries SAFE_GIT_CONFIG (hooks and
 // fsmonitor off); only commands on the operator's own checkout go without it.
 const safe = (...args: string[]) => [...SAFE_GIT_CONFIG, ...args];
+// `git symbolic-ref --quiet HEAD` on a detached HEAD: exit 1, no output.
+const detachedHead = () => { throw Object.assign(new Error("Command failed"), { status: 1 }); };
 const mockFs = vi.mocked(fs);
 
 beforeEach(() => {
@@ -70,6 +74,14 @@ beforeEach(() => {
 });
 
 describe("resolveSpawnBase", () => {
+  it("refuses a base that is not a valid git branch name, whichever source it came from", () => {
+    expect(() => resolveSpawnBase({ path: "/repo" }, "--upload-pack=touch /tmp/x")).toThrow(/not a valid git branch name/);
+    expect(() => resolveSpawnBase({ path: "/repo", baseBranch: "a..b" })).toThrow(/not a valid git branch name/);
+    // The checkout's HEAD lives in the shared git dir worker sandboxes can write.
+    mockExec.mockReturnValue("refs/heads/--x");
+    expect(() => resolveSpawnBase({ path: "/repo" })).toThrow(/not a valid git branch name/);
+  });
+
   it("prefers an explicit override over the configured base (no git)", () => {
     const result = resolveSpawnBase({ path: "/repo", baseBranch: "v2-api" }, "release");
     expect(result).toBe("release");
@@ -89,13 +101,13 @@ describe("resolveSpawnBase", () => {
   });
 
   it("falls back to resolveBaseBranch (checkout) when neither is set", () => {
-    mockExec.mockReturnValue("feature-x");
+    mockExec.mockReturnValue("refs/heads/feature-x");
     const result = resolveSpawnBase({ path: "/repo" });
     expect(result).toBe("feature-x");
-    // Delegated to resolveBaseBranch -> currentBranch (git rev-parse).
+    // Delegated to resolveBaseBranch -> currentBranch (git symbolic-ref).
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("rev-parse", "--abbrev-ref", "HEAD"),
+      safe("symbolic-ref", "--quiet", "HEAD"),
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -118,7 +130,7 @@ describe("createWorktree", () => {
     });
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["worktree", "add", "/tmp/wt/proj/worker", "-b", "swift-oak"],
+      ["worktree", "add", "-b", "swift-oak", "--end-of-options", "/tmp/wt/proj/worker"],
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -147,6 +159,36 @@ describe("createWorktree", () => {
       return "";
     });
     expect(() => createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak")).not.toThrow();
+  });
+
+  it("checks out an existing branch by name, and starts a new one only from a SHA or full ref", () => {
+    createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak", { useExistingBranch: true });
+    createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak", { startPoint: "refs/remotes/origin/main" });
+    expect(mockExec.mock.calls.filter(c => c[0] === "git").map(c => c[1])).toEqual([
+      // A full ref here would check out a detached HEAD instead of the branch.
+      ["worktree", "add", "--end-of-options", "/tmp/wt/proj/worker", "swift-oak"],
+      ["worktree", "add", "-b", "swift-oak", "--end-of-options", "/tmp/wt/proj/worker", "refs/remotes/origin/main"],
+    ]);
+    // resurrect's start point is a tombstone SHA, which a worker can forge.
+    mockExec.mockClear();
+    expect(() => createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak", { startPoint: "--output=/tmp/x" })).toThrow();
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+});
+
+describe("tryPublishBranch", () => {
+  it("pushes the branch by its full name and sets its upstream", () => {
+    expect(tryPublishBranch("/repo", "release/2026")).toEqual({ ok: true });
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["push", "-u", "--end-of-options", "origin", "refs/heads/release/2026:refs/heads/release/2026"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
+
+  it("refuses a name git would read as an option, without pushing", () => {
+    expect(tryPublishBranch("/repo", "--receive-pack=touch /tmp/x").ok).toBe(false);
+    expect(mockExec).not.toHaveBeenCalled();
   });
 });
 
@@ -186,7 +228,7 @@ describe("deleteBranch", () => {
     deleteBranch("/repo", "swift-oak");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["branch", "-D", "swift-oak"],
+      ["branch", "-D", "--end-of-options", "swift-oak"],
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -224,7 +266,7 @@ describe("getRemoteTrackingSha", () => {
     expect(getRemoteTrackingSha("/tmp/wt", "swift-oak")).toBe("def456abc");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("rev-parse", "origin/swift-oak"),
+      safe("rev-parse", "--verify", "--end-of-options", "refs/remotes/origin/swift-oak"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -243,7 +285,7 @@ describe("getDiffAgainstBase", () => {
     expect(getDiffAgainstBase("/tmp/wt", "main")).toBe("diff --git a/file.ts b/file.ts\n+new line");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("diff", "--no-ext-diff", "--no-textconv", "origin/main...HEAD"),
+      safe("diff", "--no-ext-diff", "--no-textconv", "--end-of-options", "refs/remotes/origin/main...HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -253,7 +295,7 @@ describe("getDiffAgainstBase", () => {
     getDiffAgainstBase("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("diff", "--no-ext-diff", "--no-textconv", "origin/develop...HEAD"),
+      safe("diff", "--no-ext-diff", "--no-textconv", "--end-of-options", "refs/remotes/origin/develop...HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -278,10 +320,10 @@ describe("mergeToBase", () => {
     mergeToBase("/repo", "swift-oak", "main");
     const calls = mockExec.mock.calls;
     expect(calls[0]).toEqual(["git", ["fetch", "origin"], expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[1]).toEqual(["git", safe("rev-parse", "origin/swift-oak"), expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[2]).toEqual(["git", safe("rev-parse", "origin/main"), expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[3]).toEqual(["git", safe("merge-base", "--is-ancestor", "def456", "abc123"), expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "origin", "abc123:refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[1]).toEqual(["git", safe("rev-parse", "--verify", "--end-of-options", "refs/remotes/origin/swift-oak"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", safe("rev-parse", "--verify", "--end-of-options", "refs/remotes/origin/main"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[3]).toEqual(["git", safe("merge-base", "--is-ancestor", "--end-of-options", "def456", "abc123"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "--end-of-options", "origin", "abc123:refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
   });
 
   it("uses the specified base branch", () => {
@@ -293,8 +335,8 @@ describe("mergeToBase", () => {
       .mockReturnValueOnce("");          // push
     mergeToBase("/repo", "swift-oak", "develop");
     const calls = mockExec.mock.calls;
-    expect(calls[2]).toEqual(["git", safe("rev-parse", "origin/develop"), expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "origin", "abc123:refs/heads/develop"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", safe("rev-parse", "--verify", "--end-of-options", "refs/remotes/origin/develop"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "--end-of-options", "origin", "abc123:refs/heads/develop"], expect.objectContaining({ cwd: "/repo" })]);
   });
 
   it("throws when not a fast-forward", () => {
@@ -320,12 +362,12 @@ describe("deleteRemoteBranch", () => {
     deleteRemoteBranch("/repo", "swift-oak");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["ls-remote", "--heads", "origin", "swift-oak"],
+      ["ls-remote", "--heads", "--end-of-options", "origin", "refs/heads/swift-oak"],
       expect.objectContaining({ cwd: "/repo" }),
     );
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["push", "origin", "--delete", "swift-oak"],
+      ["push", "--delete", "--end-of-options", "origin", "refs/heads/swift-oak"],
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -335,7 +377,7 @@ describe("deleteRemoteBranch", () => {
     expect(mockExec).toHaveBeenCalledTimes(1);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      ["ls-remote", "--heads", "origin", "swift-oak"],
+      ["ls-remote", "--heads", "--end-of-options", "origin", "refs/heads/swift-oak"],
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -393,7 +435,7 @@ describe("rebaseBranch", () => {
     expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "ok" });
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("rebase", "origin/main"),
+      safe("rebase", "--end-of-options", "refs/remotes/origin/main"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -403,7 +445,7 @@ describe("rebaseBranch", () => {
     rebaseBranch("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("rebase", "origin/develop"),
+      safe("rebase", "--end-of-options", "refs/remotes/origin/develop"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -423,7 +465,7 @@ describe("rebaseBranch", () => {
     expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "ok" });
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("rebase", "--rebase-merges", "origin/main"),
+      safe("rebase", "--rebase-merges", "--end-of-options", "refs/remotes/origin/main"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -502,19 +544,28 @@ describe("hasRebaseInProgress", () => {
 
 describe("isAncestor", () => {
   it("returns true when ancestor check succeeds", () => {
-    expect(isAncestor("/tmp/wt", "origin/main", "HEAD")).toBe(true);
+    expect(isAncestor("/tmp/wt", "refs/remotes/origin/main", "HEAD")).toBe(true);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("merge-base", "--is-ancestor", "origin/main", "HEAD"),
+      safe("merge-base", "--is-ancestor", "--end-of-options", "refs/remotes/origin/main", "HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
+  });
+
+  it("refuses a revision that is not a SHA, HEAD or full ref, without running git", () => {
+    // Registry SHAs are worker-writable; git would read this one as its
+    // output-to-file option.
+    expect(isAncestor("/tmp/wt", "--output=/tmp/x", "HEAD")).toBe(false);
+    expect(isAncestor("/tmp/wt", "origin/main", "HEAD")).toBe(false);
+    expect(mockExec).not.toHaveBeenCalled();
   });
 
   it("returns false when ancestor check fails", () => {
     mockExec.mockImplementation(() => {
       throw new Error("not ancestor");
     });
-    expect(isAncestor("/tmp/wt", "origin/main", "HEAD")).toBe(false);
+    expect(isAncestor("/tmp/wt", "refs/remotes/origin/main", "HEAD")).toBe(false);
+    expect(mockExec).toHaveBeenCalled();
   });
 });
 
@@ -551,11 +602,11 @@ describe("ensureNoRebaseInProgress", () => {
 
 describe("getUnmergedFiles", () => {
   it("returns list of unmerged file paths", () => {
-    mockExec.mockReturnValue("src/foo.ts\nsrc/bar.ts\n");
+    mockExec.mockReturnValue("src/foo.ts\0src/bar.ts\0");
     expect(getUnmergedFiles("/tmp/wt")).toEqual(["src/foo.ts", "src/bar.ts"]);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("diff", "--name-only", "--diff-filter=U"),
+      safe("diff", "--name-only", "-z", "--diff-filter=U"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -582,7 +633,7 @@ describe("forcePushBranch", () => {
     forcePushBranch("/tmp/wt", "my-branch");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("push", "--force-with-lease", "origin", "HEAD:my-branch"),
+      safe("push", "--force-with-lease", "--end-of-options", "origin", "HEAD:refs/heads/my-branch"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -597,11 +648,11 @@ describe("forcePushBranch", () => {
 
 describe("getChangedFiles", () => {
   it("returns list of changed files", () => {
-    mockExec.mockReturnValue("src/foo.ts\nsrc/bar.ts\n");
+    mockExec.mockReturnValue("src/foo.ts\0src/bar.ts\0");
     expect(getChangedFiles("/tmp/wt", "main")).toEqual(["src/foo.ts", "src/bar.ts"]);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("diff", "--name-only", "origin/main...HEAD"),
+      safe("diff", "--name-only", "-z", "--end-of-options", "refs/remotes/origin/main...HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -611,7 +662,7 @@ describe("getChangedFiles", () => {
     getChangedFiles("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("diff", "--name-only", "origin/develop...HEAD"),
+      safe("diff", "--name-only", "-z", "--end-of-options", "refs/remotes/origin/develop...HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -635,7 +686,7 @@ describe("getCommitSummary", () => {
     expect(getCommitSummary("/tmp/wt", "main")).toBe("abc123 fix something\ndef456 add feature");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("log", "--oneline", "origin/main..HEAD"),
+      safe("log", "--oneline", "--end-of-options", "refs/remotes/origin/main..HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -645,7 +696,7 @@ describe("getCommitSummary", () => {
     getCommitSummary("/tmp/wt", "develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("log", "--oneline", "origin/develop..HEAD"),
+      safe("log", "--oneline", "--end-of-options", "refs/remotes/origin/develop..HEAD"),
       expect.objectContaining({ cwd: "/tmp/wt" }),
     );
   });
@@ -683,18 +734,18 @@ describe("pruneWorktrees", () => {
 
 describe("resolveBaseBranch", () => {
   it("uses current branch of main checkout", () => {
-    mockExec.mockReturnValue("develop");
+    mockExec.mockReturnValue("refs/heads/develop");
     expect(resolveBaseBranch("/repo")).toBe("develop");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("rev-parse", "--abbrev-ref", "HEAD"),
+      safe("symbolic-ref", "--quiet", "HEAD"),
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
 
   it("detects from origin/HEAD when current branch is detached HEAD", () => {
     mockExec
-      .mockReturnValueOnce("HEAD") // currentBranch returns "HEAD" for detached
+      .mockImplementationOnce(detachedHead) // currentBranch returns "HEAD" for detached
       .mockReturnValueOnce("refs/remotes/origin/master"); // symbolic-ref
     expect(resolveBaseBranch("/repo")).toBe("master");
   });
@@ -712,6 +763,14 @@ describe("resolveBaseBranch", () => {
     });
     expect(resolveBaseBranch("/repo")).toBe("main");
   });
+
+  it("does not take a base from an origin/HEAD a worker rewrote", () => {
+    // The shared refs store is worker-writable.
+    mockExec
+      .mockReturnValueOnce("HEAD")
+      .mockReturnValueOnce("refs/remotes/origin/--upload-pack=touch /tmp/x");
+    expect(resolveBaseBranch("/repo")).toBe("main");
+  });
 });
 
 describe("branchExistsOnOrigin", () => {
@@ -720,7 +779,7 @@ describe("branchExistsOnOrigin", () => {
     expect(branchExistsOnOrigin("/repo", "develop")).toBe(true);
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("show-ref", "--verify", "--quiet", "refs/remotes/origin/develop"),
+      safe("show-ref", "--verify", "--quiet", "--end-of-options", "refs/remotes/origin/develop"),
       expect.objectContaining({ cwd: "/repo" }),
     );
   });
@@ -738,7 +797,7 @@ describe("getWorkerBaseBranch", () => {
   });
 
   it("falls back to resolveBaseBranch when entry has no pinned base", () => {
-    mockExec.mockReturnValue("feature/x");
+    mockExec.mockReturnValue("refs/heads/feature/x");
     expect(getWorkerBaseBranch({}, "/repo")).toBe("feature/x");
   });
 });
@@ -750,7 +809,7 @@ describe("fetchBaseBranch", () => {
     fetchBaseBranch("/tmp/wt", "main");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("fetch", "origin", "main"),
+      safe("fetch", "--end-of-options", "origin", "refs/heads/main"),
       expect.objectContaining({ cwd: "/tmp/wt", timeout: 60_000 }),
     );
   });
@@ -759,30 +818,30 @@ describe("fetchBaseBranch", () => {
 describe("fastForwardBase", () => {
   it("advances the working tree after a clean fetch + ff-only merge on the base branch", () => {
     mockExec
-      .mockReturnValueOnce("main\n")  // rev-parse --abbrev-ref HEAD (currentBranch)
+      .mockReturnValueOnce("refs/heads/main\n")  // symbolic-ref HEAD (currentBranch)
       .mockReturnValueOnce("")        // fetch origin main
       .mockReturnValueOnce("");       // merge --ff-only origin/main
     expect(fastForwardBase("/repo", "main")).toEqual({ ok: true, advanced: "worktree" });
     const calls = mockExec.mock.calls;
-    expect(calls[1]).toEqual(["git", ["fetch", "origin", "main"], expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[2]).toEqual(["git", ["merge", "--ff-only", "origin/main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[1]).toEqual(["git", ["fetch", "--end-of-options", "origin", "refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", ["merge", "--ff-only", "--end-of-options", "refs/remotes/origin/main"], expect.objectContaining({ cwd: "/repo" })]);
   });
 
   it("advances the ref alone (advanced: ref) when the checkout is parked off-base", () => {
     mockExec
-      .mockReturnValueOnce("feature-x\n") // currentBranch
+      .mockReturnValueOnce("refs/heads/feature-x\n") // currentBranch
       .mockReturnValueOnce("")            // fetch origin main (refresh tracking ref)
       .mockReturnValueOnce("");           // fetch origin main:main (advance ref)
     expect(fastForwardBase("/repo", "main")).toEqual({ ok: true, advanced: "ref" });
     const calls = mockExec.mock.calls;
     // The working tree is never touched — no `merge`, just the ref-advancing refspec.
-    expect(calls[2]).toEqual(["git", ["fetch", "origin", "main:main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", ["fetch", "--end-of-options", "origin", "refs/heads/main:refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
     expect(mockExec.mock.calls.some(c => (c[1] as string[])[0] === "merge")).toBe(false);
   });
 
   it("returns diverged with ahead/behind counts when the off-base ref refspec is rejected", () => {
     mockExec
-      .mockReturnValueOnce("feature-x\n") // currentBranch
+      .mockReturnValueOnce("refs/heads/feature-x\n") // currentBranch
       .mockReturnValueOnce("")            // fetch origin main
       .mockImplementationOnce(() => {     // fetch origin main:main rejected
         throw Object.assign(new Error("Command failed"), {
@@ -797,7 +856,7 @@ describe("fastForwardBase", () => {
 
   it("returns checked-out-elsewhere with the worktree path when the base is live in another worktree", () => {
     mockExec
-      .mockReturnValueOnce("feature-x\n") // currentBranch
+      .mockReturnValueOnce("refs/heads/feature-x\n") // currentBranch
       .mockReturnValueOnce("")            // fetch origin main
       .mockImplementationOnce(() => {     // fetch origin main:main refused
         throw Object.assign(new Error("Command failed"), {
@@ -811,7 +870,7 @@ describe("fastForwardBase", () => {
 
   it("returns dirty when ff-only merge aborts and the working tree has uncommitted changes", () => {
     mockExec
-      .mockReturnValueOnce("main\n") // currentBranch
+      .mockReturnValueOnce("refs/heads/main\n") // currentBranch
       .mockReturnValueOnce("")       // fetch origin main
       .mockImplementationOnce(() => { throw new Error("Your local changes to the following files would be overwritten by merge: rules.md"); }) // merge --ff-only
       .mockReturnValueOnce(" M rules.md\n"); // status --porcelain (isWorktreeDirty -> dirty)
@@ -823,19 +882,26 @@ describe("fastForwardBase", () => {
 
   it("auto-heals a redundant local commit: resets onto origin when the clean tree already matches", () => {
     mockExec
-      .mockReturnValueOnce("main\n") // currentBranch
+      .mockReturnValueOnce("refs/heads/main\n") // currentBranch
       .mockReturnValueOnce("")       // fetch origin main
       .mockImplementationOnce(() => { throw new Error("fatal: Not possible to fast-forward, aborting."); }) // merge --ff-only (diverged)
       .mockReturnValueOnce("")       // status --porcelain (clean)
       .mockReturnValueOnce("")       // diff --quiet HEAD origin/main (exit 0 = identical -> no throw)
       .mockReturnValueOnce("");      // reset --hard origin/main
     expect(fastForwardBase("/repo", "main")).toEqual({ ok: true, advanced: "worktree" });
-    expect(mockExec.mock.calls.some(c => (c[1] as string[]).join(" ") === "reset --hard origin/main")).toBe(true);
+    const argvs = mockExec.mock.calls.map(c => (c[1] as string[]).join(" "));
+    // The tree comparison that licenses the reset names origin's branch in
+    // full, so a same-named tag or branch in the shared refs store cannot pass it.
+    expect(argvs).toContain(
+      safe("diff", "--quiet", "--no-ext-diff", "--no-textconv", "--end-of-options", "HEAD", "refs/remotes/origin/main").join(" "),
+    );
+    // No --end-of-options on reset: it rejects the flag before git 2.44.
+    expect(argvs).toContain("reset --hard refs/remotes/origin/main --");
   });
 
   it("returns diverged (clean tree, real local commits) when the content differs from origin", () => {
     mockExec
-      .mockReturnValueOnce("main\n") // currentBranch
+      .mockReturnValueOnce("refs/heads/main\n") // currentBranch
       .mockReturnValueOnce("")       // fetch origin main
       .mockImplementationOnce(() => { throw new Error("fatal: Not possible to fast-forward, aborting."); }) // merge --ff-only
       .mockReturnValueOnce("")       // status --porcelain (clean)
@@ -850,7 +916,7 @@ describe("fastForwardBase", () => {
 
   it("returns stuck when fetch fails", () => {
     mockExec
-      .mockReturnValueOnce("main\n") // currentBranch
+      .mockReturnValueOnce("refs/heads/main\n") // currentBranch
       .mockImplementationOnce(() => { throw new Error("network error"); });
     const result = fastForwardBase("/repo", "main");
     expect(result.ok).toBe(false);
@@ -860,13 +926,18 @@ describe("fastForwardBase", () => {
 
 describe("currentBranch", () => {
   it("returns the current branch name", () => {
-    mockExec.mockReturnValue("my-feature");
+    mockExec.mockReturnValue("refs/heads/my-feature");
     expect(currentBranch("/repo")).toBe("my-feature");
     expect(mockExec).toHaveBeenCalledWith(
       "git",
-      safe("rev-parse", "--abbrev-ref", "HEAD"),
+      safe("symbolic-ref", "--quiet", "HEAD"),
       expect.objectContaining({ cwd: "/repo" }),
     );
+  });
+
+  it("returns HEAD when HEAD is detached", () => {
+    mockExec.mockImplementation(detachedHead);
+    expect(currentBranch("/repo")).toBe("HEAD");
   });
 
   it("returns null on error", () => {
@@ -925,5 +996,22 @@ describe("getGitCommonDir", () => {
       throw new Error("not a git repo");
     });
     expect(getGitCommonDir("/repo/myproject")).toBeNull();
+  });
+});
+
+describe("listBranches", () => {
+  it("offers only names that are valid branch names, so a menu cannot set a base git would misread", () => {
+    // refs/heads/--depth=1 is a ref git will store; its short name is an option.
+    mockExec.mockReturnValue([
+      "refs/heads/main", "refs/heads/--depth=1", "refs/heads/feature/x",
+      "refs/remotes/origin/HEAD", "refs/remotes/origin/main", "refs/remotes/origin/release", "",
+    ].join("\n"));
+    expect(listBranches("/repo")).toEqual(["main", "feature/x", "release"]);
+    // Full refnames: %(refname:short) answers "heads/main" once a tag named main exists.
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      safe("for-each-ref", "--sort=-committerdate", "--format=%(refname)", "refs/heads", "refs/remotes/origin"),
+      expect.objectContaining({ cwd: "/repo" }),
+    );
   });
 });

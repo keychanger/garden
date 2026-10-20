@@ -765,6 +765,10 @@ describe("handleClaudeHook — core events", () => {
     expect(entry.agentStatus).toBe("idle");
     expect(typeof entry.pendingReviewAt).toBe("number");
     expect(entry.prState).toBeUndefined();
+    // Counted against origin's branch by its full name: a same-named tag or
+    // branch in the shared refs store would otherwise decide whether a review runs.
+    const subcommands = vi.mocked(execFileSync).mock.calls.map(c => gitSubcommandArgs(c[1] as string[] | undefined));
+    expect(subcommands).toContainEqual(["rev-list", "--count", "--end-of-options", "refs/remotes/origin/main..HEAD"]);
   });
 
   it("stop with commits ahead does not queue review when cleanliness is indeterminate", async () => {

@@ -25,6 +25,7 @@ import {
   getChangedFilesBetween, getCommitSummary, getHeadSubject, getWorkerBaseBranch, isAncestor, listModifiedTrackedFiles,
   mergeToBase, rebaseBranch, revertChurn, syncWorktreeToRemote,
 } from "./git.js";
+import { remoteBranchRef } from "./git-refs.js";
 import { gitTimedOut } from "./git-exec.js";
 import { refreshDashboard, setupStatusBar } from "./header.js";
 import { setupKeybindings } from "./hotkeys.js";
@@ -182,7 +183,7 @@ export function handleMergePending(
   // fires a spurious push-failed alert (it no longer strands, but the cycle
   // is wasted). Detect it and resume finalization idempotently instead.
   const headSha = getBranchHeadSha(wtPath);
-  if (headSha && isAncestor(wtPath, headSha, `origin/${baseBranch}`)) {
+  if (headSha && isAncestor(wtPath, headSha, remoteBranchRef(baseBranch))) {
     resumeInterruptedMerge(projectName, projectPath, baseBranch, entry);
     return true;
   }

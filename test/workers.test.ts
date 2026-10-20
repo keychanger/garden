@@ -565,6 +565,19 @@ describe("newWorker", () => {
       .toBeLessThan(vi.mocked(withStateLock).mock.invocationCallOrder[0]);
   });
 
+  it("rejects creation, without throwing, when the base is not a valid branch name", () => {
+    // The ⌥⇧N picker routes and bead intake call newWorker without a catch;
+    // intake refunds the dispatch it charged only on a null return.
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(resolveSpawnBase).mockImplementationOnce(() => {
+      throw new Error('not a valid git branch name: "--x"');
+    });
+    expect(newWorker()).toBeNull();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    const msgs = vi.mocked(tmuxDisplay).mock.calls.map((c) => c[0] as string);
+    expect(msgs).toContain('Cannot create worker: not a valid git branch name: "--x"');
+  });
+
   it("rejects creation when auto-publish fails, surfacing the git error", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(branchExistsOnOrigin).mockReturnValueOnce(false);

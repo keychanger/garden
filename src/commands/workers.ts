@@ -19,6 +19,7 @@ import { resolveGardenRunner } from "../dashboard/runner.js";
 import {
   countCommitsAheadOfBase, isWorktreeDirty, syncWorktreeToBase,
 } from "../dashboard/git.js";
+import { isValidBranchName } from "../dashboard/git-refs.js";
 
 export async function workers(args: string[]): Promise<void> {
   const sub = args[0];
@@ -105,6 +106,9 @@ async function newCommand(args: string[]): Promise<void> {
   const base = flags.get("base");
   if (base !== undefined && !base.trim()) {
     throw new Error("--base requires a non-empty branch name");
+  }
+  if (base !== undefined && !isValidBranchName(base.trim())) {
+    throw new Error(`--base: not a valid git branch name: ${JSON.stringify(base)}`);
   }
 
   // Per-worker crew: on the default workflow it selects the build member —

@@ -6,11 +6,22 @@ import { describe, it, expect, vi } from "vitest";
 
 vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 vi.mock("../src/dashboard/workers.js", () => ({ bounceWorker: vi.fn() }));
+vi.mock("../src/dashboard/registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/dashboard/registry.js")>()),
+  getWorkers: vi.fn(() => [{ name: "bold-ash", sessionId: "s1", task: "", baseBranch: "v2-api" }]),
+  updateWorkerFields: vi.fn(),
+}));
+vi.mock("../src/dashboard/tmux.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/dashboard/tmux.js")>()),
+  tmuxDisplay: vi.fn(),
+}));
 
 const {
   buildWorkerMenuPlan, buildWorkerBranchSubmenuPlan, buildWorkerCrewSubmenuPlan,
-  buildWorkerModelSubmenuPlan, buildWorkerKillConfirmPlan,
+  buildWorkerModelSubmenuPlan, buildWorkerKillConfirmPlan, applyWorkerSet,
 } = await import("../src/dashboard/worker-menu.js");
+const { updateWorkerFields } = await import("../src/dashboard/registry.js");
+const { tmuxDisplay } = await import("../src/dashboard/tmux.js");
 
 const view = {
   project: "lex", worker: "bold-ash", runner: "garden",
@@ -108,5 +119,14 @@ describe("buildWorkerKillConfirmPlan", () => {
     const plan = buildWorkerKillConfirmPlan("lex", "bold-ash", "garden");
     expect(plan.rows[0].run).toBe("garden dashboard _kill-pane");
     expect(plan.rows[1].run).toBe("garden dashboard _worker-menu lex bold-ash");
+  });
+});
+
+describe("applyWorkerSet", () => {
+  it("refuses a base that is not a valid git branch name, leaving the worker's base alone", () => {
+    // The poller hands entry.baseBranch to git on the next review and merge.
+    applyWorkerSet("lex", "bold-ash", "baseBranch", "--upload-pack=touch /tmp/x");
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(tmuxDisplay).toHaveBeenCalledWith("Not a valid git branch name: --upload-pack=touch /tmp/x");
   });
 });

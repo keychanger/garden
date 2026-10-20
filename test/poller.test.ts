@@ -235,7 +235,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   // Default the resume check to false (a worker about to merge has unmerged
   // commits) by keying off the remote ref appearing as the descendant.
   isAncestor: vi.fn((_wt: string, _ancestor: string, descendant: string) =>
-    !String(descendant).startsWith("origin/")),
+    !String(descendant).startsWith("refs/remotes/origin/")),
   getUnmergedFiles: vi.fn(() => []),
   fetchBaseBranch: vi.fn(),
   readCommittedFiles: vi.fn(() => new Map<string, string>()),
@@ -387,7 +387,7 @@ beforeEach(() => {
   vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
   vi.mocked(hasRebaseInProgress).mockReturnValue(false);
   vi.mocked(isAncestor).mockImplementation((_wt, _ancestor, descendant) =>
-    !String(descendant).startsWith("origin/"));
+    !String(descendant).startsWith("refs/remotes/origin/"));
   vi.mocked(getUnmergedFiles).mockReturnValue([]);
   vi.mocked(fs.existsSync).mockReturnValue(false);
   // Default the Haiku verdict-extraction fallback to "no verdict recovered"
@@ -4764,6 +4764,9 @@ describe("poll — resolving state", () => {
 
     poll("myproject");
 
+    // Verified against origin's base by its full name: the real isAncestor
+    // refuses an abbreviated origin/main, which would fail every resolve.
+    expect(isAncestor).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "refs/remotes/origin/main", "post-rebase-sha");
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({
@@ -5252,7 +5255,7 @@ describe("poll — reviewer prompt", () => {
       String(c[0]).includes("review-prompt"),
     );
     expect(promptCall).toBeDefined();
-    expect(String(promptCall![1])).toContain("git rebase origin/main");
+    expect(String(promptCall![1])).toContain("git rebase refs/remotes/origin/main");
     expect(String(promptCall![1])).not.toMatch(/git rebase main\b/);
   });
 

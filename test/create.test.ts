@@ -771,7 +771,28 @@ describe("buildWorktreeBootstrapScript", () => {
     // the load-bearing piece — $BASE is initialized to the requested base
     // and may be rewritten by the missing-base fallback path.
     expect(script).toContain("BASE=main");
-    expect(script).toMatch(/worktree add \/wt\/myproject\/bold-ash -b bold-ash "origin\/\$BASE"/);
+    expect(script).toMatch(/worktree add -b bold-ash --end-of-options \/wt\/myproject\/bold-ash "refs\/remotes\/origin\/\$BASE"/);
+  });
+
+  it("names every base ref in full, after --end-of-options", () => {
+    // The script runs unsandboxed before the agent starts, and the fallback
+    // path reassigns $BASE from origin's own report, a name garden never
+    // validated. A bare "$BASE" would also match a same-named tag, and an
+    // abbreviated origin/$BASE resolves through local tags and branches first.
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const script = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    )![1] as string;
+    const fetches = script.split("\n").filter(line => /git -C \S+ fetch /.test(line));
+    expect(fetches).toHaveLength(2);
+    for (const line of fetches) expect(line).toContain('fetch --end-of-options origin "refs/heads/$BASE"');
+    expect(script).toContain('ls-remote --exit-code --heads --end-of-options origin "refs/heads/$BASE"');
+    expect(script).toContain('ls-remote --exit-code --heads --end-of-options origin "refs/heads/$DEFAULT_BRANCH"');
+    expect(script).toContain('merge --ff-only --end-of-options "refs/remotes/origin/$BASE"');
   });
 
   it("defaults to branching off origin/main when baseBranch is omitted", () => {
@@ -786,7 +807,7 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(call).toBeDefined();
     const script = call![1] as string;
     expect(script).toContain("BASE=main");
-    expect(script).toMatch(/worktree add .* "origin\/\$BASE"/);
+    expect(script).toMatch(/worktree add .* "refs\/remotes\/origin\/\$BASE"/);
   });
 
   it("calls _bootstrap-alert and does not swallow fetch/merge errors", () => {
@@ -957,7 +978,7 @@ describe("buildWorktreeBootstrapScript", () => {
     // can rewrite it mid-script; the worktree-add uses "origin/$BASE" so a
     // rewrite (e.g. release/2026-04 → main) is reflected.
     expect(script).toContain("BASE=release/2026-04");
-    expect(script).toMatch(/worktree add .* "origin\/\$BASE"/);
+    expect(script).toMatch(/worktree add .* "refs\/remotes\/origin\/\$BASE"/);
   });
 
   it("exports worker identity env vars so `garden whoami` and `garden logs -w $GARDEN_WORKER` work inside the worker shell", () => {

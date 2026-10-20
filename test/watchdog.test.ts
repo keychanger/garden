@@ -72,7 +72,7 @@ vi.mock("../src/config.js", () => ({
   loadConfig: vi.fn(() => ({ projects: {} })),
 }));
 
-vi.mock("../src/version.js", () => ({ GARDEN_VERSION: "abc1234" }));
+vi.mock("../src/version.js", () => ({ GARDEN_VERSION: "abc1234", GARDEN_COMMIT: "abc1234def5678abc1234def5678abc1234def56" }));
 
 vi.mock("../src/dashboard/state.js", () => {
   let state: { buildBehind: number | null } = { buildBehind: null };
@@ -620,6 +620,13 @@ describe("refreshBuildStaleness", () => {
     vi.mocked(commitsBehindOrigin).mockReturnValue(14);
     expect(refreshBuildStaleness()).toBe(true);
     expect(vi.mocked(writeDashState).mock.calls.at(-1)![0].buildBehind).toBe(14);
+  });
+
+  it("measures from the build's full SHA, which no tag can shadow", () => {
+    refreshBuildStaleness();
+    expect(commitsBehindOrigin).toHaveBeenCalledWith(
+      "/install/garden", "abc1234def5678abc1234def5678abc1234def56", expect.any(String),
+    );
   });
 
   it("reports no change when the count is unmoved, so an idle fleet never repaints", () => {

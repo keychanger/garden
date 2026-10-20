@@ -9,6 +9,7 @@ import { atomicWriteFile } from "./atomic-write.js";
 import { isGeneratedWorkerName } from "./names.js";
 import { log } from "./log.js";
 import { runGit, runGitBytes } from "./git-exec.js";
+import { assertBranchName, assertRevision, branchRef, isValidBranchName, remoteBranchRef } from "./git-refs.js";
 
 const WORKTREE_BASE = path.join(
   process.env.HOME ?? "",
@@ -24,7 +25,9 @@ export function resolveBaseBranch(repoPath: string): string {
   try {
     const ref = git(repoPath, "symbolic-ref", "refs/remotes/origin/HEAD");
     const match = ref.match(/^refs\/remotes\/origin\/(.+)$/);
-    if (match) return match[1];
+    // The shared refs store is worker-writable, so origin/HEAD is not trusted
+    // to name a branch git can be handed.
+    if (match && isValidBranchName(match[1])) return match[1];
   } catch {
     // origin/HEAD not set — common for --single-branch clones
   }
@@ -43,9 +46,8 @@ export function resolveSpawnBase(
   project: Pick<ProjectConfig, "path" | "baseBranch">,
   override?: string,
 ): string {
-  const chosen = override?.trim() || project.baseBranch;
-  if (chosen) return chosen;
-  return resolveBaseBranch(project.path);
+  const chosen = override?.trim() || project.baseBranch || resolveBaseBranch(project.path);
+  return assertBranchName(chosen);
 }
 
 // Local + origin branch names for a repo, most-recently-committed first, capped.
@@ -57,17 +59,21 @@ export function resolveSpawnBase(
 // the cap with them). Best-effort — an empty list on any git error.
 export function listBranches(repoPath: string, limit = 12): string[] {
   try {
+    // Full refnames, prefix stripped here: %(refname:short) shortens the way
+    // git disambiguates, so a same-named tag yields "heads/main".
     const out = git(
       repoPath, "for-each-ref", "--sort=-committerdate",
-      "--format=%(refname:short)", "refs/heads", "refs/remotes/origin",
+      "--format=%(refname)", "refs/heads", "refs/remotes/origin",
     );
     const seen = new Set<string>();
     const names: string[] = [];
     for (const raw of out.split("\n")) {
-      let name = raw.trim();
-      if (!name || name === "origin" || name.endsWith("/HEAD")) continue;
-      if (name.startsWith("origin/")) name = name.slice("origin/".length);
-      if (name === "HEAD" || seen.has(name) || isGeneratedWorkerName(name)) continue;
+      const ref = raw.trim();
+      const name = ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length)
+        : ref.startsWith("refs/remotes/origin/") ? ref.slice("refs/remotes/origin/".length)
+        : "";
+      // isValidBranchName also drops "" and origin/HEAD's "HEAD".
+      if (!isValidBranchName(name) || seen.has(name) || isGeneratedWorkerName(name)) continue;
       seen.add(name);
       names.push(name);
       if (names.length >= limit) break;
@@ -85,7 +91,7 @@ export function listBranches(repoPath: string, limit = 12): string[] {
 // raises a `bootstrap` alert if the branch has since vanished from origin.
 export function branchExistsOnOrigin(repoPath: string, branchName: string): boolean {
   try {
-    git(repoPath, "show-ref", "--verify", "--quiet", `refs/remotes/origin/${branchName}`);
+    git(repoPath, "show-ref", "--verify", "--quiet", "--end-of-options", remoteBranchRef(branchName));
     return true;
   } catch {
     return false;
@@ -105,7 +111,8 @@ export type PublishResult = { ok: true } | { ok: false; error: string };
 // caller can surface the real reason instead of a generic remediation hint.
 export function tryPublishBranch(repoPath: string, branchName: string): PublishResult {
   try {
-    operatorGit(repoPath, "push", "-u", "origin", branchName);
+    const ref = branchRef(assertBranchName(branchName));
+    operatorGit(repoPath, "push", "-u", "--end-of-options", "origin", `${ref}:${ref}`);
     log.info("git", "published branch to origin", { data: { branchName } });
     return { ok: true };
   } catch (err) {
@@ -198,12 +205,13 @@ export function createWorktree(
   opts: { startPoint?: string; useExistingBranch?: boolean } = {},
 ): void {
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+  assertBranchName(branchName);
   if (opts.useExistingBranch) {
-    operatorGit(repoPath, "worktree", "add", wtPath, branchName);
+    operatorGit(repoPath, "worktree", "add", "--end-of-options", wtPath, branchName);
   } else if (opts.startPoint) {
-    operatorGit(repoPath, "worktree", "add", wtPath, "-b", branchName, opts.startPoint);
+    operatorGit(repoPath, "worktree", "add", "-b", branchName, "--end-of-options", wtPath, assertRevision(opts.startPoint));
   } else {
-    operatorGit(repoPath, "worktree", "add", wtPath, "-b", branchName);
+    operatorGit(repoPath, "worktree", "add", "-b", branchName, "--end-of-options", wtPath);
   }
   log.info("git", "created worktree", { data: { branchName } });
   installDeps(wtPath);
@@ -211,7 +219,7 @@ export function createWorktree(
 
 export function localBranchExists(repoPath: string, branchName: string): boolean {
   try {
-    git(repoPath, "show-ref", "--verify", "--quiet", `refs/heads/${branchName}`);
+    git(repoPath, "show-ref", "--verify", "--quiet", "--end-of-options", branchRef(branchName));
     return true;
   } catch {
     return false;
@@ -225,7 +233,7 @@ export function localBranchExists(repoPath: string, branchName: string): boolean
 // the base.
 export function commitExists(repoPath: string, sha: string): boolean {
   try {
-    git(repoPath, "cat-file", "-e", `${sha}^{commit}`);
+    git(repoPath, "cat-file", "-e", "--end-of-options", `${assertRevision(sha)}^{commit}`);
     return true;
   } catch {
     return false;
@@ -296,12 +304,24 @@ export function worktreeExists(wtPath: string): boolean {
 
 export function deleteBranch(repoPath: string, branchName: string): void {
   try {
-    operatorGit(repoPath, "branch", "-D", branchName);
+    operatorGit(repoPath, "branch", "-D", "--end-of-options", assertBranchName(branchName));
     log.info("git", "deleted branch", { data: { branchName } });
   } catch (err) {
     log.warn("git", "failed to delete branch", {
       data: { branchName, error: String(err) },
     });
+  }
+}
+
+// The commit an operator-supplied revision names ("origin/main", "HEAD~3", a
+// short SHA), or null when it names none. The helpers that build ranges accept
+// only commit SHAs and full refs, so a revision the operator typed is resolved
+// through this first.
+export function resolveCommitSha(repoPath: string, rev: string): string | null {
+  try {
+    return git(repoPath, "rev-parse", "--verify", "--quiet", "--end-of-options", `${rev}^{commit}`);
+  } catch {
+    return null;
   }
 }
 
@@ -319,20 +339,20 @@ export function getBranchHeadSha(wtPath: string): string | null {
 // worker pushes without false positives from the reviewer rebasing.
 export function getRemoteTrackingSha(wtPath: string, branchName: string): string | null {
   try {
-    return git(wtPath, "rev-parse", `origin/${branchName}`);
+    return git(wtPath, "rev-parse", "--verify", "--end-of-options", remoteBranchRef(branchName));
   } catch {
     return null;
   }
 }
 
 export function getDiffAgainstBase(wtPath: string, baseBranch: string): string {
-  return git(wtPath, "diff", ...DIFF_SAFETY_ARGS, `origin/${baseBranch}...HEAD`);
+  return git(wtPath, "diff", ...DIFF_SAFETY_ARGS, "--end-of-options", `${remoteBranchRef(baseBranch)}...HEAD`);
 }
 
 // Refresh origin/<base> in a worker's worktree before a review or a merge reads
 // it. A failure is the caller's to log: neither path treats it as fatal.
 export function fetchBaseBranch(wtPath: string, baseBranch: string): void {
-  git(wtPath, "fetch", "origin", baseBranch);
+  git(wtPath, "fetch", "--end-of-options", "origin", branchRef(baseBranch));
 }
 
 // Regular files as committed at `rev`, read from the object store rather than
@@ -412,7 +432,7 @@ export type RebaseResult =
 // pick the rebase mode below.
 export function branchMergeCommits(worktreePath: string, baseBranch: string): string[] {
   try {
-    const out = git(worktreePath, "rev-list", "--merges", `origin/${baseBranch}..HEAD`);
+    const out = git(worktreePath, "rev-list", "--merges", "--end-of-options", `${remoteBranchRef(baseBranch)}..HEAD`);
     return out.split("\n").filter(Boolean);
   } catch {
     return [];
@@ -427,7 +447,8 @@ export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseRe
   // the merge and replays the merged side's commits, which then conflict
   // against content the tree already has. That is unwinnable for the resolver,
   // so skip the rebase entirely: there is nothing to replay.
-  if (isAncestor(worktreePath, `origin/${baseBranch}`, "HEAD")) {
+  const base = remoteBranchRef(baseBranch);
+  if (isAncestor(worktreePath, base, "HEAD")) {
     log.info("git", "branch already contains the base tip; skipping rebase", {
       data: { worktreePath, baseBranch },
     });
@@ -438,8 +459,8 @@ export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseRe
   // instead of flattening them.
   const merges = branchMergeCommits(worktreePath, baseBranch);
   const args = merges.length > 0
-    ? ["rebase", "--rebase-merges", `origin/${baseBranch}`]
-    : ["rebase", `origin/${baseBranch}`];
+    ? ["rebase", "--rebase-merges", "--end-of-options", base]
+    : ["rebase", "--end-of-options", base];
   if (merges.length > 0) {
     log.info("git", "rebasing with --rebase-merges to preserve merge topology", {
       data: { worktreePath, baseBranch, mergeCommits: merges },
@@ -485,7 +506,7 @@ export function hasRebaseInProgress(worktreePath: string): boolean {
 // Used by the resolver verification to confirm the branch is rebased onto base.
 export function isAncestor(worktreePath: string, ancestor: string, descendant: string): boolean {
   try {
-    git(worktreePath, "merge-base", "--is-ancestor", ancestor, descendant);
+    git(worktreePath, "merge-base", "--is-ancestor", "--end-of-options", assertRevision(ancestor), assertRevision(descendant));
     return true;
   } catch {
     return false;
@@ -509,8 +530,7 @@ export function ensureNoRebaseInProgress(worktreePath: string): void {
 // escalation alerts so the operator knows exactly where the resolver got stuck.
 export function getUnmergedFiles(worktreePath: string): string[] {
   try {
-    const out = git(worktreePath, "diff", "--name-only", "--diff-filter=U");
-    return out.split("\n").filter(Boolean);
+    return nameList(worktreePath, ["diff", "--name-only", "-z", "--diff-filter=U"]);
   } catch {
     return [];
   }
@@ -525,7 +545,7 @@ export function forcePushBranch(worktreePath: string, branch: string): void {
   // poller to force-push a stale ref and loop forever in handleMerged when
   // a worker created a side branch — see worktree workflow rules in
   // src/rules.ts for the directive that prevents the same trap.
-  git(worktreePath, "push", "--force-with-lease", "origin", `HEAD:${branch}`);
+  git(worktreePath, "push", "--force-with-lease", "--end-of-options", "origin", `HEAD:${branchRef(branch)}`);
 }
 
 export function mergeToBase(
@@ -537,11 +557,11 @@ export function mergeToBase(
   operatorGit(repoPath, "fetch", "origin");
   // Resolve to concrete SHAs so we can verify fast-forward and push without
   // needing a clean working tree or switching branches in the project checkout.
-  const branchSha = git(repoPath, "rev-parse", `origin/${branchName}`);
-  const baseSha = git(repoPath, "rev-parse", `origin/${baseBranch}`);
+  const branchSha = git(repoPath, "rev-parse", "--verify", "--end-of-options", remoteBranchRef(branchName));
+  const baseSha = git(repoPath, "rev-parse", "--verify", "--end-of-options", remoteBranchRef(baseBranch));
   // Verify fast-forward: branch must be a descendant of current base
   try {
-    git(repoPath, "merge-base", "--is-ancestor", baseSha, branchSha);
+    git(repoPath, "merge-base", "--is-ancestor", "--end-of-options", baseSha, branchSha);
   } catch {
     throw new Error(
       `Cannot fast-forward: origin/${branchName} (${branchSha}) is not a descendant of origin/${baseBranch} (${baseSha})`,
@@ -555,7 +575,7 @@ export function mergeToBase(
   // veto it. Such a guard was shadowed by the core.hooksPath leak until
   // scopeHooksPathToWorktree fixed the leak, which silently re-armed it and
   // blocked every merge with a bare "failed to push some refs".
-  operatorGit(repoPath, "push", "--no-verify", "origin", `${branchSha}:refs/heads/${baseBranch}`);
+  operatorGit(repoPath, "push", "--no-verify", "--end-of-options", "origin", `${branchSha}:${branchRef(baseBranch)}`);
   log.info("git", "merged to base branch", {
     worker: ctx?.worker,
     data: { branchName, baseBranch, ...(ctx?.project ? { project: ctx.project } : {}) },
@@ -599,12 +619,12 @@ export function fastForwardBase(
   const current = currentBranch(repoPath);
   if (current === baseBranch) {
     try {
-      operatorGit(repoPath, "fetch", "origin", baseBranch);
+      operatorGit(repoPath, "fetch", "--end-of-options", "origin", branchRef(baseBranch));
     } catch (err) {
       return { ok: false, reason: "stuck", error: gitErrText(err) };
     }
     try {
-      operatorGit(repoPath, "merge", "--ff-only", `origin/${baseBranch}`);
+      operatorGit(repoPath, "merge", "--ff-only", "--end-of-options", remoteBranchRef(baseBranch));
       log.info("git", "fast-forwarded local base checkout", { worker, data: baseData });
       return { ok: true, advanced: "worktree" };
     } catch (err) {
@@ -622,7 +642,9 @@ export function fastForwardBase(
         // move, since its content already matches. Never reset a dirty tree:
         // that would destroy uncommitted operator work.
         try {
-          operatorGit(repoPath, "reset", "--hard", `origin/${baseBranch}`);
+          // No --end-of-options, as in syncWorktreeToRemote: reset rejects it
+          // before git 2.44.
+          operatorGit(repoPath, "reset", "--hard", remoteBranchRef(baseBranch), "--");
           log.info("git", "auto-healed redundant local base divergence onto origin", {
             worker,
             data: baseData,
@@ -635,7 +657,7 @@ export function fastForwardBase(
       if (dirty === false) {
         // Clean tree carrying real local-only content: genuine divergence.
         // origin holds the merged work; the operator reconciles by hand.
-        const { ahead, behind } = aheadBehind(repoPath, baseBranch, `origin/${baseBranch}`);
+        const { ahead, behind } = aheadBehind(repoPath, branchRef(baseBranch), remoteBranchRef(baseBranch));
         log.debug("git", "base diverged from origin; postMerge skipped", {
           worker,
           data: { ...baseData, ahead, behind },
@@ -644,7 +666,7 @@ export function fastForwardBase(
       }
       // Dirty (or status unknowable): uncommitted local changes collide with the
       // merge. Leave the checkout untouched rather than clobber operator edits.
-      const { behind } = aheadBehind(repoPath, baseBranch, `origin/${baseBranch}`);
+      const { behind } = aheadBehind(repoPath, branchRef(baseBranch), remoteBranchRef(baseBranch));
       log.debug("git", "base checkout dirty; no fast-forward or postMerge", {
         worker,
         data: { ...baseData, error, behind },
@@ -655,12 +677,12 @@ export function fastForwardBase(
   // Off-base: refresh the tracking ref (so divergence math below is accurate),
   // then advance the local branch ref without touching the working tree.
   try {
-    operatorGit(repoPath, "fetch", "origin", baseBranch);
+    operatorGit(repoPath, "fetch", "--end-of-options", "origin", branchRef(baseBranch));
   } catch (err) {
     return { ok: false, reason: "stuck", error: gitErrText(err) };
   }
   try {
-    operatorGit(repoPath, "fetch", "origin", `${baseBranch}:${baseBranch}`);
+    operatorGit(repoPath, "fetch", "--end-of-options", "origin", `${branchRef(baseBranch)}:${branchRef(baseBranch)}`);
     log.info("git", "advanced off-base local base ref to origin", {
       worker,
       data: { ...baseData, currentBranch: current },
@@ -677,7 +699,7 @@ export function fastForwardBase(
       return { ok: false, reason: "checked-out-elsewhere", currentBranch: current, checkedOutAt };
     }
     if (/non-fast-forward|\[rejected\]/.test(text)) {
-      const { ahead, behind } = aheadBehind(repoPath, baseBranch, `origin/${baseBranch}`);
+      const { ahead, behind } = aheadBehind(repoPath, branchRef(baseBranch), remoteBranchRef(baseBranch));
       log.info("git", "off-base base ref not advanced: diverged from origin", {
         worker,
         data: { ...baseData, currentBranch: current, ahead, behind },
@@ -702,7 +724,7 @@ function gitErrText(err: unknown): string {
 // caller never resets onto origin under uncertainty.
 function treeMatchesOrigin(repoPath: string, baseBranch: string): boolean {
   try {
-    git(repoPath, "diff", "--quiet", ...DIFF_SAFETY_ARGS, "HEAD", `origin/${baseBranch}`);
+    git(repoPath, "diff", "--quiet", ...DIFF_SAFETY_ARGS, "--end-of-options", "HEAD", remoteBranchRef(baseBranch));
     return true;
   } catch {
     return false;
@@ -718,7 +740,7 @@ function aheadBehind(
   remote: string,
 ): { ahead: number; behind: number } {
   try {
-    const out = git(repoPath, "rev-list", "--left-right", "--count", `${local}...${remote}`);
+    const out = git(repoPath, "rev-list", "--left-right", "--count", "--end-of-options", `${local}...${remote}`);
     const [a, b] = out.split(/\s+/);
     return { ahead: Number(a) || 0, behind: Number(b) || 0 };
   } catch {
@@ -733,9 +755,9 @@ export function deleteRemoteBranch(
 ): void {
   const projectData = ctx?.project ? { project: ctx.project } : {};
   try {
-    const refs = operatorGit(repoPath, "ls-remote", "--heads", "origin", branchName);
+    const refs = operatorGit(repoPath, "ls-remote", "--heads", "--end-of-options", "origin", branchRef(branchName));
     if (!refs.trim()) return;
-    operatorGit(repoPath, "push", "origin", "--delete", branchName);
+    operatorGit(repoPath, "push", "--delete", "--end-of-options", "origin", branchRef(branchName));
     log.info("git", "deleted remote branch", {
       worker: ctx?.worker,
       data: { branchName, ...projectData },
@@ -750,8 +772,7 @@ export function deleteRemoteBranch(
 
 export function getChangedFiles(wtPath: string, baseBranch: string): string[] {
   try {
-    const result = git(wtPath, "diff", "--name-only", `origin/${baseBranch}...HEAD`);
-    return result.split("\n").filter(Boolean);
+    return nameList(wtPath, ["diff", "--name-only", "-z", "--end-of-options", `${remoteBranchRef(baseBranch)}...HEAD`]);
   } catch (err) {
     log.warn("git", "getChangedFiles failed", { data: { baseBranch, error: String(err) } });
     return [];
@@ -764,8 +785,7 @@ export function getChangedFilesBetween(
   toSha: string,
 ): string[] {
   try {
-    const result = git(wtPath, "diff", "--name-only", `${fromSha}..${toSha}`);
-    return result.split("\n").filter(Boolean);
+    return nameList(wtPath, ["diff", "--name-only", "-z", "--end-of-options", `${assertRevision(fromSha)}..${assertRevision(toSha)}`]);
   } catch (err) {
     log.warn("git", "getChangedFilesBetween failed", {
       data: { fromSha, toSha, error: String(err) },
@@ -787,7 +807,7 @@ export function getDiffStat(
   files: string[] = [],
 ): string {
   try {
-    const args = ["diff", "--stat", ...DIFF_SAFETY_ARGS, range];
+    const args = ["diff", "--stat", ...DIFF_SAFETY_ARGS, "--end-of-options", assertRange(range)];
     if (files.length > 0) args.push("--", ...files);
     return git(wtPath, ...args).trim();
   } catch (err) {
@@ -817,7 +837,7 @@ export function getDiffNumstat(
 ): DiffNumstat {
   const total: DiffNumstat = { files: 0, insertions: 0, deletions: 0 };
   try {
-    const out = git(wtPath, "diff", "--numstat", ...DIFF_SAFETY_ARGS, `${fromSha}..${toSha}`).trim();
+    const out = git(wtPath, "diff", "--numstat", ...DIFF_SAFETY_ARGS, "--end-of-options", `${assertRevision(fromSha)}..${assertRevision(toSha)}`).trim();
     if (!out) return total;
     for (const line of out.split("\n")) {
       const parts = line.split("\t");
@@ -848,7 +868,7 @@ export function getCommitLogRange(
   files?: string[],
 ): string {
   try {
-    const args = ["log", "--oneline", `${fromSha}..${toSha}`];
+    const args = ["log", "--oneline", "--end-of-options", `${assertRevision(fromSha)}..${assertRevision(toSha)}`];
     if (files && files.length > 0) args.push("--", ...files);
     return git(wtPath, ...args);
   } catch (err) {
@@ -873,7 +893,7 @@ export function resolveHolisticDiff(
   touchedFiles: string[],
 ): string {
   try {
-    const args = ["diff", ...DIFF_SAFETY_ARGS, `${fromSha}..${toRef}`];
+    const args = ["diff", ...DIFF_SAFETY_ARGS, "--end-of-options", `${assertRevision(fromSha)}..${assertRevision(toRef)}`];
     if (touchedFiles.length > 0) args.push("--", ...touchedFiles);
     return git(wtPath, ...args);
   } catch (err) {
@@ -904,12 +924,14 @@ export function syncWorktreeToRemote(
     return { ok: false, reason: "fetch-failed", error: String(err) };
   }
   try {
-    git(wtPath, "fetch", "origin", branchName);
+    git(wtPath, "fetch", "--end-of-options", "origin", branchRef(branchName));
   } catch (err) {
     return { ok: false, reason: "fetch-failed", error: String(err) };
   }
   try {
-    git(wtPath, "reset", "--hard", `origin/${branchName}`);
+    // No --end-of-options: reset rejects it before git 2.44, and a full ref
+    // cannot be read as an option anyway.
+    git(wtPath, "reset", "--hard", remoteBranchRef(branchName), "--");
   } catch (err) {
     return { ok: false, reason: "reset-failed", error: String(err) };
   }
@@ -934,12 +956,12 @@ export function syncWorktreeToBase(
     return { ok: false, reason: "fetch-failed", error: String(err) };
   }
   try {
-    git(wtPath, "fetch", "origin", baseBranch);
+    git(wtPath, "fetch", "--end-of-options", "origin", branchRef(baseBranch));
   } catch (err) {
     return { ok: false, reason: "fetch-failed", error: String(err) };
   }
   try {
-    git(wtPath, "merge", "--ff-only", `origin/${baseBranch}`);
+    git(wtPath, "merge", "--ff-only", "--end-of-options", remoteBranchRef(baseBranch));
   } catch (err) {
     return { ok: false, reason: "reset-failed", error: String(err) };
   }
@@ -986,7 +1008,7 @@ export function commitsBehindOrigin(
   branch: string,
 ): number | null {
   try {
-    const out = git(repoPath, "rev-list", "--count", `${ref}..origin/${branch}`);
+    const out = git(repoPath, "rev-list", "--count", "--end-of-options", `${assertRevision(ref)}..${remoteBranchRef(branch)}`);
     const n = Number(out.trim());
     return Number.isFinite(n) ? n : null;
   } catch {
@@ -1000,7 +1022,7 @@ export function commitsBehindOrigin(
 // exact class a build/install hook churns — see revertPostMergeChurn.
 export function listModifiedTrackedFiles(repoPath: string): string[] {
   try {
-    return git(repoPath, "diff", "--name-only").split("\n").map(l => l.trim()).filter(Boolean);
+    return nameList(repoPath, ["diff", "--name-only", "-z"]);
   } catch {
     return [];
   }
@@ -1039,7 +1061,7 @@ export function countCommitsAheadOfBase(
   baseBranch: string,
 ): number | null {
   try {
-    const out = git(wtPath, "rev-list", "--count", `origin/${baseBranch}..HEAD`);
+    const out = git(wtPath, "rev-list", "--count", "--end-of-options", `${remoteBranchRef(baseBranch)}..HEAD`);
     const n = Number.parseInt(out, 10);
     return Number.isFinite(n) ? n : null;
   } catch {
@@ -1058,7 +1080,7 @@ export function getHeadSubject(wtPath: string): string {
 
 export function getCommitSummary(wtPath: string, baseBranch: string): string {
   try {
-    return runGit(wtPath, ["log", "--oneline", `origin/${baseBranch}..HEAD`], { timeout: 10_000 }).trim();
+    return runGit(wtPath, ["log", "--oneline", "--end-of-options", `${remoteBranchRef(baseBranch)}..HEAD`], { timeout: 10_000 }).trim();
   } catch (err) {
     log.warn("git", "getCommitSummary failed", { data: { baseBranch, error: String(err) } });
     return "";
@@ -1074,7 +1096,7 @@ export function getCommitSummary(wtPath: string, baseBranch: string): string {
 // caller needs is the yes/no.
 export function hasCommitsAhead(wtPath: string, baseBranch: string): boolean | null {
   try {
-    const out = runGit(wtPath, ["rev-list", "--count", `origin/${baseBranch}..HEAD`], { timeout: 10_000 }).trim();
+    const out = runGit(wtPath, ["rev-list", "--count", "--end-of-options", `${remoteBranchRef(baseBranch)}..HEAD`], { timeout: 10_000 }).trim();
     return parseInt(out, 10) > 0;
   } catch (err) {
     log.warn("git", "hasCommitsAhead failed", { data: { baseBranch, error: String(err) } });
@@ -1085,7 +1107,7 @@ export function hasCommitsAhead(wtPath: string, baseBranch: string): boolean | n
 export function getNewCommitSummary(wtPath: string, sinceSha: string | undefined): string {
   if (!sinceSha) return "";
   try {
-    return runGit(wtPath, ["log", "--oneline", `${sinceSha}..HEAD`], { timeout: 10_000 }).trim();
+    return runGit(wtPath, ["log", "--oneline", "--end-of-options", `${assertRevision(sinceSha)}..HEAD`], { timeout: 10_000 }).trim();
   } catch (err) {
     log.warn("git", "getNewCommitSummary failed", { data: { sinceSha, error: String(err) } });
     return "";
@@ -1185,11 +1207,17 @@ function installDeps(wtPath: string): void {
   }
 }
 
+// The checked-out branch, or "HEAD" when detached. Read from HEAD's full ref:
+// `rev-parse --abbrev-ref` shortens a name the way git disambiguates it, so a
+// tag named like the branch, which any worker can create in the shared refs
+// store, turns "main" into "heads/main".
 export function currentBranch(repoPath: string): string | null {
   try {
-    return git(repoPath, "rev-parse", "--abbrev-ref", "HEAD");
-  } catch {
-    return null;
+    const ref = git(repoPath, "symbolic-ref", "--quiet", "HEAD");
+    return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : "HEAD";
+  } catch (err) {
+    // symbolic-ref --quiet exits 1, printing nothing, when HEAD is detached.
+    return (err as { status?: number }).status === 1 ? "HEAD" : null;
   }
 }
 
@@ -1249,6 +1277,20 @@ function git(cwd: string, ...args: string[]): string {
 
 function operatorGit(cwd: string, ...args: string[]): string {
   return runGit(cwd, args, { operatorHooks: true }).trim();
+}
+
+// A -z path list. Unlike newline output, git does not quote these, so a path
+// with non-ASCII bytes or a quote comes back as itself.
+function nameList(cwd: string, args: string[]): string[] {
+  return runGit(cwd, args).split("\0").filter(Boolean);
+}
+
+// "<a>..<b>" or "<a>...<b>", each end a revision assertRevision accepts.
+function assertRange(range: string): string {
+  const ends = range.split(/\.{2,3}/);
+  if (ends.length !== 2) throw new Error(`not a revision range: ${JSON.stringify(range)}`);
+  ends.forEach(assertRevision);
+  return range;
 }
 
 // Diff drivers and textconv filters are programs named in git config, which a

@@ -22,8 +22,8 @@ abc1234 fix: something
 1. Run \`git status\`. If a rebase is already in progress (output mentions
    \`rebase in progress\` or \`You are currently rebasing\`), run \`git rebase --abort\`.
 
-2. Run \`git rebase origin/main\` — except if
-   \`git rev-list --merges origin/main..HEAD\` is non-empty, in which case the
+2. Run \`git rebase refs/remotes/origin/main\` — except if
+   \`git rev-list --merges refs/remotes/origin/main..HEAD\` is non-empty, in which case the
    branch contains a merge commit and you must rebase with \`--rebase-merges\`. A plain
    rebase drops the merge topology and linearizes the merged-in commits; if they came from
    the base, it can also replay them against a tree that already contains their content.
@@ -37,7 +37,7 @@ abc1234 fix: something
      contradictory designs), run \`git rebase --abort\` and output \`FAILED\`.
 
 4. When the rebase is complete, confirm with \`git status\` (should say clean) and
-   \`git log --oneline origin/main..HEAD\` (should list your branch's commits).
+   \`git log --oneline refs/remotes/origin/main..HEAD\` (should list your branch's commits).
 
 5. Do **not** push. The poller handles the push after verifying your work.
 
@@ -92,8 +92,8 @@ abc1234 fix: something
 1. Run \`git status\`. If a rebase is already in progress (output mentions
    \`rebase in progress\` or \`You are currently rebasing\`), run \`git rebase --abort\`.
 
-2. Run \`git rebase origin/main\` — except if
-   \`git rev-list --merges origin/main..HEAD\` is non-empty, in which case the
+2. Run \`git rebase refs/remotes/origin/main\` — except if
+   \`git rev-list --merges refs/remotes/origin/main..HEAD\` is non-empty, in which case the
    branch contains a merge commit and you must rebase with \`--rebase-merges\`. A plain
    rebase drops the merge topology and linearizes the merged-in commits; if they came from
    the base, it can also replay them against a tree that already contains their content.
@@ -107,7 +107,7 @@ abc1234 fix: something
      contradictory designs), run \`git rebase --abort\` and output \`FAILED\`.
 
 4. When the rebase is complete, confirm with \`git status\` (should say clean) and
-   \`git log --oneline origin/main..HEAD\` (should list your branch's commits).
+   \`git log --oneline refs/remotes/origin/main..HEAD\` (should list your branch's commits).
 
 5. Do **not** push. The poller handles the push after verifying your work.
 
@@ -137,10 +137,10 @@ exports[`prompt output snapshots (workflow-refactor regression net) > buildRevie
 
 ## Step 1: Rebase onto origin/main
 
-Run \`git rebase origin/main\` in the worktree, with two exceptions:
-- If \`git merge-base --is-ancestor origin/main HEAD\` succeeds, the branch
+Run \`git rebase refs/remotes/origin/main\` in the worktree, with two exceptions:
+- If \`git merge-base --is-ancestor refs/remotes/origin/main HEAD\` succeeds, the branch
   already sits on top of the base. Skip the rebase entirely — there is nothing to replay.
-- If \`git rev-list --merges origin/main..HEAD\` is non-empty, the branch
+- If \`git rev-list --merges refs/remotes/origin/main..HEAD\` is non-empty, the branch
   contains a merge commit. Rebase with \`--rebase-merges\` so the merge topology survives;
   a plain rebase drops it and replays every commit from the merged-in side.
 
@@ -260,10 +260,10 @@ exports[`prompt output snapshots (workflow-refactor regression net) > buildRevie
 
 ## Step 1: Rebase onto origin/main
 
-Run \`git rebase origin/main\` in the worktree, with two exceptions:
-- If \`git merge-base --is-ancestor origin/main HEAD\` succeeds, the branch
+Run \`git rebase refs/remotes/origin/main\` in the worktree, with two exceptions:
+- If \`git merge-base --is-ancestor refs/remotes/origin/main HEAD\` succeeds, the branch
   already sits on top of the base. Skip the rebase entirely — there is nothing to replay.
-- If \`git rev-list --merges origin/main..HEAD\` is non-empty, the branch
+- If \`git rev-list --merges refs/remotes/origin/main..HEAD\` is non-empty, the branch
   contains a merge commit. Rebase with \`--rebase-merges\` so the merge topology survives;
   a plain rebase drops it and replays every commit from the merged-in side.
 
@@ -429,10 +429,10 @@ the exact mistake this section exists to prevent.
 
 ## Step 1: Rebase onto origin/main
 
-Run \`git rebase origin/main\` in the worktree, with two exceptions:
-- If \`git merge-base --is-ancestor origin/main HEAD\` succeeds, the branch
+Run \`git rebase refs/remotes/origin/main\` in the worktree, with two exceptions:
+- If \`git merge-base --is-ancestor refs/remotes/origin/main HEAD\` succeeds, the branch
   already sits on top of the base. Skip the rebase entirely — there is nothing to replay.
-- If \`git rev-list --merges origin/main..HEAD\` is non-empty, the branch
+- If \`git rev-list --merges refs/remotes/origin/main..HEAD\` is non-empty, the branch
   contains a merge commit. Rebase with \`--rebase-merges\` so the merge topology survives;
   a plain rebase drops it and replays every commit from the merged-in side.
 
@@ -552,10 +552,10 @@ exports[`prompt output snapshots (workflow-refactor regression net) > buildRevie
 
 ## Step 1: Rebase onto origin/main
 
-Run \`git rebase origin/main\` in the worktree, with two exceptions:
-- If \`git merge-base --is-ancestor origin/main HEAD\` succeeds, the branch
+Run \`git rebase refs/remotes/origin/main\` in the worktree, with two exceptions:
+- If \`git merge-base --is-ancestor refs/remotes/origin/main HEAD\` succeeds, the branch
   already sits on top of the base. Skip the rebase entirely — there is nothing to replay.
-- If \`git rev-list --merges origin/main..HEAD\` is non-empty, the branch
+- If \`git rev-list --merges refs/remotes/origin/main..HEAD\` is non-empty, the branch
   contains a merge commit. Rebase with \`--rebase-merges\` so the merge topology survives;
   a plain rebase drops it and replays every commit from the merged-in side.
 

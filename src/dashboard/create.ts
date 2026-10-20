@@ -946,13 +946,16 @@ atomic_write() {
 
 printf 'Setting up worktree %s...\\n' ${branchLit}
 
+# Branch refs are spelled out in full: a bare "$BASE" would also match a tag of
+# that name on origin, and an abbreviated origin/$BASE resolves through git's
+# lookup order, where a same-named local tag or branch comes first.
 # Fetch latest base ref. Worker always branches off origin/$BASE directly
 # (see "git worktree add" below), so main-checkout freshness is informational
 # only — but a stale main checkout signals operator rot and deserves an alert.
 printf '  Fetching origin/%s...\\n' "$BASE"
 BOOTSTRAP_FAIL=""
 FETCH_RC=0
-FETCH_OUT=$(git -C ${projectPathLit} fetch origin "$BASE" 2>&1) || FETCH_RC=$?
+FETCH_OUT=$(git -C ${projectPathLit} fetch --end-of-options origin "refs/heads/$BASE" 2>&1) || FETCH_RC=$?
 [ -n "$FETCH_OUT" ] && printf '%s\\n' "$FETCH_OUT"
 if [ "$FETCH_RC" -ne 0 ]; then
   BOOTSTRAP_FAIL="fetch failed: $FETCH_OUT"
@@ -966,14 +969,14 @@ if [ "$FETCH_RC" -ne 0 ]; then
   # that signal; abort and tell the operator to retry the spawn. If ls-remote
   # SUCCEEDS, the fetch failure was transient: proceed with the local ref.
   LS_RC=0
-  LS_OUT=$(git -C ${projectPathLit} ls-remote --exit-code --heads origin "$BASE" 2>&1) || LS_RC=$?
+  LS_OUT=$(git -C ${projectPathLit} ls-remote --exit-code --heads --end-of-options origin "refs/heads/$BASE" 2>&1) || LS_RC=$?
   if [ "$LS_RC" -eq 2 ]; then
     printf '  WARNING: origin has no branch %s — looking up origin default branch...\\n' "$BASE" >&2
     DEFAULT_BRANCH=$(git -C ${projectPathLit} ls-remote --symref origin HEAD 2>/dev/null \\
       | sed -n 's|^ref: refs/heads/\\([^	]*\\)	HEAD|\\1|p' \\
       | head -1)
     if [ -n "$DEFAULT_BRANCH" ] && [ "$DEFAULT_BRANCH" != "$BASE" ] \\
-        && git -C ${projectPathLit} ls-remote --exit-code --heads origin "$DEFAULT_BRANCH" >/dev/null 2>&1; then
+        && git -C ${projectPathLit} ls-remote --exit-code --heads --end-of-options origin "refs/heads/$DEFAULT_BRANCH" >/dev/null 2>&1; then
       printf '  Falling back to origin default: %s.\\n' "$DEFAULT_BRANCH" >&2
       # Update registry baseBranch so the poller, reviewer, and Stop hook all
       # see the new base. Do this BEFORE re-fetching so a subsequent crash
@@ -985,7 +988,7 @@ if [ "$FETCH_RC" -ne 0 ]; then
       export GARDEN_BASE_BRANCH="$BASE"
       BOOTSTRAP_FAIL=""
       FETCH_RC=0
-      FETCH_OUT=$(git -C ${projectPathLit} fetch origin "$BASE" 2>&1) || FETCH_RC=$?
+      FETCH_OUT=$(git -C ${projectPathLit} fetch --end-of-options origin "refs/heads/$BASE" 2>&1) || FETCH_RC=$?
       [ -n "$FETCH_OUT" ] && printf '%s\\n' "$FETCH_OUT"
       if [ "$FETCH_RC" -ne 0 ]; then
         BOOTSTRAP_FAIL="fetch failed after fallback: $FETCH_OUT"
@@ -1016,7 +1019,7 @@ fi
 
 printf '  Fast-forwarding main checkout...\\n'
 MERGE_RC=0
-MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only "origin/$BASE" 2>&1) || MERGE_RC=$?
+MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only --end-of-options "refs/remotes/origin/$BASE" 2>&1) || MERGE_RC=$?
 [ -n "$MERGE_OUT" ] && printf '%s\\n' "$MERGE_OUT"
 if [ "$MERGE_RC" -ne 0 ]; then
   BOOTSTRAP_FAIL="\${BOOTSTRAP_FAIL:+$BOOTSTRAP_FAIL; }ff-merge failed: $MERGE_OUT"
@@ -1031,7 +1034,7 @@ fi
 # does not depend on the main checkout being clean or up to date.
 printf '  Creating worktree...\\n'
 mkdir -p "$(dirname ${wtPathLit})"
-git -C ${projectPathLit} worktree add ${wtPathLit} -b ${branchLit} "origin/$BASE"
+git -C ${projectPathLit} worktree add -b ${branchLit} --end-of-options ${wtPathLit} "refs/remotes/origin/$BASE"
 
 # Neutralize .garden-done if a past reviewer accidentally committed it to the
 # base branch. Without this, the first Stop hook with no commits ahead sees

@@ -376,7 +376,16 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
   const gardenRunner = resolveGardenRunner();
 
-  const baseBranch = resolveSpawnBase(project, opts.base);
+  let baseBranch: string;
+  try {
+    baseBranch = resolveSpawnBase(project, opts.base);
+  } catch (err) {
+    tmuxDisplay(`Cannot create worker: ${(err as Error).message}`);
+    log.error("workers", "rejected newWorker: invalid base branch", {
+      data: { project: targetProject, error: String(err) },
+    });
+    return null;
+  }
 
   // A worker whose base branch isn't on origin breaks silently: every
   // `origin/<base>..HEAD` check in the Stop hook and poller fails, so the
