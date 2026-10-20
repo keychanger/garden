@@ -87,22 +87,23 @@ describe("menuRunShell", () => {
 describe("promptArgv", () => {
   it("stores the reply in an option and names the route that reads it", () => {
     const argv = promptArgv("Seed: ", "garden", ["_grow-plant", "proj"]);
+    // tmux appends a space to the label itself.
     expect(argv).toEqual([
-      "command-prompt", "-l", "-p", "Seed: ",
+      "command-prompt", "-p", "Seed:",
       "set-option -g @garden_prompt_reply \"%%%\" ; run-shell \"garden dashboard _prompt-reply _grow-plant proj\"",
     ]);
   });
 
   it("escapes a pre-fill, which tmux expands as a format", () => {
-    const argv = promptArgv("f: ", "garden", ["_logs-filter-apply"], "w:a #(id),b");
-    expect(argv.slice(4, 6)).toEqual(["-I", "w:a ##(id),b"]);
+    const argv = promptArgv("f: ", "garden", ["_logs-filter-apply"], "w:a #(id) b");
+    expect(argv.slice(3, 5)).toEqual(["-I", "w:a ##(id) b"]);
   });
 });
 
 describe("promptCommand", () => {
   it("quotes only the arguments that need it", () => {
     expect(promptCommand("Crew name: ", "garden", ["_crew-save", "proj"])).toBe(
-      "command-prompt -l -p \"Crew name: \" "
+      "command-prompt -p \"Crew name:\" "
       + "\"set-option -g @garden_prompt_reply \\\"%%%\\\" ; run-shell \\\"garden dashboard _prompt-reply _crew-save proj\\\"\"",
     );
   });

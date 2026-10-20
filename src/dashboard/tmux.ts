@@ -898,12 +898,14 @@ const PROMPT_REPLY_OPTION = "@garden_prompt_reply";
 // then /bin/sh, so a `#(...)`, `$(...)` or quote in it ran or broke the
 // command. Here tmux writes it, quotes escaped (`%%%`), into a global option —
 // set-option neither expands nor parses it — and `_prompt-reply` reads it
-// back. `-l` keeps commas from splitting the pre-fill, which tmux expands as a
-// format, so it is escaped.
+// back. tmux expands the pre-fill as a format, so it is escaped; it also
+// splits the label and pre-fill on commas (one prompt per piece — the `-l`
+// that disables that is tmux 3.6+, newer than CI's tmux) and appends a space
+// to the label, so the label is passed without its own.
 export function promptArgv(label: string, runner: string, route: string[], prefill?: string): string[] {
   const reply = menuRunShell(`${runner} dashboard _prompt-reply ${route.map(shellEscape).join(" ")}`);
   return [
-    "command-prompt", "-l", "-p", label,
+    "command-prompt", "-p", label.trimEnd(),
     ...(prefill === undefined ? [] : ["-I", tmuxLiteral(prefill)]),
     `set-option -g ${PROMPT_REPLY_OPTION} "%%%" ; ${reply}`,
   ];

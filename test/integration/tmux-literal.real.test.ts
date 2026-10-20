@@ -46,7 +46,9 @@ describe.skipIf(!available)("tmux literal text (real tmux client)", () => {
     const runner = `/bin/sh ${shellEscape(file("runner.sh"))}`;
 
     const typed = `seed "dq" 'sq' $(touch ${file("ran-dollar")}) ${hostile("typed")} ; ,comma`;
-    const prefill = `pre,fill ${hostile("prefill")}`;
+    // No comma: tmux splits a pre-fill on commas into one prompt per piece
+    // (the flag that disables that is 3.6+). The typed reply is never split.
+    const prefill = `pre fill ${hostile("prefill")}`;
     const menu = buildMenuArgv({
       title: `T ${hostile("title")}`,
       rows: [
