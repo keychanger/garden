@@ -16,14 +16,14 @@ import {
 import { atomicWriteFile } from "./atomic-write.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
-import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel } from "./continue.js";
+import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel, workerInputBlocker } from "./continue.js";
 import { dispatchDelayedGrowContinue } from "./grow-continue.js";
 import { dispatchDelayedTrellisContinue } from "./trellis-continue.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   abortRebase, cleanWorktree, deleteRemoteBranch, ensureNoRebaseInProgress,
   fastForwardBase, forcePushBranch, getBranchHeadSha, getChangedFiles,
-  getChangedFilesBetween, getCommitSummary, isAncestor, listModifiedTrackedFiles,
+  getChangedFilesBetween, getCommitSummary, getHeadSubject, getWorkerBaseBranch, isAncestor, listModifiedTrackedFiles,
   mergeToBase, rebaseBranch, revertChurn, syncWorktreeToRemote,
 } from "./git.js";
 import { refreshDashboard, setupStatusBar } from "./header.js";
@@ -689,7 +689,7 @@ function notifyPostMerge(
   // `npm run build`) runs against the newly merged code, not stale files.
   const ffResult = fastForwardBase(projectPath, baseBranch, { project: projectName, worker: entry.name });
 
-  notifySiblingWorkers(projectName, baseBranch, entry, preMergeChangedFiles);
+  notifySiblingWorkers(projectName, projectPath, baseBranch, entry, preMergeChangedFiles);
 
   // Alert only when the checkout *enters* an un-advanceable state (or switches
   // failure modes). A diverged/dirty checkout stays that way, so re-alerting on
@@ -1282,6 +1282,7 @@ function revertPostMergeChurn(
 
 function notifySiblingWorkers(
   projectName: string,
+  projectPath: string,
   baseBranch: string,
   mergedEntry: WorkerEntry,
   mergedFiles: string[],
@@ -1289,13 +1290,18 @@ function notifySiblingWorkers(
   if (!mergedEntry.worktreePath) return;
   if (mergedFiles.length === 0) return;
 
-  const commitSummary = getCommitSummary(mergedEntry.worktreePath, baseBranch);
+  // Read after the merge, so `origin/<base>..HEAD` is already empty; HEAD is
+  // still the newest commit that merged.
+  const title = getHeadSubject(mergedEntry.worktreePath) || `worker ${mergedEntry.name}`;
   // pushed is no longer a state in the new model — workers go straight from
   // working to reviewing via the Stop hook poke. The siblings to notify are
-  // those whose code is still in flight.
+  // those whose code is still in flight, and only those merging into the same
+  // base: for any other, the base's own divergence reads as overlap, and
+  // "rebase onto <base>" would carry that history into the wrong branch.
   const siblings = getWorkers(projectName).filter(
     w => w.name !== mergedEntry.name &&
-      (!w.prState || w.prState === "working" || w.prState === "failing"),
+      (!w.prState || w.prState === "working" || w.prState === "failing") &&
+      getWorkerBaseBranch(w, projectPath) === baseBranch,
   );
 
   const mergedSet = new Set(mergedFiles);
@@ -1306,7 +1312,6 @@ function notifySiblingWorkers(
     const overlap = siblingFiles.filter(f => mergedSet.has(f));
     if (overlap.length === 0) continue;
 
-    const title = commitSummary?.split("\n")[0] ?? `worker ${mergedEntry.name}`;
     const fileList = overlap.join(", ");
     const message = [
       `[garden] Worker \`${mergedEntry.name}\` just merged into ${baseBranch}: ${title}`,
@@ -1338,6 +1343,22 @@ function notifySiblingWorkers(
       log.info("poller", "skipping done sibling (sentinel set)", {
         worker: sibling.name,
         data: { project: projectName, mergedWorker: mergedEntry.name },
+      });
+      continue;
+    }
+
+    // The paste lands as a prompt with Enter, so it must not reach a pane
+    // that is waiting on the operator: a menu or permission dialog (Enter
+    // confirms the highlighted option), a hold, a `garden blocked` question
+    // (the prompt clears it as if answered), or a half-typed draft.
+    const busy = sibling.agentStatus === "asking" ? "asking"
+      : sibling.agentStatus === "paused" ? "held"
+      : isAwaitingInput(sibling.worktreePath) ? "blocked on the operator"
+      : workerInputBlocker(projectName, sibling.name);
+    if (busy) {
+      log.info("poller", "skipped sibling merge notice: pane waiting on operator", {
+        worker: sibling.name,
+        data: { project: projectName, mergedWorker: mergedEntry.name, reason: busy },
       });
       continue;
     }

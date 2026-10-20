@@ -1001,6 +1001,20 @@ export function countCommitsAheadOfBase(
   }
 }
 
+// The newest commit as `<short sha> <subject>`, or "" when git cannot say.
+export function getHeadSubject(wtPath: string): string {
+  try {
+    return execFileSync("git", ["log", "-1", "--oneline", "HEAD"], {
+      cwd: wtPath,
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 10_000,
+    }).trim();
+  } catch {
+    return "";
+  }
+}
+
 export function getCommitSummary(wtPath: string, baseBranch: string): string {
   try {
     return execFileSync("git", [

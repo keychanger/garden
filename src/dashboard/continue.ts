@@ -461,7 +461,7 @@ export function paneHasBlockingOperatorDraft(
 // What currently blocks a paste into the worker's input box, if anything. Used
 // by the backoff re-arm to tell a draft- or menu-deferred skip apart from the
 // other skip reasons (no pane, agent mid-turn) that should not retry on this loop.
-function workerInputBlocker(projectName: string, workerName: string): InputBlocker | null {
+export function workerInputBlocker(projectName: string, workerName: string): InputBlocker | null {
   const paneId = resolveWorkerPaneId(projectName, workerName);
   if (!paneId) return null;
   return inputBlocker(readPaneInput(paneId));

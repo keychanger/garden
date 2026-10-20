@@ -226,6 +226,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   getNewCommitSummary: vi.fn(() => "def456 address review feedback"),
   resolveBaseBranch: vi.fn(() => "main"),
   getWorkerBaseBranch: vi.fn((entry: { baseBranch?: string }) => entry.baseBranch ?? "main"),
+  getHeadSubject: vi.fn(() => ""),
   syncWorktreeToRemote: vi.fn(() => ({ ok: true })),
   ensureNoRebaseInProgress: vi.fn(),
   hasRebaseInProgress: vi.fn(() => false),
@@ -283,6 +284,7 @@ vi.mock("../src/dashboard/continue.js", () => ({
   isAwaitingInput: vi.fn(() => false),
   awaitingInputPath: vi.fn((wt: string) => `${wt}/.garden-awaiting-input`),
   clearAwaitingInput: vi.fn(),
+  workerInputBlocker: vi.fn(() => null),
 }));
 
 // Stub scheduleDelayedPoke (detached `bash -c "sleep N; printf … 1<>FIFO"`)
@@ -314,7 +316,7 @@ import {
   getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase, cleanWorktree,
   fastForwardBase,
-  getChangedFiles, getChangedFilesBetween,
+  getChangedFiles, getChangedFilesBetween, getHeadSubject,
   getCommitSummary, hasCommitsAhead, getNewCommitSummary, getDiffAgainstBase, getDiffStat,
   isWorktreeDirty,
   listModifiedTrackedFiles, revertChurn,
@@ -324,7 +326,7 @@ import {
 import { tmux, tmuxOutput, newDashboardWindow, newDashboardWindowPaned, setPaneVar, paneRunningOnlyShell, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
-import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel } from "../src/dashboard/continue.js";
+import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel, workerInputBlocker } from "../src/dashboard/continue.js";
 import { scheduleDelayedPoke } from "../src/dashboard/poller-fifo.js";
 import { getGitHubRepoSlug, checkCiStatus, projectDefinesCi } from "../src/dashboard/poller-ci.js";
 import { sweepGhostEntries } from "../src/dashboard/validate.js";
@@ -5731,6 +5733,67 @@ describe("poll — sibling merge notification", () => {
       "%5",
       expect.stringContaining("src/foo.ts"),
     );
+  });
+
+  function overlappingSibling(sibling: Partial<WorkerEntry>): void {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "bold-ash",
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        worktreePath: "/tmp/wt/myproject/bold-ash",
+        branchName: "bold-ash",
+      }),
+      makeWorker({
+        name: "calm-bay",
+        prState: "working",
+        agentStatus: "idle",
+        worktreePath: "/tmp/wt/myproject/calm-bay",
+        branchName: "calm-bay",
+        ...sibling,
+      }),
+    ]);
+    vi.mocked(getChangedFiles)
+      .mockReturnValueOnce(["src/foo.ts"])
+      .mockReturnValueOnce(["src/foo.ts"]);
+  }
+
+  it("names the newest merged commit in the notice", () => {
+    overlappingSibling({});
+    vi.mocked(getHeadSubject).mockReturnValue("abc1234 fix the parser");
+
+    poll("myproject");
+
+    expect(pasteAndSubmit).toHaveBeenCalledWith("%5",
+      expect.stringContaining("just merged into main: abc1234 fix the parser"));
+  });
+
+  // The notice is pasted with Enter. In a waiting pane that picks a menu
+  // option, resumes a hold, clears a `garden blocked` question as if
+  // answered (seen 2026-10-07), or submits the operator's half-typed draft.
+  it.each([
+    ["asking", { agentStatus: "asking" as const }, () => {}],
+    ["held", { agentStatus: "paused" as const }, () => {}],
+    ["blocked on the operator", {}, () => vi.mocked(isAwaitingInput).mockReturnValue(true)],
+    ["holding a draft", {}, () => vi.mocked(workerInputBlocker).mockReturnValue("operator draft")],
+  ])("does not paste into a sibling that is %s", (_label, sibling, arrange) => {
+    overlappingSibling(sibling);
+    arrange();
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  // For a sibling on another base, that base's whole divergence reads as
+  // overlap, and "rebase onto main" would carry main into its branch.
+  it("does not notify a sibling merging into a different base", () => {
+    overlappingSibling({ baseBranch: "feat/multi-asset" });
+
+    poll("myproject");
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 
   it("does not notify sibling when no file overlap", () => {
