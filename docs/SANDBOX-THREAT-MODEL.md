@@ -88,6 +88,19 @@ reads or runs.
   symlink there would otherwise deliver a file the worker's sandbox cannot read), the
   handoff dispatcher's seed copies, and both installers' `info/exclude` heal, whose
   append goes only to the file that was read (`appendToStableFile`).
+- **Launch inputs.** What an unsandboxed process runs, or hands an agent as
+  instructions, lives under `~/.garden/control` rather than `~/.garden/sessions`: the
+  worker bootstrap script and the dashboard pane scripts (`control/scripts`), the
+  system-prompt context files Claude reads with `--append-system-prompt-file` and the
+  Codex installer composes into `AGENTS.md` (`control/contexts`), the status-line script
+  Claude Code runs outside the sandbox (`control/claude-settings`), and the seed prompts
+  the unsandboxed seeder pastes as a worker's first prompt (`control/seeds`). In the
+  sessions dir a worker could rewrite a bootstrap script while its shell was still
+  reading it, give a sibling different rules, or swap a sibling's briefing, or a symlink
+  to a file it cannot read, in before delivery. The seeder reads only regular files,
+  without following links, from the control tree, and from the sessions dir only for a
+  seed an older build left there. `garden handoff` runs inside the sandbox, so its seed
+  starts in the sessions dir and is copied into the control tree before use (below).
 - **Review-channel integrity.** Reviewer, resolver, and CI-fix prompts, results, and
   harness sidecars live under `~/.garden/control/headless`, outside the worker's
   `~/.garden/sessions` write grant. Durable holistic shadow reports live under
@@ -185,12 +198,17 @@ reads or runs.
   read that follows.
   Review sees the resulting diff, and a worker already holds push credentials, so this is
   an integrity gap rather than an escape.
-- **Non-handoff seeds still pass through the worker-writable sessions dir.** A new
-  worker's first prompt for `workers new --seed`, grow, designer and loop spawns is
-  written under `~/.garden/sessions` and read back by the unsandboxed seeder a few seconds
-  later, so another worker could replace it before delivery: a FIFO there stalls the
-  seed, and a substituted file becomes the new worker's task. Handoff seeds are copied
-  into `~/.garden/control/handoff` before use; the other seeds are due to move there too.
+- **Other state in the sessions dir is still trusted.** Besides the registry, garden
+  keeps files there that sandboxed `garden` commands write: the dashboard state file,
+  alerts, the pre-rendered pane files the status, usage, history and alerts panes
+  replay, the Claude and Codex usage snapshots, worker-cleanup requests, and each
+  project's poll FIFO. A worker can repaint the operator's left column with them, or
+  point the state file's active pane at a pane garden will paste into, and a forged
+  usage snapshot is read without validation: with the usage auto-close armed, a reading
+  at 100% pauses auto-continue fleet-wide until its reset time. A cleanup request is checked against the registry
+  before the watchdog acts on it, which a worker can also forge; and the unsandboxed
+  pokers open the FIFO path without refusing a symlink planted there, so they write a
+  newline into whatever file it names.
 - **`postMerge`/`checks` commands are trusted.** They come from `~/.garden/config.yml`,
   which is not in any sandbox write grant, so a worker cannot set them. Do not move
   `config.yml` into a writable location.

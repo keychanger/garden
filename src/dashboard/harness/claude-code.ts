@@ -19,7 +19,7 @@ import { atomicWriteFile } from "../atomic-write.js";
 import { getRemoteHost } from "../git.js";
 import { runGit } from "../git-exec.js";
 import { appendToStableFile, readStableRegularFile } from "../safe-read.js";
-import { claudeSettingsPath } from "../headless-paths.js";
+import { claudeSettingsPath, STATUS_LINE_SCRIPT_PATH } from "../headless-paths.js";
 import { log } from "../log.js";
 import { resolveHookRunner, hookCompileCachePrefix, resolveNodeBin } from "../runner.js";
 import { buildSandboxConfig, type SandboxConfig } from "../sandbox.js";
@@ -40,8 +40,6 @@ import type { HarnessAdapter, RuntimeInstallOptions } from "./types.js";
 // readable and the quoting to one shellEscape. Claude Code feeds it the session
 // JSON on stdin (model.display_name, effort.level, context_window.*) and prints
 // whatever the script writes to stdout.
-export const STATUS_LINE_FILENAME = "statusline.mjs";
-
 export const STATUS_LINE_SCRIPT = `// Written by garden (src/dashboard/harness/claude-code.ts). Edits are overwritten.
 let raw = "";
 process.stdin.setEncoding("utf8");
@@ -67,9 +65,15 @@ process.stdin.on("end", () => {
 // The settings.json `statusLine.command`, executed by Claude Code through a
 // shell. Node is resolved the same way every other baked garden command
 // resolves it (a stable PATH symlink, never a versioned Cellar path).
-export function statusLineCommand(targetDir: string): string {
-  const script = path.join(targetDir, ".claude", STATUS_LINE_FILENAME);
-  return `${shellEscape(resolveNodeBin())} ${shellEscape(script)}`;
+export function statusLineCommand(): string {
+  return `${shellEscape(resolveNodeBin())} ${shellEscape(STATUS_LINE_SCRIPT_PATH)}`;
+}
+
+// Claude Code runs the status line outside the worker's sandbox, so the script
+// lives in the control tree beside the settings, where no worker can write.
+// It sat in the worktree's .claude/ before, which a worker could rewrite.
+export function installStatusLineScript(): void {
+  atomicWriteFile(STATUS_LINE_SCRIPT_PATH, STATUS_LINE_SCRIPT, { mode: 0o555 });
 }
 
 export function buildSettingsJson(
@@ -182,7 +186,7 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
 }
 
 export function installHeadlessSettings(targetDir: string, project: ProjectConfig, settingsFile: string): void {
-  const json = buildSettingsJson(resolveHookRunner(), sandboxForTarget(targetDir, project), statusLineCommand(targetDir));
+  const json = buildSettingsJson(resolveHookRunner(), sandboxForTarget(targetDir, project), statusLineCommand());
   atomicWriteFile(settingsFile, json, { mode: 0o444 });
 }
 
@@ -197,14 +201,11 @@ export function installHeadlessSettings(targetDir: string, project: ProjectConfi
 // sandbox, and installRuntimeConfig rewrites the file on every refresh/bounce.
 function installRuntimeConfig(targetDir: string, project: ProjectConfig, runtime?: RuntimeInstallOptions): void {
   const sandbox = sandboxForTarget(targetDir, project);
-  const json = buildSettingsJson(resolveHookRunner(), sandbox, statusLineCommand(targetDir), {
+  const json = buildSettingsJson(resolveHookRunner(), sandbox, statusLineCommand(), {
     ultracode: runtime?.ultracode,
   });
   atomicWriteFile(claudeSettingsPath(targetDir), json, { mode: 0o444 });
-  // 0o555 for the same reason the settings file is 0o444: the status line is a
-  // command garden bakes into those settings, so the script it points at is part
-  // of the same trust boundary and is rewritten on every refresh/bounce.
-  atomicWriteFile(path.join(targetDir, ".claude", STATUS_LINE_FILENAME), STATUS_LINE_SCRIPT, { mode: 0o555 });
+  installStatusLineScript();
   installClaudeSkills(targetDir);
   ensureWorktreeExcludes(targetDir);
   if (runtime?.beforeLaunch) retireWorktreeSettings(targetDir);

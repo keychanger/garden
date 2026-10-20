@@ -46,8 +46,9 @@ import {
 import { getHarness } from "./harness/index.js";
 import { resolveWorkerLaunchPlan } from "./launch-plan.js";
 import type { WorkerLaunchPlan } from "./harness/types.js";
-import { buildSettingsJson, statusLineCommand, STATUS_LINE_FILENAME, STATUS_LINE_SCRIPT } from "./harness/claude-code.js";
-import { claudeSettingsPath } from "./headless-paths.js";
+import { buildSettingsJson, installStatusLineScript, statusLineCommand } from "./harness/claude-code.js";
+import { claudeSettingsPath, contextFilePath } from "./headless-paths.js";
+import { CONTROL_CONTEXTS_DIR, CONTROL_SCRIPTS_DIR } from "../paths.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
 const DASHBOARD_COLS = 250;
@@ -447,7 +448,7 @@ export function createLogsWindow(): void {
 }
 
 function writeLogsScript(): string {
-  const scriptFile = path.join(SESSIONS_DIR, "logs-view.sh");
+  const scriptFile = path.join(CONTROL_SCRIPTS_DIR, "logs-view.sh");
 
   // Use garden logs --follow for live-tailing with pretty formatting.
   // GARDEN_PRETTY=1 forces TTY-style color output inside the tmux pane.
@@ -559,7 +560,7 @@ while :; do
   $ed $wrap "$f" || sleep 1
 done
 `;
-  const scriptFile = path.join(SESSIONS_DIR, "diary-view.sh");
+  const scriptFile = path.join(CONTROL_SCRIPTS_DIR, "diary-view.sh");
   atomicWriteFile(scriptFile, script, { mode: 0o755 });
   return scriptFile;
 }
@@ -712,13 +713,13 @@ export function buildWorktreeWorkerCommand(
   baseBranch?: string,
   opts?: WorktreeCommandOptions,
 ): string {
+  const wtPath = opts?.worktreePath ?? worktreePath(projectName, workerName);
   const contextFile = writeWorktreeContextFile(
-    projectName, projectPath, branchName, baseBranch,
+    projectName, projectPath, wtPath, branchName, baseBranch,
     { grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
   const project = resolveProjectForHooks(projectName, projectPath);
   const launchPlan = commandLaunchPlan(project, opts, false);
-  const wtPath = opts?.worktreePath ?? worktreePath(projectName, workerName);
   const agentCmd = getHarness(launchPlan.harness).buildAgentCommand({
     sessionId, resume: false, contextFile, launchPlan,
     settingsFile: claudeSettingsPath(wtPath),
@@ -819,7 +820,7 @@ export function buildWorktreeBootstrapScript(
 ): string {
   // Write the context file eagerly (fast, just file I/O)
   const contextFile = writeWorktreeContextFile(
-    projectName, projectPath, branchName, baseBranch,
+    projectName, projectPath, wtPath, branchName, baseBranch,
     { grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
 
@@ -866,11 +867,10 @@ export function buildWorktreeBootstrapScript(
       worktreePath: wtPath,
       project: launchPlan.runtimeProject,
       remoteHost: getRemoteHost(project.path),
-    }), statusLineCommand(wtPath), { ultracode: launchPlan.ultracode });
+    }), statusLineCommand(), { ultracode: launchPlan.ultracode });
     atomicWriteFile(claudeSettingsPath(wtPath), settingsJson, { mode: 0o444 });
+    installStatusLineScript();
   }
-  const statusLineScriptLit = shellEscape(STATUS_LINE_SCRIPT);
-  const statusLineFilenameLit = shellEscape(STATUS_LINE_FILENAME);
   const doneSkillLit = shellEscape(DONE_SKILL_CONTENT);
   const doneSkillDirnameLit = shellEscape(DONE_SKILL_DIRNAME);
   const doneSkillFilenameLit = shellEscape(DONE_SKILL_FILENAME);
@@ -1072,13 +1072,9 @@ _gh_leaked=$(git -C ${wtPathLit} config --local --get core.hooksPath 2>/dev/null
 case "$_gh_leaked" in *.garden-hooks) git -C ${wtPathLit} config --local --unset core.hooksPath 2>/dev/null || true ;; esac
 git -C ${wtPathLit} config --worktree core.hooksPath ${hooksDirLit}
 
-# Garden's hooks and sandbox reach Claude via --settings (written before this
-# script ran), so the repo's own .claude/settings.json is left untouched.
+# Garden's hooks, sandbox and status line reach Claude via --settings (written
+# before this script ran), so the repo's own .claude/settings.json is left untouched.
 mkdir -p ${wtPathLit}/.claude
-
-# The status-line script garden's settings point at (model / effort / context left).
-printf '%s' ${statusLineScriptLit} | atomic_write ${wtPathLit}/.claude/${statusLineFilenameLit}
-chmod 555 ${wtPathLit}/.claude/${statusLineFilenameLit}
 
 # Install garden-bundled skills (see src/dashboard/skills.ts). Layout: .claude/skills/<name>/SKILL.md.
 mkdir -p ${wtPathLit}/.claude/skills/${doneSkillDirnameLit}
@@ -1118,7 +1114,7 @@ ${pollSignal}
 exec $SHELL
 `;
 
-  const scriptFile = path.join(SESSIONS_DIR, `bootstrap-${projectName}-${branchName}.sh`);
+  const scriptFile = path.join(CONTROL_SCRIPTS_DIR, `bootstrap-${projectName}-${branchName}.sh`);
   // Bootstrap script is read by the worker pane's `sh` immediately after
   // it's written. Atomic write so the read can't catch a half-written file.
   atomicWriteFile(scriptFile, script, { mode: 0o755 });
@@ -1250,14 +1246,14 @@ export function buildWorktreeResumeCommand(
   baseBranch?: string,
   opts?: WorktreeCommandOptions,
 ): string {
+  const wtPath = opts?.worktreePath ?? worktreePath(projectName, workerName);
   const contextFile = writeWorktreeContextFile(
-    projectName, projectPath, branchName, baseBranch,
+    projectName, projectPath, wtPath, branchName, baseBranch,
     { grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
   const launchPlan = commandLaunchPlan(project, opts, true);
-  const wtPath = opts?.worktreePath ?? worktreePath(projectName, workerName);
   const identityExports = workerEnvExports(projectName, workerName, branchName, baseBranch);
   const claudeCmd = getHarness(launchPlan.harness).buildAgentCommand({
     sessionId, resume: true, contextFile, launchPlan,
@@ -1313,7 +1309,7 @@ function pollSignalSnippet(projectName: string): string {
 
 function writeContextFile(projectName: string, projectPath: string): string {
   const context = buildRulesContext(projectName, projectPath);
-  const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}.context`);
+  const contextFile = contextFilePath(projectPath);
   // Claude reads this on SessionStart and on every --resume. Atomic so a
   // concurrent rewrite (from a parallel command) can't show as a truncated
   // system prompt on the next session start.
@@ -1324,6 +1320,7 @@ function writeContextFile(projectName: string, projectPath: string): string {
 function writeWorktreeContextFile(
   projectName: string,
   projectPath: string,
+  wtPath: string,
   branchName: string,
   baseBranch?: string,
   opts?: {
@@ -1335,7 +1332,7 @@ function writeWorktreeContextFile(
   const context = buildWorktreeContextText(
     projectName, projectPath, branchName, baseBranch, opts,
   );
-  const contextFile = path.join(SESSIONS_DIR, `dashboard-${projectName}-${branchName}.context`);
+  const contextFile = contextFilePath(wtPath);
   atomicWriteFile(contextFile, context);
   return contextFile;
 }
@@ -1403,7 +1400,7 @@ login()  { ${gardenRunner} login "$@"; }
 whoami() { ${gardenRunner} whoami "$@"; }
 reset()  { ${gardenRunner} reset "$@"; }
 `;
-  const scriptFile = path.join(SESSIONS_DIR, "growhouse-init.zsh");
+  const scriptFile = path.join(CONTROL_SCRIPTS_DIR, "growhouse-init.zsh");
   atomicWriteFile(scriptFile, script, { mode: 0o644 });
   return scriptFile;
 }
@@ -1537,8 +1534,13 @@ export function presizeHiddenWindows(state: DashboardState): void {
 
 export function cleanupContextFiles(): void {
   try {
-    const files = fs.readdirSync(SESSIONS_DIR);
-    for (const file of files) {
+    for (const file of fs.readdirSync(CONTROL_CONTEXTS_DIR)) {
+      if (file.endsWith(".context")) fs.unlinkSync(path.join(CONTROL_CONTEXTS_DIR, file));
+    }
+  } catch { /* contexts dir might not exist */ }
+  // Builds before the control tree held them wrote them to the sessions dir.
+  try {
+    for (const file of fs.readdirSync(SESSIONS_DIR)) {
       if (file.startsWith("dashboard-") && file.endsWith(".context")) {
         fs.unlinkSync(path.join(SESSIONS_DIR, file));
       }

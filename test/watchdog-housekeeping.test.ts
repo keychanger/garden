@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { useTmpHome } from "./helpers.js";
@@ -7,6 +7,13 @@ import { useTmpHome } from "./helpers.js";
 // freezes from HOME at import — so import watchdog.js dynamically AFTER
 // useTmpHome has redirected HOME (same pattern as log.test.ts's truncateLog).
 const env = useTmpHome();
+
+// validate.ts's own sweeps have their tests in validate.test.ts; here only
+// that housekeeping runs them.
+vi.mock("../src/dashboard/validate.js", () => ({
+  cleanContextFiles: vi.fn(),
+  cleanClaudeSettingsFiles: vi.fn(),
+}));
 
 async function importWatchdog() {
   return await import("../src/dashboard/watchdog.js");
@@ -24,7 +31,8 @@ describe("sweepBootstrapScripts", () => {
   it("deletes bootstrap scripts older than the max age, keeps fresh ones", async () => {
     const { sweepBootstrapScripts, BOOTSTRAP_MAX_AGE_MS } = await importWatchdog();
     const now = 1_000_000_000_000;
-    const dir = env.sessionsDir;
+    const dir = path.join(env.home, ".garden", "control", "scripts");
+    fs.mkdirSync(dir, { recursive: true });
 
     const stale1 = writeBootstrap(dir, "bootstrap-garden-old-elk.sh", BOOTSTRAP_MAX_AGE_MS + 60_000, now);
     const stale2 = writeBootstrap(dir, "bootstrap-lex-old-wren.sh", BOOTSTRAP_MAX_AGE_MS * 100, now);
@@ -37,6 +45,15 @@ describe("sweepBootstrapScripts", () => {
     expect(fs.existsSync(stale2)).toBe(false);
     // A just-written script (about to be consumed by its pane) survives.
     expect(fs.existsSync(fresh)).toBe(true);
+  });
+
+  it("also sweeps the scripts older builds wrote to the sessions dir", async () => {
+    const { sweepBootstrapScripts, BOOTSTRAP_MAX_AGE_MS } = await importWatchdog();
+    const now = 1_000_000_000_000;
+    const legacy = writeBootstrap(env.sessionsDir, "bootstrap-garden-old-elk.sh", BOOTSTRAP_MAX_AGE_MS + 60_000, now);
+
+    expect(sweepBootstrapScripts(now)).toBe(1);
+    expect(fs.existsSync(legacy)).toBe(false);
   });
 
   it("only touches bootstrap-*.sh — leaves other session files alone", async () => {
@@ -63,7 +80,7 @@ describe("sweepBootstrapScripts", () => {
     for (const k of keepers) expect(fs.existsSync(k)).toBe(true);
   });
 
-  it("returns 0 and does not throw when the sessions dir is unreadable", async () => {
+  it("returns 0 and does not throw when neither scripts dir is readable", async () => {
     const { sweepBootstrapScripts } = await importWatchdog();
     fs.rmSync(env.sessionsDir, { recursive: true, force: true });
     expect(sweepBootstrapScripts(1_000_000_000_000)).toBe(0);
@@ -81,10 +98,18 @@ describe("housekeeping", () => {
     fs.writeFileSync(logFile, ("x".repeat(1023) + "\n").repeat(11 * 1024));
     const stale = writeBootstrap(dir, "bootstrap-garden-old-elk.sh", BOOTSTRAP_MAX_AGE_MS + 60_000, now);
 
-    housekeeping(now);
+    await housekeeping(now);
 
     expect(fs.statSync(logFile).size).toBeLessThan(11 * 1024 * 1024);
     expect(fs.existsSync(stale)).toBe(false);
+  });
+
+  it("runs validate's settings and context sweeps, so removed workers' files do not wait for an attach", async () => {
+    const { housekeeping } = await importWatchdog();
+    await housekeeping(1_000_000_000_000);
+    const validate = await import("../src/dashboard/validate.js");
+    expect(validate.cleanContextFiles).toHaveBeenCalled();
+    expect(validate.cleanClaudeSettingsFiles).toHaveBeenCalled();
   });
 });
 

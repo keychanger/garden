@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig, getRightColumnPercent } from "../config.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock } from "./state.js";
-import { isTaintedRegistry, mutateRegistry, readRegistry, type WorkerRegistry } from "./registry.js";
+import { isTaintedRegistry, mutateRegistry, PR_STATE_KIND, readRegistry, type WorkerRegistry } from "./registry.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, killWindowSafe, tmuxSplit, paneRunningOnlyShell, type SessionPane, setPaneTitle, setPaneLabel, tmux, disablePaneInput, lockPaneMouse, renameWindow } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees, worktreePath } from "./git.js";
@@ -15,13 +15,14 @@ import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden, restoreFromHidden } from "./layout.js";
 import { addAlert } from "./alerts.js";
 import { paneHoldsWorker } from "./window-heal.js";
-import { HEADLESS_RUNS_DIR } from "../paths.js";
+import { CONTROL_CONTEXTS_DIR, HEADLESS_RUNS_DIR } from "../paths.js";
 import { DASHBOARD_SESSION, dashboardExists } from "../session.js";
 import {
   CLAUDE_SETTINGS_DIR,
-  claudeSettingsPath,
+  STATUS_LINE_SCRIPT_PATH,
   headlessArtifactNames,
   isHeadlessArtifactName,
+  runtimeDirDigest,
 } from "./headless-paths.js";
 
 /**
@@ -625,16 +626,20 @@ export function validateAndHeal(state: DashboardState): DashboardState {
 }
 
 export function cleanContextFiles(): void {
+  const digests = liveRuntimeDirDigests();
+  if (digests) {
+    sweepUnclaimedFiles(CONTROL_CONTEXTS_DIR, file => digests.has(file.replace(/\.context$/, "")), "removed stale context file");
+  }
   try {
-    const config = loadConfig();
-    const projectNames = new Set(Object.keys(config.projects));
     // Review-family prompts and verdicts live in the trusted headless directory.
-    // Protect every artifact belonging to a live reviewer/resolver/ci-fix window.
+    // Protect every artifact of a reviewer/resolver/ci-fix pass the poller has
+    // not finished with. That is registry state, not window liveness: the window
+    // closes as soon as the agent exits, before the poller reads its verdict.
     const registry = readRegistry();
     const protectedFiles = new Set<string>();
     for (const [projectName, entries] of Object.entries(registry.workers)) {
       for (const entry of entries) {
-        if (entry.reviewWindowName && windowExists(entry.reviewWindowName)) {
+        if (entry.reviewWindowName || (entry.prState && PR_STATE_KIND[entry.prState]?.windowed)) {
           for (const file of headlessArtifactNames(projectName, entry.name)) {
             protectedFiles.add(file);
           }
@@ -642,14 +647,20 @@ export function cleanContextFiles(): void {
       }
     }
     const files = fs.readdirSync(SESSIONS_DIR);
+    const now = Date.now();
     for (const file of files) {
-      // Clean stale context files
+      // Context files an older build wrote here. Nothing reads them once the
+      // launch that wrote one is past, which the age floor covers.
       if (file.startsWith("dashboard-") && file.endsWith(".context")) {
-        const projectName = file.replace("dashboard-", "").replace(".context", "");
-        if (!projectNames.has(projectName)) {
-          fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
-          log.info("validate", "removed stale context file", { data: { file } });
-        }
+        // lstat, and per file: workers can write here, and one entry that
+        // fails must not cost the rest of the sweep.
+        const full = path.join(SESSIONS_DIR, file);
+        try {
+          if (now - fs.lstatSync(full).mtimeMs >= RUNTIME_FILE_GRACE_MS) {
+            fs.unlinkSync(full);
+            log.info("validate", "removed legacy context file", { data: { file } });
+          }
+        } catch { /* vanished; the next sweep retries */ }
         continue;
       }
       // Clean stale review result/prompt files — but never one belonging to an
@@ -670,46 +681,62 @@ export function cleanContextFiles(): void {
   } catch { /* sessions dir might not exist */ }
 }
 
-// A settings file outlives its worker otherwise: the worktree that used to
-// hold it is removed, but the file lives in the control tree. Kept for every
-// registered project checkout and worker worktree; the age floor covers a
-// worker whose bootstrap wrote the file before its registry entry landed, since
-// Claude refuses to start when the file is missing.
-const CLAUDE_SETTINGS_GRACE_MS = 60 * 60 * 1000;
+// Garden writes a settings file and a context file per directory an agent runs
+// in, named by the directory's digest, into the control tree, so they outlive
+// the worktree that used them. They are kept for every registered project
+// checkout and worker worktree; the age floor covers a worker whose bootstrap
+// wrote them before its registry entry landed, since Claude refuses to start
+// without its settings file.
+const RUNTIME_FILE_GRACE_MS = 60 * 60 * 1000;
 
-export function cleanClaudeSettingsFiles(): void {
+// Null when the registry could not be read: deleting by a partial keep-set
+// could strand a live worker.
+function liveRuntimeDirDigests(): Set<string> | null {
+  try {
+    const digests = new Set<string>();
+    for (const project of Object.values(loadConfig().projects)) digests.add(runtimeDirDigest(project.path));
+    const registry = readRegistry();
+    if (isTaintedRegistry(registry)) return null;
+    for (const [projectName, entries] of Object.entries(registry.workers)) {
+      for (const entry of entries) {
+        digests.add(runtimeDirDigest(worktreePath(projectName, entry.name)));
+        if (entry.worktreePath) digests.add(runtimeDirDigest(entry.worktreePath));
+      }
+    }
+    return digests;
+  } catch {
+    return null;
+  }
+}
+
+function sweepUnclaimedFiles(dir: string, claimed: (file: string) => boolean, message: string): void {
   let files: string[];
   try {
-    files = fs.readdirSync(CLAUDE_SETTINGS_DIR);
+    files = fs.readdirSync(dir);
   } catch {
     return;
   }
-  const keep = new Set<string>();
-  try {
-    for (const project of Object.values(loadConfig().projects)) {
-      keep.add(path.basename(claudeSettingsPath(project.path)));
-    }
-    const registry = readRegistry();
-    if (isTaintedRegistry(registry)) return;
-    for (const [projectName, entries] of Object.entries(registry.workers)) {
-      for (const entry of entries) {
-        keep.add(path.basename(claudeSettingsPath(worktreePath(projectName, entry.name))));
-        if (entry.worktreePath) keep.add(path.basename(claudeSettingsPath(entry.worktreePath)));
-      }
-    }
-  } catch {
-    return; // Without the full keep-set, deleting anything could strand a live worker.
-  }
   const now = Date.now();
   for (const file of files) {
-    if (keep.has(file)) continue;
-    const full = path.join(CLAUDE_SETTINGS_DIR, file);
+    if (claimed(file)) continue;
+    const full = path.join(dir, file);
     try {
-      if (now - fs.statSync(full).mtimeMs < CLAUDE_SETTINGS_GRACE_MS) continue;
+      if (now - fs.statSync(full).mtimeMs < RUNTIME_FILE_GRACE_MS) continue;
       fs.unlinkSync(full);
-      log.info("validate", "removed stale claude settings file", { data: { file } });
+      log.info("validate", message, { data: { file } });
     } catch { /* vanished or unreadable; the next validate retries */ }
   }
+}
+
+export function cleanClaudeSettingsFiles(): void {
+  const digests = liveRuntimeDirDigests();
+  if (!digests) return;
+  const statusLine = path.basename(STATUS_LINE_SCRIPT_PATH);
+  sweepUnclaimedFiles(
+    CLAUDE_SETTINGS_DIR,
+    file => file === statusLine || digests.has(file.replace(/\.json$/, "")),
+    "removed stale claude settings file",
+  );
 }
 
 export function cleanOrphanedReviewWindows(registry: WorkerRegistry): void {

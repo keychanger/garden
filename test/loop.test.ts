@@ -11,6 +11,10 @@ vi.mock("node:fs", () => ({
   },
 }));
 
+vi.mock("../src/dashboard/seed-files.js", () => ({
+  writeSeedFile: vi.fn((_text: string, label: string) => `/control/seeds/${label}-1.txt`),
+}));
+
 vi.mock("../src/config.js", () => {
   const tryResolveProvider = vi.fn(() => null);
   return {
@@ -101,7 +105,7 @@ import { dispatchDelayedSeed, paneHasBlockingOperatorDraft } from "../src/dashbo
 import { buildWorktreeWorkerCommand } from "../src/dashboard/create.js";
 import { getHarness } from "../src/dashboard/harness/index.js";
 import { spawn } from "node:child_process";
-import fs from "node:fs";
+import { writeSeedFile } from "../src/dashboard/seed-files.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 
@@ -376,15 +380,12 @@ describe("loopAutoContinueAfterMerge", () => {
     // The continue prompt was built via hooks (workflow-specific) and stashed
     // to a seed file; dispatchDelayedSeed received the path.
     expect(hooks._promptSpy).toHaveBeenCalledWith(entry);
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringMatching(/grow-seed-myproject-bold-ash-\d+\.txt$/),
-      "[garden] iter 3 of 5\n\nDo the work.",
-    );
+    expect(writeSeedFile).toHaveBeenCalledWith("[garden] iter 3 of 5\n\nDo the work.", "grow");
     expect(dispatchDelayedSeed).toHaveBeenCalledWith(
       "/usr/local/bin/garden",
       "myproject",
       "bold-ash",
-      expect.stringMatching(/grow-seed-myproject-bold-ash-\d+\.txt$/),
+      "/control/seeds/grow-1.txt",
     );
   });
 
@@ -434,10 +435,7 @@ describe("loopAutoContinueAfterMerge", () => {
 
     loopAutoContinueAfterMerge("myproject", "bold-ash", hooks, {});
 
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringMatching(/grow-seed-myproject-bold-ash-\d+\.txt$/),
-      expect.any(String),
-    );
+    expect(writeSeedFile).toHaveBeenCalledWith(expect.any(String), "grow");
   });
 
   it("returns false and does not dispatch seed when the seed-file write fails", () => {
@@ -447,7 +445,7 @@ describe("loopAutoContinueAfterMerge", () => {
       activeWindowName: "_myproject-worker-bold-ash",
       activePaneId: "%9",
     }));
-    vi.mocked(fs.writeFileSync).mockImplementation(() => {
+    vi.mocked(writeSeedFile).mockImplementationOnce(() => {
       throw new Error("ENOSPC");
     });
 
@@ -476,7 +474,7 @@ describe("loopAutoContinueAfterMerge", () => {
     );
 
     expect(result).toBe(false);
-    expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(writeSeedFile).not.toHaveBeenCalled();
     expect(dispatchDelayedSeed).not.toHaveBeenCalled();
   });
 });

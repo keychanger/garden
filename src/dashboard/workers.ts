@@ -28,6 +28,7 @@ import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
 import { log } from "./log.js";
+import { readSeedFile } from "./seed-files.js";
 import { explainPtyFailure } from "./pty-census.js";
 import { getWorkflow } from "./workflows/index.js";
 import {
@@ -506,12 +507,8 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const baseBranchSha = getRemoteTrackingSha(project.path, baseBranch) ?? undefined;
   let initialTask = "";
   if (preflightPlan.harness === "codex") {
-    let seed: string | undefined;
-    if (opts.seedMessageFile) {
-      try {
-        seed = fs.readFileSync(opts.seedMessageFile, "utf8");
-      } catch { /* seed dispatch reports unreadable files on its own path */ }
-    }
+    // An unreadable seed is reported by the seed dispatch itself.
+    const seed = opts.seedMessageFile ? readSeedFile(opts.seedMessageFile) ?? undefined : undefined;
     initialTask = initialCodexActivity(seed);
   }
   // Name allocation and insertion share one locked registry snapshot, so two

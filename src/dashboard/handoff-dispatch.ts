@@ -23,6 +23,7 @@ import { getCrew } from "./crew.js";
 import { isWorkerEffort } from "./worker-effort.js";
 import { loadConfig } from "../config.js";
 import { log } from "./log.js";
+import { MAX_SEED_BYTES } from "./seed-files.js";
 import { readStableRegularFile, type StableFile } from "./safe-read.js";
 
 const UUID_SOURCE = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
@@ -37,7 +38,6 @@ const RECEIPT_FILE_RE = new RegExp(`^(${UUID_SOURCE})\\.result\\.json$`, "i");
 
 const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_RECEIPT_BYTES = 64 * 1024;
-const MAX_SEED_BYTES = 1024 * 1024;
 const LEGACY_CLAIM_STALE_MS = 120_000;
 const RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1000;
 const RESPONSE_POLL_MS = 150;

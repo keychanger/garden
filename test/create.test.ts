@@ -198,10 +198,12 @@ vi.mock("../src/dashboard/window-names.js", async () => {
 });
 
 import fs from "node:fs";
+import path from "node:path";
 import { getGitCommonDir } from "../src/dashboard/git.js";
 import { readStableRegularFile } from "../src/dashboard/safe-read.js";
 import { claudeCodeAdapter } from "../src/dashboard/harness/claude-code.js";
-import { claudeSettingsPath } from "../src/dashboard/headless-paths.js";
+import { claudeSettingsPath, contextFilePath, STATUS_LINE_SCRIPT_PATH } from "../src/dashboard/headless-paths.js";
+import { CONTROL_SCRIPTS_DIR } from "../src/paths.js";
 import {
   createShellWindow,
   createLogsWindow,
@@ -360,15 +362,19 @@ describe("claude-code adapter installRuntimeConfig", () => {
     );
   });
 
-  it("points the status line at a statusline.mjs it also installs", () => {
+  it("points the status line at a control-tree script it also installs, never one in the worktree", () => {
     process.argv[1] = "/usr/local/bin/garden";
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     const parsed = JSON.parse(settingsJsonContent());
     expect(parsed.statusLine.type).toBe("command");
-    expect(parsed.statusLine.command).toContain("/repo/myproject/.claude/statusline.mjs");
+    // Claude Code runs the status line outside the worker's sandbox, and the
+    // worker can write anything in its worktree.
+    expect(parsed.statusLine.command).toContain(STATUS_LINE_SCRIPT_PATH);
+    expect(parsed.statusLine.command).not.toContain("/repo/myproject");
 
     const writes = vi.mocked(fs.writeFileSync).mock.calls;
-    const scriptCall = writes.find(c => /\.claude\/statusline\.mjs\.[0-9a-f-]+\.tmp$/.test(String(c[0])));
+    expect(writes.some(c => String(c[0]).includes(".claude/statusline.mjs"))).toBe(false);
+    const scriptCall = writes.find(c => String(c[0]).startsWith(`${STATUS_LINE_SCRIPT_PATH}.`));
     expect(scriptCall).toBeDefined();
     // The three readings the operator asked to see on every worker pane.
     const script = String(scriptCall![1]);
@@ -852,20 +858,19 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).not.toContain("/.claude/settings.local.json");
   });
 
-  it("installs the status-line script that the fresh worker settings reference", () => {
+  it("installs the status-line script that the fresh worker settings reference, outside the worktree", () => {
     process.argv[1] = "/usr/local/bin/garden";
     buildWorktreeBootstrapScript(
       "myproject", "/repo/myproject", "bold-ash", "bold-ash",
       "session-123", "/wt/myproject/bold-ash", "main",
     );
-    const call = vi.mocked(fs.writeFileSync).mock.calls.find(
-      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
-    );
-    expect(call).toBeDefined();
-    const script = call![1] as string;
-    expect(script).toContain("/.claude/statusline.mjs");
-    expect(script).toContain("remaining_percentage");
-    expect(script).toMatch(/chmod 555 .*\.claude\/statusline\.mjs/);
+    const writes = vi.mocked(fs.writeFileSync).mock.calls;
+    const settings = writes.find(c => String(c[0]).startsWith(`${claudeSettingsPath("/wt/myproject/bold-ash")}.`));
+    expect(JSON.parse(String(settings![1])).statusLine.command).toContain(STATUS_LINE_SCRIPT_PATH);
+    const scriptCall = writes.find(c => String(c[0]).startsWith(`${STATUS_LINE_SCRIPT_PATH}.`));
+    expect(String(scriptCall![1])).toContain("remaining_percentage");
+    const script = writes.find(c => String(c[0]).includes("bootstrap-myproject"))![1] as string;
+    expect(script).not.toContain("statusline.mjs");
   });
 
   it("inlines the bundled `done` skill at .claude/skills/done/SKILL.md so new workers can invoke it without a refresh round-trip", () => {
@@ -1288,5 +1293,51 @@ describe("beadsEnvExports", () => {
     const exports = beadsEnvExports("myproject", "swift-oak");
     expect(exports).toContain("BEADS_DIR=/board/.beads");
     expect(exports).not.toContain("/repo/myproject/.beads");
+  });
+});
+
+describe("launch inputs live in the control tree", () => {
+  // Each is run, sourced or read as instructions by an unsandboxed process; in
+  // the sessions dir a sandboxed worker could rewrite one before it was used.
+  const writtenTo = (file: string) => vi.mocked(fs.writeFileSync).mock.calls.find(c => String(c[0]).startsWith(`${file}.`));
+
+  beforeEach(() => {
+    process.argv[1] = "/usr/local/bin/garden";
+  });
+
+  it("writes the worker bootstrap script there, with the worker's own context file", () => {
+    const scriptFile = buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    expect(scriptFile.startsWith(`${CONTROL_SCRIPTS_DIR}/`)).toBe(true);
+    const context = contextFilePath("/wt/myproject/bold-ash");
+    expect(writtenTo(context)).toBeDefined();
+    expect(String(writtenTo(scriptFile)![1])).toContain(`--append-system-prompt-file ${context}`);
+  });
+
+  it("points a resumed or respawned worker, and a checkout's agent, at their context files", () => {
+    const wt = "/worktrees/myproject/bold-ash";
+    expect(buildWorktreeResumeCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "s", "main"))
+      .toContain(`--append-system-prompt-file ${contextFilePath(wt)}`);
+    expect(buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "s", "main"))
+      .toContain(`--append-system-prompt-file ${contextFilePath(wt)}`);
+    expect(writtenTo(contextFilePath(wt))).toBeDefined();
+    expect(buildWorkerCommand("myproject", "/repo/myproject", "s"))
+      .toContain(`--append-system-prompt-file ${contextFilePath("/repo/myproject")}`);
+    expect(writtenTo(contextFilePath("/repo/myproject"))).toBeDefined();
+  });
+
+  it("writes the logs, diary and growhouse pane scripts there", async () => {
+    const { createGardenDiaryWindow } = await import("../src/dashboard/create.js");
+    createLogsWindow();
+    createGardenDiaryWindow("node /opt/garden/cli.js");
+    createGardenGrowhouseWindow("node /opt/garden/cli.js");
+    for (const name of ["logs-view.sh", "diary-view.sh", "growhouse-init.zsh"]) {
+      expect(writtenTo(path.join(CONTROL_SCRIPTS_DIR, name)), name).toBeDefined();
+    }
+    expect(tmux).toHaveBeenCalledWith(
+      "send-keys", "-t", "%5", expect.stringContaining(`source ${path.join(CONTROL_SCRIPTS_DIR, "growhouse-init.zsh")}`), "Enter",
+    );
   });
 });

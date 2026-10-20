@@ -173,6 +173,10 @@ vi.mock("../src/dashboard/runner.js", () => ({
   resolveGardenRunner: vi.fn(() => "garden"),
 }));
 
+vi.mock("../src/dashboard/seed-files.js", () => ({
+  readSeedFile: vi.fn(() => null),
+}));
+
 vi.mock("../src/dashboard/git.js", () => ({
   worktreePath: vi.fn(() => "/home/user/.garden/worktrees/myproject/bold-ash"),
   resolveBaseBranch: vi.fn(() => "main"),
@@ -277,6 +281,7 @@ import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorker
 import { getProject, tryGetProject, tryResolveProvider, loadConfig } from "../src/config.js";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import { readSeedFile } from "../src/dashboard/seed-files.js";
 import crypto from "node:crypto";
 import type { DashboardState } from "../src/dashboard/state.js";
 import { dashboardExists } from "../src/session.js";
@@ -1295,12 +1300,9 @@ describe("newWorker", () => {
 
   it("harness: names a seeded codex worker before its prompt is delivered", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
-    vi.mocked(fs.readFileSync).mockImplementation((file) => {
-      if (file === "/tmp/seed.txt") {
-        return "[handoff from garden/parent]\n\nRepair the status summary lifecycle.\nMore detail.";
-      }
-      throw new Error("ENOENT");
-    });
+    vi.mocked(readSeedFile).mockImplementation((file) => file === "/tmp/seed.txt"
+      ? "[handoff from garden/parent]\n\nRepair the status summary lifecycle.\nMore detail."
+      : null);
 
     expect(newWorker({ harness: "codex", seedMessageFile: "/tmp/seed.txt" })).toBe("bold-ash");
     expect(vi.mocked(addWorker)).toHaveBeenCalledWith(

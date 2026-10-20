@@ -3,8 +3,9 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { detectProjectFromPath, getProject, SESSIONS_DIR } from "./config.js";
+import { detectProjectFromPath, getProject } from "./config.js";
 import { buildRulesContext } from "./rules.js";
+import { contextFilePath } from "./dashboard/headless-paths.js";
 import { claudeEnvObject } from "./dashboard/claude-env.js";
 
 export async function launchDashboardClaude(args: string[]): Promise<void> {
@@ -17,8 +18,8 @@ export async function launchDashboardClaude(args: string[]): Promise<void> {
 
   if (project) {
     const context = buildRulesContext(project.name, project.path);
-    const contextFile = path.join(SESSIONS_DIR, `dashboard-${project.name}.context`);
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    const contextFile = contextFilePath(project.path);
+    fs.mkdirSync(path.dirname(contextFile), { recursive: true });
     fs.writeFileSync(contextFile, context);
     claudeArgs.push("--append-system-prompt-file", contextFile);
   }

@@ -7,6 +7,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused, logColorKeyForProject, getRightColumnPercent } from "../config.js";
+import { CONTROL_DIR } from "../paths.js";
 import { logColorTmux } from "../log-palette.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { tmux, tmuxBatch, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
@@ -25,8 +26,12 @@ import { getHarnessCore, resolveWorkerActivity } from "./harness/core.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
 export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
-// Diagnostic dump path for the status pane's live $cur (see _diag-status).
-export const STATUS_CUR_DUMP_FILE = path.join(SESSIONS_DIR, "status.cur.dump");
+// Diagnostic captures the status pane's unsandboxed loop writes with `>`, which
+// follows a symlink planted at the path, and which `garden diag handoff` turns
+// into a worker's briefing; so they live in the control tree, not the sessions dir.
+export const STATUS_DIAG_DIR = path.join(CONTROL_DIR, "diag");
+// The status pane's live $cur, dumped on demand (see _diag-status).
+export const STATUS_CUR_DUMP_FILE = path.join(STATUS_DIAG_DIR, "status.cur.dump");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
 const HISTORY_RENDERED_FILE = path.join(SESSIONS_DIR, "history.rendered");
 const ALERTS_RENDERED_FILE = path.join(SESSIONS_DIR, "alerts.rendered");
@@ -468,7 +473,6 @@ export function buildStatusCommand(gardenRunner: string): string {
   const sf = STATUS_RENDERED_FILE;
   const pst = PLOT_STRIP_TEMPLATE_FILE;
   const sent = PLOT_SPINNER_SENTINEL;
-  const sessionsDir = SESSIONS_DIR;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
   const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) sf_char='${f}';;`).join(" ");
   // Event-driven status pane loop:
@@ -499,7 +503,7 @@ export function buildStatusCommand(gardenRunner: string): string {
     // Diagnostic-only: dump the live $cur (what the spinner overlay repaints
     // from) on demand. Writes to a stable file so _diag-status can compare it
     // against the pre-baked file. printf %s avoids appending a trailing newline.
-    `trap 'printf %s "$cur" > "$cd"' USR2`,
+    `trap 'mkdir -p "$sd"; printf %s "$cur" > "$cd"' USR2`,
     `prev=""`,
     `pt_tpl=""`,
     `fc=0`,
@@ -507,7 +511,7 @@ export function buildStatusCommand(gardenRunner: string): string {
     // per dashboard lifetime so the snapshot dir doesn't fill if the bug is
     // chronic. Reset on pane respawn.
     `diag_count=0`,
-    `sd='${sessionsDir}'`,
+    `sd='${STATUS_DIAG_DIR}'`,
     // Fork-duplicate guard. Observed 2026-08-14: a USR1 landing in the fork
     // window of one of this loop's command substitutions left a full duplicate
     // of the script running as a child of the real loop. The duplicate held a
@@ -562,7 +566,7 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      if [ $_vd -eq 1 ] && [ $_cd -eq 0 ]; then`,
     `        diag_count=$((diag_count + 1));`,
     `        _ts=$(date +%s);`,
-    `        _snap="$sd/diag-snap-$_ts-$diag_count.txt";`,
+    `        _snap="$sd/diag-snap-$_ts-$diag_count.txt"; mkdir -p "$sd";`,
     `        {`,
     `          printf '## ts\\n%s\\n\\n## diag_count\\n%s\\n\\n## cur\\n%s\\n\\n## file\\n' "$_ts" "$diag_count" "$cur";`,
     `          cat "$sf" 2>/dev/null;`,

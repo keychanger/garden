@@ -88,10 +88,8 @@
 // exactly the reaper's predicate, so missed spawns and crashed workers share
 // one recovery.
 import fs from "node:fs";
-import path from "node:path";
-import crypto from "node:crypto";
 import {
-  SESSIONS_DIR, resolveBeadsDir, beadsStoreError, type ProjectConfig,
+  resolveBeadsDir, beadsStoreError, type ProjectConfig,
 } from "../config.js";
 import {
   intakeStampPath, intakePokePath, writeIntakeError, clearIntakeError,
@@ -101,6 +99,7 @@ import { newWorker, stopWorkerByName } from "./workers.js";
 import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
+import { writeSeedFile } from "./seed-files.js";
 import {
   listOpenEpics, swarmStatus, showBeads, claimBead, reopenBead, unassignBead,
   addLabel, removeLabel, parseLabelCount, incrementFailedLabel,
@@ -1004,11 +1003,8 @@ function runIntakeOnceReal(projectName: string, project: ProjectConfig): boolean
   });
 }
 
-function spawnBeadWorker(projectName: string, req: IntakeSpawnRequest): string | null {
-  const seedsDir = path.join(SESSIONS_DIR, "seeds");
-  fs.mkdirSync(seedsDir, { recursive: true });
-  const seedFile = path.join(seedsDir, `bead-${crypto.randomUUID()}.md`);
-  atomicWriteFile(seedFile, req.seed);
+export function spawnBeadWorker(projectName: string, req: IntakeSpawnRequest): string | null {
+  const seedFile = writeSeedFile(req.seed, "bead");
   let name: string | null;
   try {
     name = newWorker({

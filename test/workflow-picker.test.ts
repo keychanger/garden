@@ -12,6 +12,10 @@ vi.mock("node:fs", () => ({
   },
 }));
 
+vi.mock("../src/dashboard/seed-files.js", () => ({
+  writeSeedFile: vi.fn((_text: string, label: string) => `/control/seeds/${label}-1.txt`),
+}));
+
 vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(),
   // The plant paths resolve the draft's build member, which reads the garden
@@ -63,6 +67,7 @@ import { tryGetProject, loadConfig } from "../src/config.js";
 import { tmuxDisplay } from "../src/dashboard/tmux.js";
 import { readSpawnDraft, writeSpawnDraft } from "../src/dashboard/spawn-draft.js";
 import fs from "node:fs";
+import { writeSeedFile } from "../src/dashboard/seed-files.js";
 
 const RUNNER = "/usr/local/bin/garden";
 
@@ -585,7 +590,7 @@ describe("plantGrowFromPicker", () => {
       projectName: "proj",
       workflow: "grow",
       grow: { seed: "harden auth flow", maxIterations: 5 },
-      seedMessageFile: expect.stringMatching(/seed-grow-proj-\d+\.txt$/),
+      seedMessageFile: "/control/seeds/grow-1.txt",
     }));
   });
 
@@ -608,30 +613,18 @@ describe("plantGrowFromPicker", () => {
     }));
   });
 
-  it("writes the iter-1 seed prompt to a seed file under SESSIONS_DIR/seeds", () => {
+  it("stages the iter-1 seed prompt as a control-tree seed file", () => {
     vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" });
     plantGrowFromPicker("proj", "polish things");
-    expect(fs.mkdirSync).toHaveBeenCalledWith(
-      expect.stringMatching(/seeds$/),
-      { recursive: true },
-    );
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringMatching(/seed-grow-proj-\d+\.txt$/),
-      expect.stringContaining("polish things"),
-    );
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.stringContaining("Grow loop, iteration 1 of"),
-    );
+    expect(writeSeedFile).toHaveBeenCalledWith(expect.stringContaining("polish things"), "grow");
+    expect(writeSeedFile).toHaveBeenCalledWith(expect.stringContaining("Grow loop, iteration 1 of"), "grow");
   });
 
   it("cleans up the seed file when newWorker fails", () => {
     vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj" });
     vi.mocked(newWorker).mockReturnValueOnce(null);
     plantGrowFromPicker("proj", "polish");
-    expect(fs.unlinkSync).toHaveBeenCalledWith(
-      expect.stringMatching(/seed-grow-proj-\d+\.txt$/),
-    );
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/control/seeds/grow-1.txt");
     expect(tmuxDisplay).toHaveBeenCalledWith(
       expect.stringContaining("Failed to plant grow worker"),
     );

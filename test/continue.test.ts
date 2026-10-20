@@ -17,6 +17,17 @@ vi.mock("../src/session.js", () => ({
   DASHBOARD_SESSION: "garden-dashboard",
 }));
 
+// The seed is read through the mocked fs above, so each case still sets its
+// text with readFileSync; seed-files.test.ts covers the real reader.
+vi.mock("../src/dashboard/seed-files.js", async () => {
+  const fs = (await import("node:fs")).default;
+  return {
+    readSeedFile: vi.fn((file: string) => {
+      try { return fs.readFileSync(file, "utf8") as string; } catch { return null; }
+    }),
+  };
+});
+
 vi.mock("../src/dashboard/state.js", () => ({
   readDashState: vi.fn(),
 }));

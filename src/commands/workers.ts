@@ -1,7 +1,7 @@
 // `garden workers <subcommand>` — worker lifecycle CLI.
 import fs from "node:fs";
 import path from "node:path";
-import { tryGetProject, SESSIONS_DIR, loadConfig } from "../config.js";
+import { tryGetProject, loadConfig } from "../config.js";
 import { newWorker, stopWorkerByName } from "../dashboard/workers.js";
 import { resolveWorkerArg } from "./resolve-worker.js";
 import { WORKER_EFFORT_LEVELS } from "../dashboard/create.js";
@@ -20,6 +20,7 @@ import {
   countCommitsAheadOfBase, isWorktreeDirty, syncWorktreeToBase,
 } from "../dashboard/git.js";
 import { isValidBranchName } from "../dashboard/git-refs.js";
+import { writeSeedFile } from "../dashboard/seed-files.js";
 
 export async function workers(args: string[]): Promise<void> {
   const sub = args[0];
@@ -193,12 +194,7 @@ async function newCommand(args: string[]): Promise<void> {
     // entry.grow.seed; iter ≥ 2 prompts inline that text verbatim. The
     // plant-time prompt wraps it with grow framing so the worker paces
     // itself across the bounded loop.
-    const seedFile = path.join(
-      SESSIONS_DIR, "seeds",
-      `grow-seed-${projectName}-${Date.now()}.txt`,
-    );
-    fs.mkdirSync(path.dirname(seedFile), { recursive: true });
-    fs.writeFileSync(seedFile, buildGrowIteration1Seed(seed, maxIter));
+    const seedFile = writeSeedFile(buildGrowIteration1Seed(seed, maxIter), "grow");
 
     const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
     const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
@@ -262,15 +258,7 @@ async function newCommand(args: string[]): Promise<void> {
     // Plant-time prompt, delivered via seedMessageFile (like grow's iter-1
     // seed). A designer does not loop, so the seed is not stored on the
     // entry; it only kicks off the frame → options pipeline.
-    let seedFile: string | undefined;
-    if (seed !== undefined) {
-      seedFile = path.join(
-        SESSIONS_DIR, "seeds",
-        `designer-seed-${projectName}-${Date.now()}.txt`,
-      );
-      fs.mkdirSync(path.dirname(seedFile), { recursive: true });
-      fs.writeFileSync(seedFile, buildDesignerSeed(seed));
-    }
+    const seedFile = seed === undefined ? undefined : writeSeedFile(buildDesignerSeed(seed), "designer");
 
     // Designer model/effort come from the crew's design seat, else the
     // workflow's Opus / xhigh default (newWorker resolution); --model /
@@ -332,15 +320,7 @@ async function newCommand(args: string[]): Promise<void> {
       }
     }
 
-    let seedFile: string | undefined;
-    if (seed !== undefined) {
-      seedFile = path.join(
-        SESSIONS_DIR, "seeds",
-        `planner-seed-${projectName}-${Date.now()}.txt`,
-      );
-      fs.mkdirSync(path.dirname(seedFile), { recursive: true });
-      fs.writeFileSync(seedFile, seed);
-    }
+    const seedFile = seed === undefined ? undefined : writeSeedFile(seed, "planner");
 
     // Planner model/effort default to Opus / xhigh via the workflow definition
     // (newWorker resolution); --model / --effort override per run.
@@ -596,6 +576,22 @@ async function growCommand(args: string[]): Promise<void> {
     );
   }
 
+  // Staged before the flip. Run from a worker's own pane (the /grow skill),
+  // this command is sandboxed and cannot write the control tree where seeds
+  // live; failing after the flip would leave the worker converted with no
+  // iter-1 to start it, and a re-run refused.
+  let seedFile: string | undefined;
+  if (dispatchIter1) {
+    try {
+      seedFile = writeSeedFile(buildGrowIteration1Seed(seed, maxIter), "grow");
+    } catch (err) {
+      throw new Error(
+        `Could not write the iter-1 seed prompt: ${err instanceof Error ? err.message : String(err)}. `
+        + `The worker was not converted.`,
+      );
+    }
+  }
+
   // Flip the workflow. Iteration starts at 0; the next launchReview (or
   // the iter-1 dispatch below) will move it to 1 via growLoopHooks.
   updateWorkerFields(projectName, workerName, {
@@ -607,7 +603,7 @@ async function growCommand(args: string[]): Promise<void> {
     },
   });
 
-  if (!dispatchIter1) {
+  if (!seedFile) {
     console.log(
       `Converted worker ${projectName}/${workerName} to grow `
       + `(up to ${maxIter} iterations). Goal at .garden/grow-goal.md. `
@@ -624,6 +620,7 @@ async function growCommand(args: string[]): Promise<void> {
   // fire growAutoContinueAfterMerge.
   const sync = syncWorktreeToBase(entry.worktreePath, baseBranch);
   if (!sync.ok) {
+    fs.rmSync(seedFile, { force: true });
     throw new Error(
       `Could not fast-forward worktree at ${entry.worktreePath} to origin/${baseBranch}: ${sync.reason}${sync.error ? ` (${sync.error})` : ""}. `
       + `Workflow has been flipped to grow; resolve the git issue and re-run iter-1 manually `
@@ -631,12 +628,6 @@ async function growCommand(args: string[]): Promise<void> {
     );
   }
 
-  const seedFile = path.join(
-    SESSIONS_DIR, "seeds",
-    `grow-seed-${projectName}-${Date.now()}.txt`,
-  );
-  fs.mkdirSync(path.dirname(seedFile), { recursive: true });
-  fs.writeFileSync(seedFile, buildGrowIteration1Seed(seed, maxIter));
   dispatchDelayedSeed(resolveGardenRunner(), projectName, workerName, seedFile);
 
   console.log(

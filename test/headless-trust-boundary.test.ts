@@ -8,10 +8,16 @@ import {
   reviewResultPath,
   ciFixPromptPath,
   ciFixResultPath,
+  claudeSettingsPath,
+  contextFilePath,
+  STATUS_LINE_SCRIPT_PATH,
 } from "../src/dashboard/headless-paths.js";
+import { STATUS_DIAG_DIR } from "../src/dashboard/header.js";
 import {
   CONTROL_DIR,
   CONTROL_REPORTS_DIR,
+  CONTROL_SCRIPTS_DIR,
+  CONTROL_SEEDS_DIR,
   HEADLESS_RUNS_DIR,
 } from "../src/paths.js";
 
@@ -45,6 +51,24 @@ describe("headless-agent trust boundary", () => {
     }
     expect(isWithin(HEADLESS_RUNS_DIR, files[0])).toBe(true);
     expect(isWithin(CONTROL_REPORTS_DIR, files[4])).toBe(true);
+  });
+
+  it("keeps what an unsandboxed process runs or hands an agent as instructions outside the sessions tree", () => {
+    // Bootstrap and pane scripts, the status line Claude Code runs outside the
+    // sandbox, system-prompt context files, seed prompts, and the status pane's
+    // diag captures (a capture becomes a worker's briefing).
+    const files = [
+      path.join(CONTROL_SCRIPTS_DIR, "bootstrap-garden-swift-oak.sh"),
+      STATUS_LINE_SCRIPT_PATH,
+      claudeSettingsPath("/tmp/garden-worker"),
+      contextFilePath("/tmp/garden-worker"),
+      path.join(CONTROL_SEEDS_DIR, "grow-1.txt"),
+      path.join(STATUS_DIAG_DIR, "diag-snap-1-1.txt"),
+    ];
+    for (const file of files) {
+      expect(isWithin(SESSIONS_DIR, file), file).toBe(false);
+      expect(isWithin(CONTROL_DIR, file), file).toBe(true);
+    }
   });
 
   it("contains artifacts even when registry-controlled names contain traversal syntax", () => {

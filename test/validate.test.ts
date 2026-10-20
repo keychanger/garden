@@ -17,10 +17,11 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   lockPaneMouse: vi.fn(),
 }));
 
-vi.mock("../src/dashboard/registry.js", () => {
+vi.mock("../src/dashboard/registry.js", async (orig) => {
   const readRegistry = vi.fn(() => ({ workers: {} }));
   const writeRegistry = vi.fn();
   return {
+    PR_STATE_KIND: (await orig<typeof import("../src/dashboard/registry.js")>()).PR_STATE_KIND,
     readRegistry,
     writeRegistry,
     isTaintedRegistry: vi.fn(() => false),
@@ -107,14 +108,14 @@ vi.mock("../src/session.js", () => ({
 import fs from "node:fs";
 import path from "node:path";
 import { validateAndHeal, sweepGhostEntries, healStatusPane, healActivePane, cleanContextFiles, cleanClaudeSettingsFiles, cleanOrphanedReviewWindows } from "../src/dashboard/validate.js";
-import { CLAUDE_SETTINGS_DIR, claudeSettingsPath } from "../src/dashboard/headless-paths.js";
+import { CLAUDE_SETTINGS_DIR, claudeSettingsPath, contextFilePath, STATUS_LINE_SCRIPT_PATH } from "../src/dashboard/headless-paths.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, tmuxSplit, paneRunningOnlyShell } from "../src/dashboard/tmux.js";
 import { readRegistry, writeRegistry, mutateRegistry, isTaintedRegistry } from "../src/dashboard/registry.js";
 import type { DashboardState } from "../src/dashboard/state.js";
 import { restoreFromHidden } from "../src/dashboard/layout.js";
 import { dashboardExists } from "../src/session.js";
-import { HEADLESS_RUNS_DIR } from "../src/paths.js";
+import { CONTROL_CONTEXTS_DIR, HEADLESS_RUNS_DIR } from "../src/paths.js";
 
 import { setPaneTitle, setPaneLabel, disablePaneInput, lockPaneMouse } from "../src/dashboard/tmux.js";
 
@@ -853,26 +854,41 @@ describe("cleanContextFiles", () => {
     expect(unlink).toHaveBeenCalledWith(path.join(HEADLESS_RUNS_DIR, stale));
   });
 
-  it("sweeps a review file when its worker's review window has died", () => {
+  it("keeps a finished pass's files until the poller is done with them, by registry state not window liveness", () => {
+    // The reviewer's window closes as soon as the agent exits, before the poller
+    // reads its verdict; sweeping then would throw the verdict away.
     vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
-      String(directory) === DIR
-        ? ["myproject-gone-worker-review-result.txt"]
+      String(directory) === HEADLESS_RUNS_DIR
+        ? [
+          "myproject-exited-worker-review-result.txt",
+          "myproject-cleared-worker-review-result.txt",
+          "myproject-resolver-worker-review-result.txt",
+          "myproject-fixer-worker-ci-fix-result.txt",
+          "myproject-idle-worker-review-result.txt",
+        ]
         : []
     ) as unknown as ReturnType<typeof fs.readdirSync>);
     const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
         myproject: [
-          { name: "gone-worker", sessionId: "s", task: "",
-            reviewWindowName: "_myproject-review-gone-worker" },
+          { name: "exited-worker", sessionId: "s", task: "",
+            reviewWindowName: "_myproject-review-exited-worker" },
+          // The orphaned-window sweep clears the name; the state still says reviewing.
+          { name: "cleared-worker", sessionId: "s", task: "", prState: "reviewing" },
+          { name: "resolver-worker", sessionId: "s", task: "", prState: "resolving" },
+          { name: "fixer-worker", sessionId: "s", task: "", prState: "ci-fixing" },
+          { name: "idle-worker", sessionId: "s", task: "", prState: "merge-pending" },
         ],
       },
     });
-    vi.mocked(windowExists).mockReturnValue(false); // window gone -> not protected
+    vi.mocked(windowExists).mockReturnValue(false);
 
     cleanContextFiles();
 
-    expect(unlink).toHaveBeenCalledWith(`${DIR}/myproject-gone-worker-review-result.txt`);
+    expect(unlink.mock.calls.map(c => path.basename(String(c[0])))).toEqual([
+      "myproject-idle-worker-review-result.txt",
+    ]);
   });
 
   it("sweeps stale trusted artifacts while protecting every live review-family file", () => {
@@ -916,6 +932,86 @@ describe("cleanContextFiles", () => {
   });
 });
 
+describe("cleanContextFiles: system-prompt context files", () => {
+  const HOUR = 60 * 60 * 1000;
+  const live = path.basename(contextFilePath("/worktrees/garden/live-worker"));
+  const checkout = path.basename(contextFilePath("/tmp/garden"));
+  const removed = path.basename(contextFilePath("/worktrees/garden/removed-worker"));
+  const fresh = path.basename(contextFilePath("/worktrees/garden/spawning-worker"));
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(isTaintedRegistry).mockReturnValue(false);
+  });
+
+  function listing(contexts: string[], legacy: string[] = []): void {
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
+      String(directory) === CONTROL_CONTEXTS_DIR ? contexts
+        : String(directory) === "/tmp/fake-sessions" ? legacy
+        : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
+    const stat = ((file: fs.PathLike) => ({
+      mtimeMs: /spawning|fresh/.test(String(file)) || String(file).endsWith(fresh) ? Date.now() : Date.now() - 2 * HOUR,
+    }) as fs.Stats) as never;
+    vi.spyOn(fs, "statSync").mockImplementation(stat);
+    vi.spyOn(fs, "lstatSync").mockImplementation(stat);
+  }
+
+  it("keeps every live worker's and project checkout's file, removing only a removed worker's", () => {
+    // Before, every per-worker file was deleted on attach: its name never
+    // parsed back to a project. One still bootstrapping lost its rules.
+    const resurrected = path.basename(contextFilePath("/elsewhere/kept-worker"));
+    listing([live, checkout, removed, fresh, resurrected]);
+    vi.mocked(readRegistry).mockReturnValue({
+      workers: { garden: [
+        { name: "live-worker", sessionId: "s", task: "" },
+        // Resurrect restores a tombstone's original path, which can differ from the layout's.
+        { name: "kept-worker", sessionId: "s", task: "", worktreePath: "/elsewhere/kept-worker" },
+      ] },
+    });
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    cleanContextFiles();
+
+    expect(unlink.mock.calls.map(c => path.basename(String(c[0])))).toEqual([removed]);
+  });
+
+  it("removes nothing when the registry could not be read", () => {
+    listing([live, removed]);
+    vi.mocked(isTaintedRegistry).mockReturnValue(true);
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    cleanContextFiles();
+
+    expect(unlink.mock.calls.filter(c => String(c[0]).startsWith(CONTROL_CONTEXTS_DIR))).toEqual([]);
+  });
+
+  it("keeps sweeping when one sessions-dir entry cannot be read", () => {
+    // A worker can plant anything in the sessions dir; a dangling link there
+    // must not cost the rest of the pass, headless artifacts included.
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
+      String(directory) === "/tmp/fake-sessions" ? ["dashboard-planted.context"]
+        : String(directory) === HEADLESS_RUNS_DIR ? ["myproject-gone-worker-review-result.txt"]
+        : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
+    vi.spyOn(fs, "lstatSync").mockImplementation(() => { throw new Error("ENOENT"); });
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    cleanContextFiles();
+
+    expect(unlink).toHaveBeenCalledWith(path.join(HEADLESS_RUNS_DIR, "myproject-gone-worker-review-result.txt"));
+  });
+
+  it("removes the sessions-dir context files older builds left, once past the age floor", () => {
+    listing([], ["dashboard-garden-old-worker.context", "dashboard-garden-fresh-worker.context"]);
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    cleanContextFiles();
+
+    expect(unlink.mock.calls.map(c => path.basename(String(c[0])))).toEqual(["dashboard-garden-old-worker.context"]);
+  });
+});
+
 describe("cleanClaudeSettingsFiles", () => {
   const live = path.basename(claudeSettingsPath("/worktrees/garden/live-worker"));
   const checkout = path.basename(claudeSettingsPath("/tmp/garden"));
@@ -925,7 +1021,7 @@ describe("cleanClaudeSettingsFiles", () => {
 
   beforeEach(() => {
     vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
-      String(directory) === CLAUDE_SETTINGS_DIR ? [live, checkout, removed, fresh] : []
+      String(directory) === CLAUDE_SETTINGS_DIR ? [live, checkout, removed, fresh, path.basename(STATUS_LINE_SCRIPT_PATH)] : []
     ) as unknown as ReturnType<typeof fs.readdirSync>);
     vi.spyOn(fs, "statSync").mockImplementation((file) => ({
       mtimeMs: String(file).endsWith(fresh) ? Date.now() : Date.now() - 2 * HOUR,
@@ -940,7 +1036,7 @@ describe("cleanClaudeSettingsFiles", () => {
     vi.mocked(isTaintedRegistry).mockReturnValue(false);
   });
 
-  it("removes a removed worker's file, keeping live workers, project checkouts, and files still in their grace period", () => {
+  it("removes a removed worker's file, keeping live workers, project checkouts, the shared status line, and files still in their grace period", () => {
     const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
 
     cleanClaudeSettingsFiles();

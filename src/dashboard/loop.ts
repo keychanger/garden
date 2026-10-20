@@ -20,9 +20,7 @@
 // continue.ts for the default auto-continue. Putting the loop primitive in
 // continue.ts would close that into a cycle.
 import { spawn } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
-import { tryGetProject, SESSIONS_DIR } from "../config.js";
+import { tryGetProject } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import {
   buildWorktreeWorkerCommand,
@@ -33,6 +31,7 @@ import { getHarness } from "./harness/index.js";
 import { resolveWorkerLaunchPlan } from "./launch-plan.js";
 import { dispatchDelayedSeed, paneHasBlockingOperatorDraft } from "./continue.js";
 import { log } from "./log.js";
+import { writeSeedFile } from "./seed-files.js";
 import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
 } from "./registry.js";
@@ -278,13 +277,9 @@ export function loopAutoContinueAfterMerge(
   // pendingContinueChangedFiles is still populated for the prompt builder
   // to read. Disk has been cleared.
   const message = hooks.buildContinuePrompt(entry);
-  const messageFile = path.join(
-    SESSIONS_DIR,
-    `${hooks.logTag}-seed-${projectName}-${workerName}-${Date.now()}.txt`,
-  );
+  let messageFile: string;
   try {
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.writeFileSync(messageFile, message);
+    messageFile = writeSeedFile(message, hooks.logTag);
   } catch (err) {
     log.error("workers", `${hooks.logTag} seed file write failed`, {
       worker: workerName, data: { project: projectName, error: String(err) },

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { CONTROL_DIR, CONTROL_REPORTS_DIR, HEADLESS_RUNS_DIR } from "../paths.js";
+import { CONTROL_CONTEXTS_DIR, CONTROL_DIR, CONTROL_REPORTS_DIR, HEADLESS_RUNS_DIR } from "../paths.js";
 
 const SAFE_ARTIFACT_PART = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
@@ -49,8 +49,21 @@ export const CLAUDE_SETTINGS_DIR = path.join(CONTROL_DIR, "claude-settings");
 // checkout on the legacy path). The installer and every launch command derive
 // the path from the same directory, so they cannot disagree about it.
 export function claudeSettingsPath(runtimeDir: string): string {
-  const digest = createHash("sha256").update(path.resolve(runtimeDir)).digest("hex");
-  return path.join(CLAUDE_SETTINGS_DIR, `${digest}.json`);
+  return path.join(CLAUDE_SETTINGS_DIR, `${runtimeDirDigest(runtimeDir)}.json`);
+}
+
+// The status-line script every worker's settings point at.
+export const STATUS_LINE_SCRIPT_PATH = path.join(CLAUDE_SETTINGS_DIR, "statusline.mjs");
+
+// The rules garden composes for an agent running in runtimeDir, passed to
+// Claude with --append-system-prompt-file and composed into a Codex worker's
+// AGENTS.md. Named like the settings file, so one keep-set sweeps both.
+export function contextFilePath(runtimeDir: string): string {
+  return path.join(CONTROL_CONTEXTS_DIR, `${runtimeDirDigest(runtimeDir)}.context`);
+}
+
+export function runtimeDirDigest(runtimeDir: string): string {
+  return createHash("sha256").update(path.resolve(runtimeDir)).digest("hex");
 }
 
 export function headlessArtifactNames(project: string, worker: string): string[] {

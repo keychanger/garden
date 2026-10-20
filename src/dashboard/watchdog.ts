@@ -56,6 +56,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
+import { CONTROL_SCRIPTS_DIR } from "../paths.js";
 import { newDashboardWindow, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
 import { readRegistry, mutateRegistry, PR_STATE_KIND, type WorkerEntry, type WorkerRegistry } from "./registry.js";
@@ -441,28 +442,32 @@ export function recordPtyCensus(
 // accrue over months.
 export const BOOTSTRAP_MAX_AGE_MS = 6 * 60 * 60_000;
 
-// Delete spent worker bootstrap scripts from SESSIONS_DIR. buildWorktreeBootstrapScript
+// Delete spent worker bootstrap scripts. buildWorktreeBootstrapScript
 // (create.ts) writes one `bootstrap-<project>-<branch>.sh` per worker launch and
 // nothing ever removed it, so one orphan accrued per worker ever created (1000+
 // over months). Match the naming contract from create.ts directly rather than
 // importing it — create.ts transitively imports this module (via poller.ts), so
-// a back-edge would close an init cycle. Returns the count removed (for tests).
+// a back-edge would close an init cycle. The scripts live in the control tree;
+// builds before that wrote them to SESSIONS_DIR, which is swept too. Returns
+// the count removed (for tests).
 export function sweepBootstrapScripts(nowMs: number): number {
-  let names: string[];
-  try {
-    names = fs.readdirSync(SESSIONS_DIR);
-  } catch {
-    return 0;
-  }
   let removed = 0;
-  for (const name of names) {
-    if (!name.startsWith("bootstrap-") || !name.endsWith(".sh")) continue;
-    const file = path.join(SESSIONS_DIR, name);
+  for (const dir of [CONTROL_SCRIPTS_DIR, SESSIONS_DIR]) {
+    let names: string[];
     try {
-      if (nowMs - fs.statSync(file).mtimeMs <= BOOTSTRAP_MAX_AGE_MS) continue;
-      fs.unlinkSync(file);
-      removed++;
-    } catch { /* raced with another sweep, or already gone */ }
+      names = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of names) {
+      if (!name.startsWith("bootstrap-") || !name.endsWith(".sh")) continue;
+      const file = path.join(dir, name);
+      try {
+        if (nowMs - fs.statSync(file).mtimeMs <= BOOTSTRAP_MAX_AGE_MS) continue;
+        fs.unlinkSync(file);
+        removed++;
+      } catch { /* raced with another sweep, or already gone */ }
+    }
   }
   if (removed > 0) {
     log.info("watchdog", "swept spent bootstrap scripts", { data: { removed } });
@@ -709,11 +714,17 @@ export function sweepWorkerTitles(gardenRunner: string, registry: WorkerRegistry
   return due.length;
 }
 
-export function housekeeping(nowMs: number): void {
+export async function housekeeping(nowMs: number): Promise<void> {
   truncateLog();
   sweepBootstrapScripts(nowMs);
   sweepSpawnDrafts(nowMs);
   alertOrphanedWorktrees(nowMs);
+  // Validate's sweeps too: without them a long-lived dashboard keeps every
+  // removed worker's settings and context file until an attach. Dynamic for
+  // the cycle the loop's import of healActivePane avoids.
+  const { cleanContextFiles, cleanClaudeSettingsFiles } = await import("./validate.js");
+  cleanContextFiles();
+  cleanClaudeSettingsFiles();
 }
 
 export async function runWatchdogLoop(): Promise<void> {
@@ -938,7 +949,7 @@ export async function runWatchdogLoop(): Promise<void> {
       if (now - lastHousekeepAt >= HOUSEKEEP_INTERVAL_MS) {
         lastHousekeepAt = now;
         try {
-          housekeeping(now);
+          await housekeeping(now);
         } catch (err) {
           log.warn("watchdog", "housekeeping failed", { data: { error: String(err) } });
         }

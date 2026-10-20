@@ -2,9 +2,8 @@
 // per-spawn override rows (provider, model, effort, crew, base) staged in
 // spawn-draft.ts and consumed by the workflow choice. Uses tmux display-menu
 // for the arrow-key + enter UX; the pure plan builders are what tests assert.
-import path from "node:path";
 import fs from "node:fs";
-import { tryGetProject, SESSIONS_DIR } from "../config.js";
+import { tryGetProject } from "../config.js";
 import { buildGrowIteration1Seed } from "./grow-continue.js";
 import { log } from "./log.js";
 import { newWorker } from "./workers.js";
@@ -18,6 +17,7 @@ import { codexModels, CODEX_EFFORT_LEVELS } from "./harness/codex-models.js";
 import { listBranches } from "./git.js";
 import { WORKER_EFFORT_LEVELS } from "./create.js";
 import { readSpawnDraft, writeSpawnDraft, consumeSpawnDraft, type SpawnDraftPatch } from "./spawn-draft.js";
+import { writeSeedFile } from "./seed-files.js";
 
 // ============================================================================
 // Workflow picker (⌥⇧N hotkey)
@@ -450,13 +450,7 @@ export function plantGrowFromPicker(projectName: string, seed: string): void {
 
   const maxIter = project.maxGrowIterations ?? 5;
 
-  const seedsDir = path.join(SESSIONS_DIR, "seeds");
-  fs.mkdirSync(seedsDir, { recursive: true });
-  const seedFile = path.join(
-    seedsDir,
-    `seed-grow-${projectName}-${Date.now()}.txt`,
-  );
-  fs.writeFileSync(seedFile, buildGrowIteration1Seed(trimmed, maxIter));
+  const seedFile = writeSeedFile(buildGrowIteration1Seed(trimmed, maxIter), "grow");
 
   const draft = consumeSpawnDraft(projectName);
   const newName = newWorker({

@@ -427,6 +427,8 @@ Use the Bash tool. The CLI prints \`Converted worker <project>/<name> to grow (u
 
 If the CLI errors with "already on the 'grow' workflow", the worker was already converted — point the operator at \`.garden/grow-goal.md\` for amends and stop.
 
+If it errors with "Could not write the iter-1 seed prompt", nothing was converted. On a fully merged branch the command starts iter 1 itself, which writes to garden's control directory, and your sandbox cannot write there. Give the operator the exact command to run from their own shell, and stop.
+
 ### 5. Continue your work
 
 - **If you were mid-implementation:** resume from where you paused. Finish your current work, commit, push. The push triggers iter 1 of the now-grow loop on its next merge.

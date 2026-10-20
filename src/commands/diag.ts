@@ -7,8 +7,10 @@
 // REMOVE WITH ALL OTHER diag- PLUMBING once the underlying bug is fixed.
 import fs from "node:fs";
 import path from "node:path";
-import { SESSIONS_DIR } from "../config.js";
 import { newWorker } from "../dashboard/workers.js";
+import { STATUS_DIAG_DIR } from "../dashboard/header.js";
+import { readStableRegularFile } from "../dashboard/safe-read.js";
+import { MAX_SEED_BYTES, writeSeedFile } from "../dashboard/seed-files.js";
 
 export async function diag(args: string[]): Promise<void> {
   const sub = args[0];
@@ -23,21 +25,19 @@ function handoffFromLatestSnapshot(): void {
   const snapshot = findLatestSnapshot();
   if (!snapshot) {
     throw new Error(
-      `No diag-snap-*.txt files found in ${SESSIONS_DIR}. `
+      `No diag-snap-*.txt files found in ${STATUS_DIAG_DIR}. `
       + "The auto-detector hasn't fired yet, or all snapshots have been deleted.",
     );
   }
 
-  const evidence = fs.readFileSync(snapshot.path, "utf8");
+  // The snapshot's text goes into a worker's briefing, so it is read without
+  // following a link, from the directory the status pane writes it to.
+  const read = readStableRegularFile(snapshot.path, STATUS_DIAG_DIR, MAX_SEED_BYTES);
+  if (!read) throw new Error(`${snapshot.path} is not a regular file under ${MAX_SEED_BYTES} bytes.`);
+  const evidence = read.data.toString("utf8");
   const briefing = buildBriefing(snapshot.path, evidence);
 
-  const seedsDir = path.join(SESSIONS_DIR, "seeds");
-  fs.mkdirSync(seedsDir, { recursive: true });
-  const seedFile = path.join(
-    seedsDir,
-    `seed-diag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`,
-  );
-  fs.writeFileSync(seedFile, briefing);
+  const seedFile = writeSeedFile(briefing, "diag");
 
   const newName = newWorker({
     projectName: "garden",
@@ -59,14 +59,14 @@ function handoffFromLatestSnapshot(): void {
 function findLatestSnapshot(): { path: string; mtimeMs: number } | null {
   let entries: string[];
   try {
-    entries = fs.readdirSync(SESSIONS_DIR);
+    entries = fs.readdirSync(STATUS_DIAG_DIR);
   } catch {
     return null;
   }
   let latest: { path: string; mtimeMs: number } | null = null;
   for (const name of entries) {
     if (!name.startsWith("diag-snap-") || !name.endsWith(".txt")) continue;
-    const full = path.join(SESSIONS_DIR, name);
+    const full = path.join(STATUS_DIAG_DIR, name);
     try {
       const stat = fs.statSync(full);
       if (!latest || stat.mtimeMs > latest.mtimeMs) {
@@ -110,8 +110,8 @@ ${evidence}
 - \`src/dashboard/header.ts\`:
   - Remove the \`diag_count=0\` + \`sd='...'\` lines from the prelude.
   - Remove the entire \`-------- diag auto-detector --------\` block in the outer loop.
-  - Remove the \`cd='...'\` line and the USR2 trap (\`trap 'printf %s "$cur" > "$cd"' USR2\`).
-  - Drop \`export\` from \`STATUS_RENDERED_FILE\` and remove the \`STATUS_CUR_DUMP_FILE\` const.
+  - Remove the \`cd='...'\` line and the USR2 trap (\`trap 'mkdir -p "$sd"; printf %s "$cur" > "$cd"' USR2\`).
+  - Drop \`export\` from \`STATUS_RENDERED_FILE\` and remove the \`STATUS_DIAG_DIR\` and \`STATUS_CUR_DUMP_FILE\` consts.
 - \`src/dashboard/index.ts\`: remove the \`_diag-status\` and \`_diag-alert\` dispatch blocks.
 - Delete files:
   - \`src/dashboard/diag-status.ts\`
@@ -119,7 +119,7 @@ ${evidence}
   - \`src/commands/diag.ts\` (this file)
 - \`src/commands/index.ts\`: remove the \`diag\` import and registration.
 - \`src/cli.ts\`: remove the \`diag handoff\` help line.
-- Delete leftover snapshots: \`rm ~/.garden/sessions/diag-snap-*.txt\`
+- Delete leftover snapshots: \`rm -r ~/.garden/control/diag ~/.garden/sessions/diag-snap-*.txt\`
 - Run \`grep -r 'diag-' src/\` after deletion. Should return zero hits.
 
 # Branch/commit guidance

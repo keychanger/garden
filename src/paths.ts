@@ -20,3 +20,10 @@ export const SESSIONS_DIR = path.join(GARDEN_DIR, "sessions");
 export const CONTROL_DIR = path.join(GARDEN_DIR, "control");
 export const HEADLESS_RUNS_DIR = path.join(CONTROL_DIR, "headless");
 export const CONTROL_REPORTS_DIR = path.join(CONTROL_DIR, "reports");
+// What an unsandboxed process runs or hands an agent as instructions: worker
+// bootstrap and dashboard pane scripts, system-prompt context files, and seed
+// prompts. In the sessions tree a worker could rewrite one between garden
+// writing it and the pane, agent or seeder reading it.
+export const CONTROL_SCRIPTS_DIR = path.join(CONTROL_DIR, "scripts");
+export const CONTROL_CONTEXTS_DIR = path.join(CONTROL_DIR, "contexts");
+export const CONTROL_SEEDS_DIR = path.join(CONTROL_DIR, "seeds");

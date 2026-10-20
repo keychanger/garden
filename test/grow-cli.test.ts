@@ -93,7 +93,7 @@ describe("garden workers new --workflow grow", () => {
       projectName: "proj",
       workflow: "grow",
       grow: { seed: "harden auth flow", maxIterations: 5 },
-      seedMessageFile: expect.stringMatching(/grow-seed-proj-\d+\.txt$/),
+      seedMessageFile: expect.stringMatching(/\/control\/seeds\/grow-[0-9a-f-]+\.txt$/),
     }));
   });
 
@@ -260,7 +260,7 @@ describe("garden workers new --workflow grow", () => {
     ).rejects.toThrow(/--trellis was removed along with the trellis workflow/);
   });
 
-  it("writes the iter-1 seed prompt to a file under SESSIONS_DIR/seeds", async () => {
+  it("writes the iter-1 seed prompt to a control-tree seed file", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     const { newWorker } = await importDashboardWorkers();
@@ -276,7 +276,10 @@ describe("garden workers new --workflow grow", () => {
 
     const callArgs = vi.mocked(newWorker).mock.calls[0][0]!;
     const seedFile = callArgs.seedMessageFile!;
-    expect(fs.existsSync(seedFile)).toBe(true);
+    // Outside every worker sandbox: the unsandboxed seeder pastes it as the
+    // new worker's first prompt.
+    expect(path.dirname(seedFile)).toBe(path.join(env.home, ".garden", "control", "seeds"));
+    expect(fs.statSync(seedFile).mode & 0o777).toBe(0o600);
     const content = fs.readFileSync(seedFile, "utf-8");
     expect(content).toContain("Grow loop, iteration 1 of 3");
     expect(content).toContain("polish auth");
@@ -309,7 +312,7 @@ describe("garden workers new --workflow designer", () => {
     expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
       projectName: "proj",
       workflow: "designer",
-      seedMessageFile: expect.stringMatching(/designer-seed-proj-\d+\.txt$/),
+      seedMessageFile: expect.stringMatching(/\/control\/seeds\/designer-[0-9a-f-]+\.txt$/),
     }));
     // A designer does not loop, so its seed is not stored on the entry (no grow
     // sub-object). The Opus/xhigh designer default is applied in newWorker (not
@@ -485,7 +488,8 @@ describe("garden workers new --workflow planner", () => {
     );
     const opts = vi.mocked(newWorker).mock.calls[0][0]!;
     expect(opts.workflow).toBe("planner");
-    expect(opts.seedMessageFile).toBeDefined();
+    expect(path.dirname(opts.seedMessageFile!)).toBe(path.join(env.home, ".garden", "control", "seeds"));
+    expect(fs.statSync(opts.seedMessageFile!).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(opts.seedMessageFile!, "utf-8")).toBe("plan epic bd-1");
   });
 
@@ -981,12 +985,12 @@ describe("garden workers grow (convert)", () => {
     expect(wtHeadAfter).toBe(originHead);
     expect(wtHeadAfter).not.toBe(wtHeadBefore);
 
-    // Seed file written under SESSIONS_DIR/seeds with the iter-1 framing
+    // Seed file written under control/seeds with the iter-1 framing
     // (Iteration 1 of N). The detached `_seed-worker --delay-ms 6000`
     // subprocess is mocked away, so we assert on file presence + content
     // directly.
-    const seedDir = path.join(env.home, ".garden", "sessions", "seeds");
-    const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-seed-proj-"));
+    const seedDir = path.join(env.home, ".garden", "control", "seeds");
+    const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-"));
     expect(seeds).toHaveLength(1);
     const seedContent = fs.readFileSync(path.join(seedDir, seeds[0]), "utf-8");
     // buildGrowIteration1Seed inlines the operator's seed verbatim and
@@ -1002,8 +1006,35 @@ describe("garden workers grow (convert)", () => {
       expect.any(String),
       "proj",
       "merged",
-      expect.stringMatching(/grow-seed-proj-\d+\.txt$/),
+      path.join(seedDir, seeds[0]),
     );
+  });
+
+  // The /grow skill runs this from the worker's own pane, whose sandbox
+  // cannot write the control tree. The seed is written before anything
+  // changes, so the failed run leaves the worker as it was and a re-run from
+  // an unsandboxed shell converts it.
+  it("leaves the worker unconverted when the iter-1 seed cannot be written", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = setupRealWorktree(projectDir, "merged");
+    advanceOriginMain(projectDir, 1);
+    await addDefaultWorker("proj", "merged", wtPath);
+    const control = path.join(env.home, ".garden", "control");
+    fs.mkdirSync(control, { recursive: true });
+    fs.chmodSync(control, 0o555);
+
+    const { workers } = await importWorkersCmd();
+    try {
+      await expect(workers(["grow", "merged", "--seed", "harden auth"]))
+        .rejects.toThrow(/Could not write the iter-1 seed prompt: .*The worker was not converted/);
+    } finally {
+      fs.chmodSync(control, 0o755);
+    }
+    const reg = await importRegistry();
+    expect(reg.findWorkerByName("proj", "merged")!.workflow ?? "default").toBe("default");
+
+    await captureConsoleLog(() => workers(["grow", "merged", "--seed", "harden auth"]));
+    expect(reg.findWorkerByName("proj", "merged")!.workflow).toBe("grow");
   });
 
   // Pre-flight dirty check runs BEFORE any state mutation when the branch
@@ -1030,9 +1061,9 @@ describe("garden workers grow (convert)", () => {
 
     // No goal file, no seed file.
     expect(fs.existsSync(path.join(wtPath, ".garden", "grow-goal.md"))).toBe(false);
-    const seedDir = path.join(env.home, ".garden", "sessions", "seeds");
+    const seedDir = path.join(env.home, ".garden", "control", "seeds");
     if (fs.existsSync(seedDir)) {
-      const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-seed-proj-"));
+      const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-"));
       expect(seeds).toHaveLength(0);
     }
   });
@@ -1062,9 +1093,9 @@ describe("garden workers grow (convert)", () => {
     expect(git(wtPath, "rev-parse", "HEAD")).toBe(wtHeadBefore);
 
     // No seed file, no dispatchDelayedSeed call.
-    const seedDir = path.join(env.home, ".garden", "sessions", "seeds");
+    const seedDir = path.join(env.home, ".garden", "control", "seeds");
     if (fs.existsSync(seedDir)) {
-      const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-seed-proj-"));
+      const seeds = fs.readdirSync(seedDir).filter(f => f.startsWith("grow-"));
       expect(seeds).toHaveLength(0);
     }
     const continueMod = await import("../src/dashboard/continue.js");

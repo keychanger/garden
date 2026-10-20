@@ -40,6 +40,7 @@ import { log } from "./log.js";
 import { resolveGardenRunner } from "./runner.js";
 import { recordContinueDispatched } from "./telemetry.js";
 import { addAlert } from "./alerts.js";
+import { readSeedFile } from "./seed-files.js";
 import { tryGetProject } from "../config.js";
 
 // Which garden-initiated delivery this is — the `kind` on the
@@ -1173,13 +1174,11 @@ export function seedWorker(
   workerName: string,
   messageFile: string,
 ): void {
-  let message: string;
-  try {
-    message = fs.readFileSync(messageFile, "utf8");
-  } catch (err) {
+  const message = readSeedFile(messageFile);
+  if (message === null) {
     log.warn("workers", "seed failed to read message file", {
       worker: workerName,
-      data: { project: projectName, file: messageFile, error: String(err) },
+      data: { project: projectName, file: messageFile },
     });
     return;
   }
