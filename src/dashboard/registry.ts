@@ -95,12 +95,13 @@ export type FailingReason =
   // the check green; the poller does not auto-retry.
   | "ci"
   // Set by launchReview (poller-review.ts) when the assembled reviewer prompt
-  // exceeds MAX_REVIEW_PROMPT_BYTES — the branch diff is larger than any
-  // reviewer's context window, so the agent CLI rejects the prompt before the
-  // reviewer starts and no retry can help. NOT an operator-action reason:
-  // reducing the branch diff changes its SHA, and the resulting SHA re-enters
-  // review through the normal failing debounce. `garden kick` does
-  // NOT accept it — kicking an unchanged diff re-fails identically.
+  // exceeds MAX_REVIEW_PROMPT_BYTES even with the diff, docs and test files
+  // paged — what remains is larger than any reviewer's context window, so the
+  // agent CLI rejects the prompt before the reviewer starts and no retry can
+  // help. NOT an operator-action reason: reducing the branch diff changes its
+  // SHA, and the resulting SHA re-enters review through the normal failing
+  // debounce. `garden kick` does NOT accept it — kicking an unchanged diff
+  // re-fails identically.
   | "oversized-diff"
   // Set by handleWorking's skip-review path (poller-review.ts) when a designer
   // (skipsReviewMerge) branch committed files outside the publishable docs/

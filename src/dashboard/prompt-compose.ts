@@ -31,6 +31,12 @@ export interface PromptData {
    *  delta was too large to inline (see composeWithinCeiling). Diff sections
    *  render this plus paging instructions instead of `diff`, which is empty. */
   diffStat?: string;
+  /** Set by composeWithinCeiling when the documentation or test files did not
+   *  fit: their sections list the files for the reviewer to read in the
+   *  worktree instead of inlining them. The arrays stay populated, so
+   *  anything reading their content (nonBlockingNotesFor) still sees it. */
+  docsPaged?: boolean;
+  testsPaged?: boolean;
   commitSummary: string;
   branchName: string;
   rules: string;
@@ -110,26 +116,49 @@ export function reviewPromptBytes(prompt: string): number {
   return Buffer.byteLength(prompt, "utf8");
 }
 
-// Compose, and if the assembled prompt busts the ceiling, recompose once with
-// the diff replaced by its `--stat` summary (`stat` is a thunk so the extra git
-// call happens only on that path). The reviewer runs INSIDE the worktree with a
-// shell, so a delta too large to carry inline is still reviewable — it just has
-// to page through `git diff` itself, which is what the diff sections tell it to
-// do when `diffStat` is set. A degraded review beats the alternative of parking
-// the worker and reviewing nothing; a branch that fits takes the byte-identical
-// original path. The caller's own ceiling check remains the backstop for when
-// even the summarized prompt does not fit (rules/docs/tests dominating).
+const REFERENCE_PAGING: readonly Pick<PromptData, "docsPaged" | "testsPaged">[] = [
+  {},
+  { testsPaged: true },
+  { testsPaged: true, docsPaged: true },
+];
+
+// Compose, and if the assembled prompt busts the ceiling, recompose with parts
+// of it replaced by pointers. The reviewer runs INSIDE the worktree with a
+// shell, so nothing left out of the prompt is out of its reach — the paged
+// sections tell it what to read itself. A degraded review beats parking the
+// worker and reviewing nothing; a branch that fits takes the byte-identical
+// original path.
+//
+// Reference material is paged before the subject under review: the test files
+// first, since they scale with how many files a branch touches (one whole file
+// per changed source), then the documentation. The diff is replaced by its
+// `--stat` summary (`stat` is a thunk, so the extra git call happens only on
+// that path) only when the prompt cannot fit with the diff inline, and the
+// references then come back as far as they fit, so a merely huge diff degrades
+// exactly as it did before references were pageable. The caller's own ceiling
+// check remains the backstop for a prompt that does not fit with all three
+// paged (rules, commit log and file summary dominating).
 export function composeWithinCeiling(
   sections: readonly PromptSection[],
   ctx: PromptContext,
   stat: () => string,
 ): string {
-  const prompt = composePrompt(sections, ctx);
-  if (reviewPromptBytes(prompt) <= MAX_REVIEW_PROMPT_BYTES) return prompt;
-  const paged = makeContext(ctx.projectName, ctx.projectPath, ctx.baseBranch, ctx.entry, {
-    ...ctx.data, diff: "", diffStat: stat(),
-  });
-  return composePrompt(sections, paged);
+  let diffStat: string | undefined;
+  let prompt = "";
+  for (const pageDiff of [false, true]) {
+    if (pageDiff) diffStat = stat();
+    for (const references of REFERENCE_PAGING) {
+      const data: PromptData = {
+        ...ctx.data,
+        ...(pageDiff ? { diff: "", diffStat } : {}),
+        ...references,
+      };
+      prompt = composePrompt(sections,
+        makeContext(ctx.projectName, ctx.projectPath, ctx.baseBranch, ctx.entry, data));
+      if (reviewPromptBytes(prompt) <= MAX_REVIEW_PROMPT_BYTES) return prompt;
+    }
+  }
+  return prompt;
 }
 
 // Review-flavored gatherer: fetches diff, commits, rules, docs, tests, and
@@ -238,12 +267,16 @@ export function readDocSections(wtPath: string): string[] {
 
 export function readTestSections(wtPath: string, changedFiles: string[]): string[] {
   const sections: string[] = [];
+  const seen = new Set<string>();
   for (const file of changedFiles) {
-    const basename = path.basename(file, path.extname(file));
-    const testFile = path.join(wtPath, "test", `${basename}.test.ts`);
+    const testFile = `test/${path.basename(file, path.extname(file))}.test.ts`;
+    // Same-named sources in different directories (src/commands/workers.ts and
+    // src/dashboard/workers.ts) map to one test file; inline it once.
+    if (seen.has(testFile)) continue;
+    seen.add(testFile);
     try {
-      const content = fs.readFileSync(testFile, "utf-8");
-      sections.push(`### test/${basename}.test.ts\n\n${content}`);
+      const content = fs.readFileSync(path.join(wtPath, testFile), "utf-8");
+      sections.push(`### ${testFile}\n\n${content}`);
     } catch { /* no corresponding test file */ }
   }
   return sections;

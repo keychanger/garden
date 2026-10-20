@@ -1852,10 +1852,10 @@ function launchReview(
     return false;
   }
 
-  // Backstop. The builder already degrades an oversized branch delta to a file
-  // summary the reviewer pages through itself (composeWithinCeiling), so a
-  // prompt still over the ceiling here means the NON-diff context — rules, docs,
-  // test files — is what does not fit, and no reviewer can be launched at all:
+  // Backstop. The builder already pages the test files, the docs, and an
+  // oversized branch delta for the reviewer to read itself (composeWithinCeiling),
+  // so a prompt still over the ceiling here means what cannot be paged — rules,
+  // commit log, file summary — does not fit, and no reviewer can be launched at all:
   // the agent CLI rejects the request before the reviewer starts. Park the
   // worker with the real reason rather than burning the retry ladder on three
   // doomed launches. NOT an operator-action reason: shrinking the branch
@@ -1872,7 +1872,7 @@ function launchReview(
       worker: entry.name,
       message:
         `Review prompt for ${entry.name} is ${mb(promptBytes)} (ceiling ${mb(MAX_REVIEW_PROMPT_BYTES)}) even `
-        + `with the branch diff reduced to a file summary — the surrounding context (rules, docs, test files) `
+        + `with the diff, docs and test files reduced to file lists — the rest (rules, commit log, file summary) `
         + `is too large for any reviewer's context window. `
         + `Split the work across smaller branches and push a reduced diff; the review retries on the new SHA.`,
       dedupKey: `oversized-diff:${projectName}:${entry.name}:${headSha ?? "?"}`,

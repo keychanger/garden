@@ -379,11 +379,13 @@ export function buildReviewPrompt(...args): string | null {
 
 **A review builder composes through `composeWithinCeiling`, not bare
 `composePrompt`.** It measures the assembled prompt against
-`MAX_REVIEW_PROMPT_BYTES` and, when it busts, recomposes once with the inline
-diff replaced by its `git diff --stat` summary (the third argument is a thunk,
-so the extra git call only happens on that path) — the diff sections render
-paging instructions instead, and the reviewer, which runs inside the worktree
-with a shell, reads the delta itself. A builder that calls `composePrompt`
+`MAX_REVIEW_PROMPT_BYTES` and, when it busts, recomposes with the reference
+sections paged first — the test files, then the documentation, each rendered
+as a list of paths — and replaces the inline diff with its `git diff --stat`
+summary only when the prompt cannot fit with the diff inline (the third
+argument is a thunk, so the extra git call only happens on that path). The
+paged sections render reading instructions instead, and the reviewer, which
+runs inside the worktree with a shell, reads what it needs itself. A builder that calls `composePrompt`
 directly reverts its workflow to the old hard wall: a branch too large to inline
 parks the worker in `failing` with `oversized-diff` and gets no review at all.
 Non-review builders (the resolver, which carries no diff) use `composePrompt`.

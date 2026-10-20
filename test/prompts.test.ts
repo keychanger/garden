@@ -197,6 +197,110 @@ describe("buildReviewPrompt — oversized diff", () => {
   });
 });
 
+// The test files inlined for the changed sources scale with how many files a
+// branch touches, and DESIGN.md + AGENTS.md can run to hundreds of KB on their
+// own, so a broad branch can bust the ceiling with a diff that would fit. The
+// reviewer reads files in the worktree as readily as it pages a diff, so the
+// reference material is listed by path before the diff under review is.
+describe("buildReviewPrompt — oversized reference material", () => {
+  const KB = 1024;
+  const diffOf = (bytes: number) => "+diff-line\n".repeat(Math.ceil(bytes / 11));
+  const oversized = "x".repeat(MAX_REVIEW_PROMPT_BYTES + 1);
+  const review = () => buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+  const serveReferences = ({ docBytes = 0, testBytes = 0 }) => {
+    vi.mocked(fs.readFileSync).mockImplementation(((p: unknown) => {
+      const file = String(p);
+      if (docBytes && file.endsWith("/DESIGN.md")) return "DESIGN-BODY ".repeat(Math.ceil(docBytes / 12));
+      if (testBytes && file.endsWith("/test/foo.test.ts")) return "TEST-BODY ".repeat(Math.ceil(testBytes / 10));
+      return defaultRead(p as never);
+    }) as typeof fs.readFileSync);
+  };
+
+  it("lists the test files instead of inlining them when they are what does not fit", () => {
+    const diff = diffOf(300 * KB);
+    vi.mocked(getDiffAgainstBase).mockReturnValue(diff);
+    serveReferences({ testBytes: 800 * KB });
+
+    const result = review();
+
+    expect(result).toContain(diff);
+    expect(result).toContain("## Test Files (corresponding to changed source files — too large to inline)");
+    expect(result).toContain("- test/foo.test.ts");
+    expect(result).not.toContain("TEST-BODY");
+    expect(result).toContain("Agent quick-start notes");
+    expect(getDiffStat).not.toHaveBeenCalled();
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(MAX_REVIEW_PROMPT_BYTES);
+  });
+
+  it("lists the documentation too when listing the test files is not enough", () => {
+    const diff = diffOf(300 * KB);
+    vi.mocked(getDiffAgainstBase).mockReturnValue(diff);
+    serveReferences({ docBytes: 800 * KB, testBytes: 300 * KB });
+
+    const result = review();
+
+    expect(result).toContain(diff);
+    expect(result).toContain("## Documentation (current state in the worktree — too large to inline)");
+    expect(result).toContain("- DESIGN.md\n- AGENTS.md");
+    expect(result).not.toContain("DESIGN-BODY");
+    expect(result).not.toContain("TEST-BODY");
+    expect(getDiffStat).not.toHaveBeenCalled();
+  });
+
+  it("pages the diff only when it cannot fit inline, and inlines the references again", () => {
+    // A merely huge diff degrades exactly as it did before the references were
+    // pageable: listing them could not have brought the prompt under.
+    vi.mocked(getDiffAgainstBase).mockReturnValue(oversized);
+    serveReferences({ docBytes: 100 * KB, testBytes: 100 * KB });
+
+    const result = review();
+
+    expect(result).toContain("## Diff (too large to inline — file summary only)");
+    expect(result).toContain("DESIGN-BODY");
+    expect(result).toContain("TEST-BODY");
+    expect(getDiffStat).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps listing the test files beside a paged diff while they still do not fit", () => {
+    vi.mocked(getDiffAgainstBase).mockReturnValue(oversized);
+    serveReferences({ docBytes: 200 * KB, testBytes: 900 * KB });
+
+    const result = review();
+
+    expect(result).toContain("## Diff (too large to inline — file summary only)");
+    expect(result).toContain("- test/foo.test.ts");
+    expect(result).not.toContain("TEST-BODY");
+    expect(result).toContain("DESIGN-BODY");
+    expect(Buffer.byteLength(result, "utf8")).toBeLessThanOrEqual(MAX_REVIEW_PROMPT_BYTES);
+  });
+
+  it("still offers the non-blocking notes convention a listed document defines", () => {
+    vi.mocked(fs.readFileSync).mockImplementation(((p: unknown) => {
+      const file = String(p);
+      if (file.endsWith("/DESIGN.md")) return `An uncited finding is non-blocking. ${"DESIGN-BODY ".repeat(Math.ceil(1100 * KB / 12))}`;
+      return defaultRead(p as never);
+    }) as typeof fs.readFileSync);
+
+    const result = review();
+
+    expect(result).not.toContain("DESIGN-BODY");
+    expect(result).toContain("`Non-blocking notes:` heading");
+  });
+
+  it("lists the whole-task review's test files before paging its diff", () => {
+    const diff = diffOf(300 * KB);
+    vi.mocked(resolveHolisticDiff).mockReturnValue(diff);
+    serveReferences({ testBytes: 800 * KB });
+    const entry = makeEntry({ baseBranchSha: "base123", holisticTouchedFiles: ["src/foo.ts"] });
+
+    const result = buildHolisticFinalReviewPrompt("myproject", "/repo/myproject", "main", entry)!;
+
+    expect(result).toContain(diff);
+    expect(result).toContain("- test/foo.test.ts");
+    expect(result).not.toContain("TEST-BODY");
+  });
+});
+
 describe("buildResolvePrompt", () => {
   it("frames the task as resolving, not reviewing", () => {
     const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry());
@@ -365,6 +469,12 @@ describe("readTestSections", () => {
     vi.mocked(fs.readFileSync).mockImplementation(() => { throw new Error("ENOENT"); });
     const result = readTestSections("/wt", ["src/new-file.ts"]);
     expect(result).toEqual([]);
+  });
+
+  it("inlines a test file shared by same-named sources once", () => {
+    vi.mocked(fs.readFileSync).mockReturnValue("test content");
+    const result = readTestSections("/wt", ["src/commands/workers.ts", "src/dashboard/workers.ts"]);
+    expect(result).toEqual(["### test/workers.test.ts\n\ntest content"]);
   });
 });
 
