@@ -7,7 +7,6 @@ vi.mock("../src/dashboard/log.js", () => ({
 import {
   defaultWorkflow,
   growWorkflow,
-  trellisWorkflow,
   designerWorkflow,
   plannerWorkflow,
   getWorkflow,
@@ -152,39 +151,6 @@ describe("defaultWorkflow", () => {
         ).toBe(true);
       }
     }
-  });
-});
-
-describe("trellisWorkflow (phase 1 skeleton)", () => {
-  // Phase 1 ships a skeletal trellis workflow that reuses default's handlers.
-  // Behavior divergence (trellis-specific reviewer prompts, per-iteration
-  // context reset, FLAGGED handling) lands in phase 2. See TRELLIS-PLAN.md.
-
-  it("is registered under name 'trellis'", () => {
-    expect(getWorkflow("trellis")).toBe(trellisWorkflow);
-  });
-
-  it("declares workerModel: 'sonnet' and reviewerModel: 'opus'", () => {
-    expect(trellisWorkflow.workerModel).toBe("sonnet");
-    expect(trellisWorkflow.reviewerModel).toBe("opus");
-  });
-
-  it("validTransitions deep-equal default's (no transition divergence in v1)", () => {
-    expect(trellisWorkflow.validTransitions).toEqual(PRE_REFACTOR_VALID_TRANSITIONS);
-  });
-
-  it("has a registered handler for every PrState (exhaustiveness)", () => {
-    for (const state of ALL_PR_STATES) {
-      expect(
-        trellisWorkflow.stateHandlers[state],
-        `trellis workflow missing handler for state ${state}`,
-      ).toBeDefined();
-    }
-  });
-
-  it("default workflow leaves workerModel/reviewerModel unset (no behavior change)", () => {
-    expect(defaultWorkflow.workerModel).toBeUndefined();
-    expect(defaultWorkflow.reviewerModel).toBeUndefined();
   });
 });
 

@@ -77,11 +77,8 @@ describe("setupKeybindings", () => {
       const body = argv[4];
       expect(body).toContain("send-keys -X cancel");
       expect(body).toContain("run-shell -b");
-      // M-N now opens the workflow picker (default / trellis / grow).
-      // The trellis picker is reachable via the (t) row, not the top-level
-      // hotkey. See trellis-picker.ts buildWorkflowPickerPlan.
+      // M-N opens the workflow picker (see workflow-picker.ts).
       expect(body).toContain("_workflow-picker");
-      expect(body).not.toContain("_trellis-picker");
     }
   });
 
@@ -98,7 +95,6 @@ describe("setupKeybindings", () => {
     const argv = rootBind![1] as string[];
     expect(argv).toContain("run-shell");
     expect(argv.join(" ")).toContain("_workflow-picker");
-    expect(argv.join(" ")).not.toContain("_trellis-picker");
   });
 
   it("backgrounds root hotkey handlers with run-shell -b so keystroke bursts don't queue", () => {

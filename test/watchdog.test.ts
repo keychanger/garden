@@ -210,14 +210,6 @@ describe("isWatchedState", () => {
     },
   );
 
-  it("does not watch operator-action failing dispositions even with new commits", () => {
-    // trellis-flagged etc. require an explicit trellis command; pushing commits
-    // must not auto-resume them.
-    expect(isWatchedState(entry({
-      prState: "failing", failingReason: "trellis-flagged",
-      failingSha: "old", lastSeenSha: "new",
-    }))).toBe(false);
-  });
 });
 
 describe("hasLiveWork", () => {

@@ -180,10 +180,9 @@ export function clearDoneSentinel(worktreePath: string | undefined): boolean {
   }
 }
 
-// Workflow handlers (trellis ALIGNED path) write the sentinel on the
+// Callers outside the worker (designer publish) write the sentinel on the
 // worker's behalf so finalizeMerge picks `done` instead of `merged`. The
-// file is empty — its presence is the signal. See WORKFLOWS.md "Equilibrium
-// and termination" / "Aligned" disposition.
+// file is empty — its presence is the signal.
 export function setDoneSentinel(worktreePath: string | undefined): void {
   if (!worktreePath) return;
   try { fs.writeFileSync(donePath(worktreePath), ""); } catch { /* worktree gone */ }

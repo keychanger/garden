@@ -307,7 +307,7 @@ describe("kick command", () => {
   it.each([
     { prState: "working" },
     { failingReason: "ci" },
-    { workflow: "trellis" },
+    { workflow: "grow" },
     { lastReview: undefined },
     { lastReview: { verdict: "failed", at: 1, body: "Old failure", tipSha: "old-sha" } },
     { agentStatus: "working" },
@@ -366,18 +366,6 @@ describe("kick command", () => {
     ]);
 
     await expect(kick(["bold-ash"])).rejects.toThrow(/currently working/);
-    expect(updateWorkerFields).not.toHaveBeenCalled();
-  });
-
-  it("refuses to recover a failing worker whose reason is trellis-flagged", async () => {
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        prState: "failing",
-        failingReason: "trellis-flagged",
-      }),
-    ]);
-
-    await expect(kick(["bold-ash"])).rejects.toThrow(/trellis resume/);
     expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 

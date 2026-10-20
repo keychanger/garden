@@ -130,7 +130,7 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
     branchName: "bold-ash",
     baseBranch: "main",
     agentStatus: "idle",
-    workflow: "trellis",
+    workflow: "grow",
     ...overrides,
   };
 }
@@ -148,7 +148,7 @@ function makeHooks(): LoopHooks & {
   const _setSpy = vi.fn();
   const _promptSpy = vi.fn(() => "[garden] iter 3 of 5\n\nDo the work.");
   return {
-    logTag: "trellis",
+    logTag: "grow",
     readIteration: _readSpy,
     writeIteration: _writeSpy,
     setInMemoryIteration: _setSpy,
@@ -172,7 +172,7 @@ beforeEach(() => {
 
 describe("persistIteration", () => {
   it("calls both writeIteration and setInMemoryIteration with the new value", () => {
-    const entry = makeWorker({ trellis: { name: "t", path: "/t/path", iteration: 4, maxIterations: 30 } });
+    const entry = makeWorker({ grow: { seed: "s", iteration: 4, maxIterations: 30 } });
     const hooks = makeHooks();
 
     persistIteration("myproject", "bold-ash", entry, hooks, 5);
@@ -188,7 +188,7 @@ describe("dispatchDelayedLoopContinue", () => {
   it("spawns a detached sh trampoline that invokes the supplied subcommand with --delay-ms 5000", () => {
     dispatchDelayedLoopContinue(
       "/usr/local/bin/garden", "myproject", "bold-ash",
-      "_trellis-continue-after-merge",
+      "_grow-continue-after-merge",
     );
 
     // Delay lives inside the spawned Node child via --delay-ms (no `sleep N
@@ -199,20 +199,20 @@ describe("dispatchDelayedLoopContinue", () => {
     expect(shCmd).toBe("sh");
     const cmd = (args as string[])[1];
     expect(cmd).not.toMatch(/\bsleep\b/);
-    expect(cmd).toContain("/usr/local/bin/garden dashboard _trellis-continue-after-merge --delay-ms 5000");
+    expect(cmd).toContain("/usr/local/bin/garden dashboard _grow-continue-after-merge --delay-ms 5000");
     expect(cmd).toContain(" myproject ");
     expect(cmd).toContain(" bold-ash ");
     expect(opts).toEqual(expect.objectContaining({ detached: true, stdio: "ignore" }));
   });
 
-  it("uses a different subcommand when supplied (forward-compat for grow)", () => {
+  it("passes through whatever subcommand the workflow supplies", () => {
     dispatchDelayedLoopContinue(
-      "garden", "myproject", "bold-ash", "_grow-continue-after-merge",
+      "garden", "myproject", "bold-ash", "_x-continue-after-merge",
     );
 
     const [, args] = vi.mocked(spawn).mock.calls[0];
     const cmd = (args as string[])[1];
-    expect(cmd).toContain("garden dashboard _grow-continue-after-merge --delay-ms 5000");
+    expect(cmd).toContain("garden dashboard _x-continue-after-merge --delay-ms 5000");
   });
 
   it("swallows spawn errors so a failed dispatch never crashes the caller", () => {
@@ -284,7 +284,7 @@ describe("loopAutoContinueAfterMerge", () => {
       }));
 
       const result = loopAutoContinueAfterMerge(
-        "myproject", "bold-ash", makeHooks(), { trellisRelativePath: ".garden/trellises/foo.md" },
+        "myproject", "bold-ash", makeHooks(), { grow: { iteration: 3, maxIterations: 5 } },
       );
 
       // Bail before any destructive step: no respawn-pane kill, no state clear,
@@ -305,7 +305,7 @@ describe("loopAutoContinueAfterMerge", () => {
     vi.mocked(paneHasBlockingOperatorDraft).mockReturnValue(true);
 
     const result = loopAutoContinueAfterMerge(
-      "myproject", "bold-ash", makeHooks(), { trellisRelativePath: ".garden/trellises/foo.md" },
+      "myproject", "bold-ash", makeHooks(), { grow: { iteration: 3, maxIterations: 5 } },
     );
 
     expect(result).toBe(false);
@@ -327,7 +327,7 @@ describe("loopAutoContinueAfterMerge", () => {
 
     const hooks = makeHooks();
     const result = loopAutoContinueAfterMerge(
-      "myproject", "bold-ash", hooks, { trellisRelativePath: ".garden/trellises/foo.md" },
+      "myproject", "bold-ash", hooks, { grow: { iteration: 3, maxIterations: 5 } },
     );
 
     expect(result).toBe(true);
@@ -368,7 +368,7 @@ describe("loopAutoContinueAfterMerge", () => {
       expect.any(String), // sessionId
       "main",             // baseBranch
       expect.objectContaining({
-        trellisRelativePath: ".garden/trellises/foo.md",
+        grow: { iteration: 3, maxIterations: 5 },
         launchPlan: expect.objectContaining({ harness: "claude-code", role: "worker" }),
       }),
     );
@@ -377,14 +377,14 @@ describe("loopAutoContinueAfterMerge", () => {
     // to a seed file; dispatchDelayedSeed received the path.
     expect(hooks._promptSpy).toHaveBeenCalledWith(entry);
     expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringMatching(/trellis-seed-myproject-bold-ash-\d+\.txt$/),
+      expect.stringMatching(/grow-seed-myproject-bold-ash-\d+\.txt$/),
       "[garden] iter 3 of 5\n\nDo the work.",
     );
     expect(dispatchDelayedSeed).toHaveBeenCalledWith(
       "/usr/local/bin/garden",
       "myproject",
       "bold-ash",
-      expect.stringMatching(/trellis-seed-myproject-bold-ash-\d+\.txt$/),
+      expect.stringMatching(/grow-seed-myproject-bold-ash-\d+\.txt$/),
     );
   });
 

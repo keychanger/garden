@@ -83,7 +83,7 @@ export const claudeCodeCore: HarnessCore = {
     sandbox: true,
     skills: true,
     providerProfiles: true,
-    workerWorkflows: ["default", "grow", "trellis", "designer", "planner"],
+    workerWorkflows: ["default", "grow", "designer", "planner"],
     headlessRoles: ["reviewer", "resolver", "ciFix"],
   },
 
@@ -180,7 +180,7 @@ export const claudeCodeCore: HarnessCore = {
     // evidence of anything. Null keeps the previous reading rather than
     // asserting a drift that cannot be substantiated.
     if (!family) return null;
-    const pin = entry.model ?? entry.trellis?.workerModel;
+    const pin = entry.model;
     if (!pin) return family;
     const alias = modelAlias(pin);
     if (alias) return alias === family ? pin : family;

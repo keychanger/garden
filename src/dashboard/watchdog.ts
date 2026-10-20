@@ -58,7 +58,7 @@ import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
 import { newDashboardWindow, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
-import { readRegistry, mutateRegistry, PR_STATE_KIND, OPERATOR_ACTION_FAILING_REASONS, type WorkerEntry, type WorkerRegistry } from "./registry.js";
+import { readRegistry, mutateRegistry, PR_STATE_KIND, type WorkerEntry, type WorkerRegistry } from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
 import { isAwaitingInput, isDoneSet } from "./continue.js";
 import { addAlert } from "./alerts.js";
@@ -121,10 +121,8 @@ export function isWatchedState(entry: WorkerEntry): boolean {
   // pollerOwed:false, so if that poke is lost (poller killed in the gap, a
   // reboot) nothing re-pokes it and the operator's pushed fix is never picked
   // up — the worker sits in `failing` forever. Watch that pending-debounce case
-  // so the watchdog re-pokes it. Operator-action dispositions (trellis-flagged /
-  // iteration-budget / stagnation) are deliberately parked and excluded.
+  // so the watchdog re-pokes it.
   return state === "failing"
-    && !OPERATOR_ACTION_FAILING_REASONS.has(entry.failingReason ?? "code")
     && entry.lastSeenSha !== undefined
     && entry.lastSeenSha !== entry.failingSha;
 }

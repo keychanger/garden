@@ -10,6 +10,10 @@ requires touching the dispatcher, pollers, or state machine.
 
 ## Status
 
+The phase records below mention the trellis workflow and `trellis-model.ts`
+as they stood when each phase shipped; trellis was retired on 2026-10-20 (see
+WORKFLOWS.md § "Trellis workflow (retired)").
+
 **Phases 1-3 are implemented; Phase 4 is in progress** — reframed
 2026-07 around a per-role resolution matrix (arbitrary `(harness,
 provider, model)` per role, opinionated-by-default) with **Codex-as-
@@ -172,8 +176,8 @@ Distilled from the audit, in descending order of how load-bearing they are:
 1. **A turn-end signal.** The Stop hook is the *autonomous* entry point
    to the review/merge pipeline (`hooks/default.ts` `onTurnEnded` →
    commits-ahead + clean-worktree checks → `pendingReviewAt` → FIFO poke).
-   Operator overrides exist (`garden kick`, trellis plant, internal re-review
-   re-entries also set `pendingReviewAt`), but a worker that never
+   Operator overrides exist (`garden kick`, internal re-review re-entries
+   also set `pendingReviewAt`), but a worker that never
    signals turn-end can never advance itself, and STATUS.md forbids
    fallback polling. This requirement is non-negotiable.
 2. **A long-lived interactive TUI in a tmux pane** that accepts

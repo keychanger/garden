@@ -41,7 +41,7 @@ export interface WorkerMenuView {
   runner: string;
   state: string;
   base: string;      // entry.baseBranch, or DEFAULT_LABEL
-  model: string;     // entry.model / trellis.workerModel, or DEFAULT_LABEL
+  model: string;     // entry.model, or DEFAULT_LABEL
   reviewer: string;  // current resolved reviewer harness
 }
 
@@ -172,7 +172,7 @@ export function runWorkerMenu(explicitProject?: string, explicitWorker?: string)
     runner: resolveGardenRunner(),
     state: t.entry.prState ?? t.entry.agentStatus ?? "ready",
     base: t.entry.baseBranch ?? DEFAULT_LABEL,
-    model: t.entry.model ?? t.entry.trellis?.workerModel ?? DEFAULT_LABEL,
+    model: t.entry.model ?? DEFAULT_LABEL,
     reviewer,
   }));
 }
@@ -203,7 +203,7 @@ export function runWorkerCrewSubmenu(project: string, worker: string): void {
 export function runWorkerModelSubmenu(project: string, worker: string): void {
   const t = resolveTarget(project, worker);
   if (!t) return;
-  const current = t.entry.model ?? t.entry.trellis?.workerModel ?? DEFAULT_LABEL;
+  const current = t.entry.model ?? DEFAULT_LABEL;
   runMenu(buildWorkerModelSubmenuPlan(project, worker, current, resolveGardenRunner()));
 }
 

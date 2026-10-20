@@ -326,10 +326,6 @@ describe("scopedModelInUse — gate the Fable fetch on an active Fable worker", 
     const workers = [{ name: "w", model: "claude-fable-5", ...fresh }] as never;
     expect(scopedModelInUse([], now, workers)).toBe(true);
   });
-  it("matches a trellis vine's workerModel", () => {
-    const workers = [{ name: "v", trellis: { name: "t", path: "/t", workerModel: "claude-fable-5" }, ...fresh }] as never;
-    expect(scopedModelInUse(["Fable"], now, workers)).toBe(true);
-  });
   it("is false when the matching worker has been quiet past the active window", () => {
     const workers = [{ name: "w", model: "claude-fable-5", ...stale }] as never;
     expect(scopedModelInUse(["Fable"], now, workers)).toBe(false);

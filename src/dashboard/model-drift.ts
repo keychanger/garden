@@ -24,13 +24,11 @@ import { log } from "./log.js";
 import { updateWorkerFieldsIf, type WorkerEntry, type WorkerRegistry } from "./registry.js";
 
 // The pin this worker was launched with, in the same vocabulary readRunningModel
-// answers in. Trellis vines carry theirs under the workflow sub-object. An
-// otherwise-unpinned Codex worker still has Garden's explicit harness tuning
-// default on its command line, so that is intent too even though the optional
-// per-worker field is absent.
+// answers in. An otherwise-unpinned Codex worker still has Garden's explicit
+// harness tuning default on its command line, so that is intent too even
+// though the optional per-worker field is absent.
 export function pinnedModel(entry: WorkerEntry): string | undefined {
   return entry.model
-    ?? entry.trellis?.workerModel
     ?? (entry.harness === "codex" ? DEFAULT_CODEX_MODEL : undefined);
 }
 

@@ -116,9 +116,8 @@ export interface UsageSnapshot {
 // Neutral read seam over the snapshot's named buckets: consumers (the
 // auto-continue gate, future meter sources) iterate a list instead of
 // reaching into Anthropic's bucket names. `key` is the meter class — policy
-// that cares about the model-scoped meters (the gate's `scoped` exclusion,
-// trellis's Sonnet fallback via findScopedMeter) filters by it at the policy
-// site. See docs/MULTI-MODEL.md "Layer 2".
+// that cares about the model-scoped meters (the gate's `scoped` exclusion)
+// filters by it at the policy site. See docs/MULTI-MODEL.md "Layer 2".
 export interface Meter {
   key: "fiveHour" | "weekly" | "scoped";
   label: string;
@@ -141,17 +140,6 @@ export function snapshotMeters(snap: UsageSnapshot | null): Meter[] {
     out.push({ key: "scoped", label: s.label, pct: s.pct, resetsAt: s.resetsAt });
   }
   return out;
-}
-
-// Look up a model-scoped weekly meter by model name (case-insensitive), for
-// policy that cares about one specific model's quota — e.g. trellis's
-// Sonnet-exhaustion fallback. Returns undefined when the endpoint isn't
-// exposing that model's meter, which since 2026-07 is the case for Sonnet:
-// the account's model-scoped weekly meter is now Fable.
-export function findScopedMeter(data: UsageData | undefined, model: string): ScopedMeter | undefined {
-  if (!data?.scoped) return undefined;
-  const target = model.toLowerCase();
-  return data.scoped.find((m) => m.label.toLowerCase() === target);
 }
 
 // -----------------------------------------------------------------------------
@@ -865,7 +853,7 @@ export function scopedModelInUse(
     // a worker that has been quiet past the window cannot open the gate however
     // it is configured.
     if (nowMs - (w.lastEventAt ?? 0) > SCOPED_ACTIVE_MS) continue;
-    const pinned = w.model ?? w.trellis?.workerModel;
+    const pinned = w.model;
     const model = (pinned ?? observedModel?.(w) ?? "").toLowerCase();
     if (!model) continue;
     if (labels.some((l) => model.includes(l))) return true;

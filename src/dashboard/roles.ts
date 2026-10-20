@@ -62,8 +62,8 @@ export function resolveReviewRole(
   const entryCrew = entry?.crew && cfg ? getCrew(entry.crew, cfg) : null;
   const projectCrew = cfg ? resolveProjectCrew(project, cfg) : null;
   const harness = entryCrew?.review.harness ?? target.harness ?? projectCrew?.review.harness ?? "claude-code";
-  // The reviewer inherits its workflow's reviewerModel (trellis pins "opus"
-  // per WORKFLOWS.md Invariant 10); resolver/ci-fix have no workflow source.
+  // The reviewer inherits its workflow's reviewerModel when one is set;
+  // resolver/ci-fix have no workflow source.
   const workflowModel = role === "reviewer" ? getWorkflow(workflow).reviewerModel : undefined;
   // Both the workflow model and SAFE_REVIEW_MODEL are Anthropic aliases,
   // meaningless to a foreign harness — so an unpinned foreign harness (codex)

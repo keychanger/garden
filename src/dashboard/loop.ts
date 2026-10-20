@@ -1,8 +1,8 @@
-// Workflow-agnostic loop primitive — bounded iteration mechanics shared by
-// workflows that respawn the worker with a fresh Claude context after each
-// merge (trellis today; grow next). The workflow-specific bits (per-iteration
-// data shape, continue-prompt content) come in via `LoopHooks`; this module
-// knows nothing about trellises or seed prompts.
+// Workflow-agnostic loop primitive — bounded iteration mechanics for a
+// workflow that respawns the worker with a fresh Claude context after each
+// merge (grow). The workflow-specific bits (per-iteration data shape,
+// continue-prompt content) come in via `LoopHooks`; this module knows nothing
+// about seed prompts.
 //
 // Three exports:
 //   - `LoopHooks` — the contract a workflow supplies to drive the primitive.
@@ -51,7 +51,7 @@ export interface LoopHooks {
   readIteration(entry: WorkerEntry): { iteration: number; maxIterations: number } | null;
 
   /** Persist the next iteration counter. Workflow-specific because the
-   *  field path differs (entry.trellis.iteration vs entry.grow.iteration). */
+   *  field path is (entry.grow.iteration for grow). */
   writeIteration(projectName: string, workerName: string, next: number): void;
 
   /** Update the in-memory entry's iteration field to match what writeIteration
@@ -66,7 +66,7 @@ export interface LoopHooks {
    *  `loopAutoContinueAfterMerge` after the cold respawn. */
   buildContinuePrompt(entry: WorkerEntry): string;
 
-  /** Short tag used in log lines and seed-file naming (e.g., "trellis", "grow"). */
+  /** Short tag used in log lines and seed-file naming (e.g., "grow"). */
   logTag: string;
 }
 
@@ -86,7 +86,7 @@ export function persistIteration(
 
 /** Detached subprocess that defers ~5s, then dispatches the fresh-context
  *  respawn for a workflow with loop hooks. The subcommand string is the
- *  workflow's internal handler (e.g., "_trellis-continue-after-merge"). The
+ *  workflow's internal handler (e.g., "_grow-continue-after-merge"). The
  *  delay matches the default auto-continue path: the new pane needs time to
  *  settle before we fire respawn-pane (the post-merge force-push and
  *  postMerge run in the foreground, but pane stdin is shared with claude —
@@ -117,8 +117,8 @@ export function dispatchDelayedLoopContinue(
  *  and seed the upcoming iteration's continue prompt. Persists the new
  *  sessionId before the respawn so any concurrent reads see truth.
  *
- *  Workflow-specific bookkeeping (model selection, trellis-relative-path
- *  resolution, etc.) is the caller's responsibility — this primitive takes
+ *  Workflow-specific bookkeeping (iteration counters and the like) is the
+ *  caller's responsibility — this primitive takes
  *  the WorktreeCommandOptions as a parameter and does not know about
  *  workflow-specific options.
  *
@@ -150,8 +150,8 @@ export function loopAutoContinueAfterMerge(
 
   const launchHarness = workerCommandOpts.harness ?? entry.harness;
   const launchProvider = workerCommandOpts.provider ?? entry.provider;
-  // Workflow callers supply iteration-specific options (trellis's resolved
-  // model, grow's counters), while the durable worker entry owns ordinary
+  // Workflow callers supply iteration-specific options (grow's counters),
+  // while the durable worker entry owns ordinary
   // tuning. Falling back here keeps grow's model/effort/ultracode settings
   // across every cold iteration respawn.
   const launchModel = workerCommandOpts.model ?? entry.model;

@@ -30,9 +30,9 @@ const NOT_SET = "(not set)";
 const trunc = (s: string, n = 28): string => (s.length <= n ? s : s.slice(0, n - 1) + "…");
 
 // Model/effort choice lists for the submenus. These mirror the ⌥⇧N composer's
-// COMPOSER_MODELS / COMPOSER_EFFORTS (trellis-picker.ts) so the project-default
+// COMPOSER_MODELS / COMPOSER_EFFORTS (workflow-picker.ts) so the project-default
 // picker and the per-spawn picker agree; kept as local literals here so this
-// menu module does not pull in create.ts's / trellis-picker's heavier graph.
+// menu module does not pull in create.ts's / workflow-picker's heavier graph.
 // The CLI (`garden config <p> model <id>`) covers exotic model ids.
 const PROJECT_MODEL_CHOICES = ["opus", "sonnet", "haiku", "fable"];
 const PROJECT_EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "ultra"];
@@ -97,8 +97,7 @@ export function buildHolisticSubmenuPlan(project: string, current: string, runne
   return buildEnumSubmenuPlan(project, "holisticReview", `Holistic review for ${project}`, ["off", "shadow", "fix"], current, runner, `unset — default (${DEFAULT_HOLISTIC_REVIEW})`);
 }
 
-// Default worker model (default + grow workers; trellis resolves its own per
-// iteration). This flat key is the override layer above a bound crew's own
+// Default worker model (default + grow workers). This flat key is the override layer above a bound crew's own
 // model pin.
 export function buildProjectModelSubmenuPlan(project: string, current: string | undefined, runner: string): MenuSpec {
   return buildEnumSubmenuPlan(project, "model", `Default model for ${project} (default+grow workers)`, PROJECT_MODEL_CHOICES, current, runner, "unset — account/provider default");

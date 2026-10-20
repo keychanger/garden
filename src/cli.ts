@@ -219,11 +219,10 @@ Dashboard:
   version, --version, -v         Print the garden build version (git short SHA, or "dev" under tsx)
 
 Workers:
-  workers new <project> [--workflow default|trellis|grow|designer|planner] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
-                        [--harness codex] [--crew <name>] [--base <branch>] [--trellis <name>]
+  workers new <project> [--workflow default|grow|designer|planner] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
+                        [--harness codex] [--crew <name>] [--base <branch>]
                         [--seed <text> | --seed-file <path>] [--max-iterations N]
                                  Spawn a new worker. default plants an interactive worker;
-                                 trellis plants a vine bound to the named trellis (--trellis);
                                  grow plants a bounded hardening loop from a --seed / --seed-file
                                  (--max-iterations caps the passes, default 5); designer plants a
                                  design worker whose deliverable is a doc, not code, on the crew's
@@ -249,16 +248,6 @@ Workers:
                                  tombstone written, its bead (if any) conditionally unclaimed, entry
                                  removed, branch/worktree cleanup dispatched — the same removal the
                                  dashboard ⌥x performs. Prefix matching and '.' resolve like kick/bounce.
-
-Trellis (spec-driven loop workflow — see WORKFLOWS.md § "Trellis workflow"):
-  trellis list <project> [--active]   List trellises (active + archived)
-  trellis show <project> <name>       Print a trellis's content
-  trellis new <project> <name>        Scaffold a trellis at <project>/.garden/trellises/<name>.md
-  trellis status <worker>             Show iteration count, last verdict, drift list, lessons tail
-  trellis amend <worker>              Open the worker's bound trellis in $EDITOR; commit on success (refuses on dirty main)
-  trellis resume <worker>             Clear a trellis-flagged failure and arm a fresh review
-  trellis retire <project> <name>     Mark a trellis retired (filters from picker, refuses new vines)
-  trellis revive <project> <name>     Remove the retirement comment
 
 Designer (design workflow — see WORKFLOWS.md § "Designer workflow"):
   designer publish [<worker>] --to docs/<name>.md [--dry-run]

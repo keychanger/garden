@@ -14,7 +14,6 @@ import {
   readRegistry, findWorkerByName, updateWorkerFields,
   type WorkerEntry,
 } from "../dashboard/registry.js";
-import { validateTrellisPlant } from "../dashboard/trellis-tag.js";
 import { dispatchDelayedSeed } from "../dashboard/continue.js";
 import { resolveGardenRunner } from "../dashboard/runner.js";
 import {
@@ -37,7 +36,7 @@ export async function workers(args: string[]): Promise<void> {
   }
   throw new Error(
     `Usage:\n`
-    + `  garden workers new <project> [--workflow trellis|grow|designer|planner] [--base <branch>] [--trellis <name>] `
+    + `  garden workers new <project> [--workflow grow|designer|planner] [--base <branch>] `
     + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra] [--harness <name>] [--max-iterations N]\n`
     + `  garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] `
     + `[--max-iterations N]\n`
@@ -46,8 +45,8 @@ export async function workers(args: string[]): Promise<void> {
 }
 
 async function newCommand(args: string[]): Promise<void> {
-  // Positional: <project>. Flags: --workflow, --trellis, --max-iterations.
-  // Workflow defaults to "default"; trellis is required only when workflow is "trellis".
+  // Positional: <project>. Flags: --workflow, --max-iterations, and the
+  // launch flags below. Workflow defaults to "default".
   const positional: string[] = [];
   const flags = new Map<string, string>();
   for (let i = 0; i < args.length; i++) {
@@ -68,7 +67,7 @@ async function newCommand(args: string[]): Promise<void> {
   const projectName = positional[0];
   if (!projectName) {
     throw new Error(
-      "Usage: garden workers new <project> [--workflow trellis --trellis <name>] [--max-iterations N]",
+      "Usage: garden workers new <project> [--workflow grow|designer|planner] [--max-iterations N]",
     );
   }
   const project = tryGetProject(projectName);
@@ -77,13 +76,17 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   const workflow = flags.get("workflow") ?? "default";
-  if (workflow !== "default" && workflow !== "trellis" && workflow !== "grow" && workflow !== "designer" && workflow !== "planner") {
-    throw new Error(`--workflow must be 'default', 'trellis', 'grow', 'designer', or 'planner', got '${workflow}'`);
+  if (workflow !== "default" && workflow !== "grow" && workflow !== "designer" && workflow !== "planner") {
+    throw new Error(`--workflow must be 'default', 'grow', 'designer', or 'planner', got '${workflow}'`);
+  }
+  // This parser accepts any --flag, so the retired one is named rather than
+  // silently ignored.
+  if (flags.has("trellis")) {
+    throw new Error("--trellis was removed along with the trellis workflow");
   }
 
-  // Worker harness (agent CLI). Default workflow only in v1 — trellis/grow
-  // model resolution and cold-respawn identity are not yet exercised against a
-  // foreign harness.
+  // Worker harness (agent CLI). Default and designer only — grow's
+  // cold-respawn identity is not yet exercised against a foreign harness.
   // Accept the "claude" alias for the claude-code harness (the crew member
   // name) and canonicalize at the boundary so this pre-check, the persisted
   // entry, and the log line all use the registry name.
@@ -125,14 +128,11 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   if (workflow === "default") {
-    if (flags.has("trellis")) {
-      throw new Error("--trellis can only be used with --workflow trellis");
-    }
     if (flags.has("seed") || flags.has("seed-file")) {
       throw new Error("--seed and --seed-file can only be used with --workflow grow");
     }
     if (flags.has("max-iterations")) {
-      throw new Error("--max-iterations can only be used with --workflow trellis or grow");
+      throw new Error("--max-iterations can only be used with --workflow grow");
     }
     const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
     const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
@@ -149,9 +149,6 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   if (workflow === "grow") {
-    if (flags.has("trellis")) {
-      throw new Error("--trellis can only be used with --workflow trellis");
-    }
     if (flags.has("seed") && flags.has("seed-file")) {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
     }
@@ -225,11 +222,8 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   if (workflow === "designer") {
-    if (flags.has("trellis")) {
-      throw new Error("--trellis can only be used with --workflow trellis");
-    }
     if (flags.has("max-iterations")) {
-      throw new Error("--max-iterations can only be used with --workflow trellis or grow");
+      throw new Error("--max-iterations can only be used with --workflow grow");
     }
     // --crew names the design seat (newWorker reads the crew's designer half)
     // and is stamped on the entry so the designer's handoff forwards the same
@@ -303,11 +297,8 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   if (workflow === "planner") {
-    if (flags.has("trellis")) {
-      throw new Error("--trellis can only be used with --workflow trellis");
-    }
     if (flags.has("max-iterations")) {
-      throw new Error("--max-iterations can only be used with --workflow trellis or grow");
+      throw new Error("--max-iterations can only be used with --workflow grow");
     }
     if (flags.has("seed") && flags.has("seed-file")) {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
@@ -371,79 +362,6 @@ async function newCommand(args: string[]): Promise<void> {
     );
     return;
   }
-
-  // workflow === "trellis"
-  if (flags.has("effort")) {
-    throw new Error("--effort is only supported with --workflow default, grow, designer, or planner (trellis resolves its own model).");
-  }
-  const trellisName = flags.get("trellis");
-  if (!trellisName) {
-    throw new Error("--workflow trellis requires --trellis <name>");
-  }
-
-  let workerModel: string | undefined;
-  if (flags.has("model")) {
-    workerModel = requireModelValue(flags.get("model")!);
-  }
-
-  // Pre-flight: validates the trellis exists, isn't retired, has the
-  // sentinel (warn), and the project has `checks` configured (warn).
-  const result = validateTrellisPlant(projectName, trellisName);
-  if (!result.ok) {
-    throw new Error(result.error);
-  }
-  for (const w of result.warnings) {
-    console.error(`warning: ${w}`);
-  }
-
-  // Resolve max iterations: --max-iterations > project.maxTrellisIterations > 30
-  let maxIter = 30;
-  if (project.maxTrellisIterations !== undefined) maxIter = project.maxTrellisIterations;
-  if (flags.has("max-iterations")) {
-    const raw = flags.get("max-iterations")!;
-    const n = Number.parseInt(raw, 10);
-    if (!Number.isFinite(n) || n < 1) {
-      throw new Error(`--max-iterations must be a positive integer, got '${raw}'`);
-    }
-    maxIter = n;
-  }
-
-  // Build the iteration-1 seed prompt. The worker's first prompt is
-  // sent at plant time via the bootstrap (not via auto-continue). It's
-  // shorter than the continue prompt because there's no prior drift list
-  // and no lessons file yet — the worker creates the lessons file as it
-  // works. Phrasing intentionally minimal; iterate during real-vine usage.
-  const trellisRelative = path.relative(project.path, result.info.path);
-  const seed = buildIteration1Seed(trellisName, trellisRelative, maxIter);
-  const seedFile = path.join(
-    SESSIONS_DIR, "seeds",
-    `trellis-seed-${projectName}-${trellisName}-${Date.now()}.txt`,
-  );
-  fs.mkdirSync(path.dirname(seedFile), { recursive: true });
-  fs.writeFileSync(seedFile, seed);
-
-  const newName = newWorker({
-    projectName,
-    workflow: "trellis",
-    trellis: {
-      name: trellisName,
-      path: result.info.path,
-      maxIterations: maxIter,
-      workerModel,
-    },
-    seedMessageFile: seedFile,
-    ...(base ? { base } : {}),
-  });
-  if (!newName) {
-    try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
-    throw new Error(
-      `Failed to spawn vine on '${projectName}'. Is the dashboard running? Check 'garden health'.`,
-    );
-  }
-  const modelTag = workerModel ? ` model=${workerModel}` : "";
-  console.log(
-    `Planted vine ${projectName}/${newName} on trellis '${trellisName}' (${maxIter} iterations max${modelTag}).`,
-  );
 }
 
 // `garden workers stop <worker>` — remove a worker end-to-end from the CLI:
@@ -470,31 +388,6 @@ async function stopCommand(args: string[]): Promise<void> {
     `Stopped ${resolved.project}/${resolved.worker} `
     + `(worker removed; branch/worktree cleanup running in the background).`,
   );
-}
-
-function buildIteration1Seed(
-  trellisName: string,
-  trellisRelative: string,
-  maxIter: number,
-): string {
-  return [
-    `[garden] You are a trellis vine bound to \`${trellisRelative}\`. Read it before editing — it is your source of truth.`,
-    "",
-    `Iteration 1 of ${maxIter}.`,
-    "",
-    "This is your first iteration. There is no prior drift list and no lessons file yet — you will create `.garden/trellis-lessons.md` as you work.",
-    "",
-    "Read the trellis end-to-end. It describes the feature's intent, surface, behavior, tests, and documentation. Implement what it says, in priority order. The reviewer will compare your work against the trellis after you push and emit one of:",
-    "",
-    "- `ALIGNED` — you matched every claim. The loop ends.",
-    "- `DRIFT` — your work is mergeable but incomplete; the reviewer will list priority-ordered gaps for the next iteration.",
-    "- `FAILED` — checks/rebase/rules failed and the reviewer couldn't fix them.",
-    "- `FLAGGED` — the trellis itself is contradictory or impossible. The loop pauses pending operator action.",
-    "",
-    "After your changes, append a one-line entry to `.garden/trellis-lessons.md` describing what you tried and what you learned. Commit and push when ready.",
-    "",
-    "You may not edit the trellis. If it is wrong or impossible, push commits that reflect what it says — the reviewer will surface the contradiction as `FLAGGED` and the operator will decide whether to amend.",
-  ].join("\n");
 }
 
 // `garden workers grow [<worker>] ...` — convert an active default worker
@@ -570,23 +463,13 @@ async function growCommand(args: string[]): Promise<void> {
     );
   }
 
-  // Re-conversion is rejected. The right amend path differs by current
-  // workflow: grow workers amend by editing the goal file directly (next
-  // iteration re-reads it); trellis vines amend via `garden trellis amend`
-  // against the trellis doc. Telling a trellis user to edit grow-goal.md
-  // would point them at a file that doesn't exist for their workflow.
+  // Re-conversion is rejected: a grow worker amends by editing its goal file
+  // directly, which the next iteration re-reads.
   const currentWorkflow = entry.workflow ?? "default";
   if (currentWorkflow === "grow") {
     throw new Error(
       `Worker '${workerName}' is already on the 'grow' workflow. `
       + `Re-conversion is not supported; edit ${path.join(entry.worktreePath, ".garden", "grow-goal.md")} directly to amend the goal — the next iteration's continue prompt re-reads it at dispatch time.`,
-    );
-  }
-  if (currentWorkflow === "trellis") {
-    throw new Error(
-      `Worker '${workerName}' is a trellis vine — trellis vines are not convertible to grow. `
-      + `Amend the trellis with \`garden trellis amend\`, or kill the vine in the dashboard `
-      + `(focus the pane and press ⌥x) and start fresh with \`garden workers new ... --workflow grow\`.`,
     );
   }
   if (currentWorkflow !== "default") {

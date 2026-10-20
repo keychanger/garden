@@ -31,7 +31,7 @@ export interface PublishResult {
 export function publishDesignerArtifact(
   worktreePath: string,
   toRelPath: string,
-  opts: { dryRun?: boolean; project?: string; trellisDir?: string } = {},
+  opts: { dryRun?: boolean; project?: string } = {},
 ): PublishResult {
   if (!isPublishablePath(toRelPath)) {
     return {
@@ -87,17 +87,11 @@ export function publishDesignerArtifact(
   });
 
   const proj = opts.project ?? "<project>";
-  const trellisTarget = path.join(
-    opts.trellisDir ?? ".garden/trellises",
-    `${name}.md`,
-  );
   return {
     ok: true,
     message: `Published '${toRelPath}' (committed, marked done). The poller will merge it — no reviewer runs.\n`
       + `Now execute the handoff plan the operator approved (see the designer skill):\n`
       + `  default builder — spawn it yourself: garden handoff ${shellEscape(proj)} < .garden/designer/handoff-brief.md\n`
-      + `    (inline the design in the brief: the doc has not merged when the new worker branches)\n`
-      + `  trellis builder — needs the trellis spine in the doc; the operator runs, in the checkout after merge:\n`
-      + `    cp ${shellEscape(toRelPath)} ${shellEscape(trellisTarget)} && garden workers new ${shellEscape(proj)} --workflow trellis --trellis ${shellEscape(name)}`,
+      + `    (inline the design in the brief: the doc has not merged when the new worker branches)`,
   };
 }

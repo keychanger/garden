@@ -121,7 +121,9 @@ export function rebuildEntry(t: Tombstone, now: number = Date.now()): WorkerEntr
   if (e.baseBranchSha !== undefined) rebuilt.baseBranchSha = e.baseBranchSha;
   if (e.createdAt !== undefined) rebuilt.createdAt = e.createdAt;
   if (e.workflow !== undefined) {
-    rebuilt.workflow = e.workflow === "botanist" ? "designer" : e.workflow;
+    rebuilt.workflow = e.workflow === "botanist" ? "designer"
+      : e.workflow === "trellis" ? "default"
+      : e.workflow;
   }
   if (e.harness !== undefined) rebuilt.harness = e.harness;
   if (e.provider !== undefined) rebuilt.provider = e.provider;
@@ -140,7 +142,6 @@ export function rebuildEntry(t: Tombstone, now: number = Date.now()): WorkerEntr
   if (e.holisticRationale !== undefined) rebuilt.holisticRationale = e.holisticRationale;
   if (e.lastReview !== undefined) rebuilt.lastReview = e.lastReview;
   if (e.titleGeneratedAt !== undefined) rebuilt.titleGeneratedAt = e.titleGeneratedAt;
-  if (e.trellis !== undefined) rebuilt.trellis = e.trellis;
   if (e.grow !== undefined) rebuilt.grow = e.grow;
   return rebuilt;
 }

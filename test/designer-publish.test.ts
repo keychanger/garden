@@ -104,31 +104,8 @@ describe("publishDesignerArtifact", () => {
     // The done sentinel was written so the skip-review merge finalizes to done.
     expect(fs.existsSync(path.join(wt, ".garden-done"))).toBe(true);
 
-    // The success message points the designer at both handoff routes. The
-    // trellis route must plant by NAME from the trellis dir — --trellis never
-    // resolves a docs/ path (trellis-tag.ts findTrellisByName).
+    // The success message points the designer at the handoff it runs next.
     expect(r.message).toContain("garden handoff");
-    expect(r.message).toContain(
-      "cp docs/future/notification-levels.md .garden/trellises/notification-levels.md",
-    );
-    expect(r.message).toContain("--workflow trellis --trellis notification-levels");
-    expect(r.message).not.toContain("--trellis docs/");
   });
 
-  it("uses the configured trellisDir and shell-escapes the printed command", () => {
-    const wt = makeWorktreeWithArtifact();
-    const r = publishDesignerArtifact(wt, "docs/future/notification levels.md", {
-      project: "my project",
-      trellisDir: "docs/custom trellises",
-    });
-
-    expect(r.ok).toBe(true);
-    expect(r.message).toContain(
-      "cp 'docs/future/notification levels.md' 'docs/custom trellises/notification levels.md'",
-    );
-    expect(r.message).toContain(
-      "garden workers new 'my project' --workflow trellis --trellis 'notification levels'",
-    );
-    expect(r.message).toContain("garden handoff 'my project'");
-  });
 });

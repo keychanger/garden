@@ -187,107 +187,6 @@ this again; it is cheap to re-invoke.
 without prompting you.
 `;
 
-export const TRELLIS_AUTHOR_SKILL_DIRNAME = "trellis-author";
-export const TRELLIS_AUTHOR_SKILL_FILENAME = "SKILL.md";
-
-// Bundled with every worker — including default-workflow workers — so an
-// operator can ask any worker to formalize a feature as a trellis without
-// switching panes. Skill descriptions act as Claude's planning-time
-// trigger condition; this one fires on operator intent.
-export const TRELLIS_AUTHOR_SKILL_CONTENT = `---
-name: trellis-author
-description: Use when the operator asks you to formalize a feature as a trellis — a frozen design document that drives garden's spec-driven loop workflow. The skill walks through scope sizing, the required spine (title, sentinel, trellis tag), recommended sections (Intent, Surface, Behavior, Tests, Docs, Out of scope), and a self-review pass for ambiguity. Use when the operator says things like "let's write a trellis for X", "formalize this as a trellis", or "set up a trellis-driven loop on this feature". Do NOT invoke unprompted.
----
-
-# Trellis author
-
-Invoke this skill when the operator wants to formalize a feature as a **trellis** — a markdown design document that becomes the source of truth for a feature-scoped, spec-driven loop. The trellis workflow then plants a worker (a "vine") bound to the trellis; the vine iterates on the implementation while the reviewer compares each iteration's diff against the trellis until they align.
-
-A good trellis is small, concrete, and bounded. It describes *what the feature does* — not *how* — and uses an explicit "Out of scope" section to prevent the loop from chasing adjacent improvements.
-
-## What it does
-
-Walks you through authoring a trellis at \`<project>/.garden/trellises/<name>.md\` (or wherever the project's \`trellisDir\` config points). Output is a markdown file that:
-
-1. Carries the spec sentinel \`the code is wrong\` so the reviewer treats it as authoritative.
-2. Carries the trellis tag \`<!-- trellis: v1 -->\` so the picker and CLI recognize it as a trellis (distinct from system specs like STATUS.md).
-3. Has the recommended sections (Intent, Surface, Behavior, Tests, Docs, Out of scope) populated with feature-specific content the reviewer can grep against.
-4. Has been self-reviewed for ambiguity, contradiction, and completeness.
-
-After authoring, commit the trellis to the project's main branch. Then the operator can plant a vine via \`garden workers new <project> --workflow trellis --trellis <name>\` (or via the \`⌥⇧n\` picker in the dashboard).
-
-## When to use
-
-- The operator explicitly asks you to write or formalize a trellis (e.g., "let's spec this as a trellis", "write a trellis for the auth-rewrite", "scaffold a trellis-driven loop on X").
-- The feature is genuinely *one feature* — a bounded set of related changes the reviewer can verify against the document. Multi-month projects do not fit; decompose them into a sequence of trellises.
-- The operator wants the agent to iterate against a stable design target rather than a one-shot task. The trellis loop's value comes from the reviewer's three-way diff (trellis ↔ code, ↔ tests, ↔ docs) catching drift across iterations.
-
-## When NOT to use
-
-- The operator asked for a one-shot change. A 50-line bug fix does not need a trellis.
-- The "feature" is actually a project (multiple subsystems, multiple weeks). Decompose first.
-- The work has no clear convergence criterion. The reviewer needs concrete claims to verify; "make the API better" cannot be drift-checked.
-- The operator did not ask. Authoring a trellis unprompted is overkill — say so and offer the option.
-
-## How to invoke
-
-The skill is a guided author. Walk the operator (and yourself) through these phases:
-
-### 1. Scope sizing
-
-Before writing anything, confirm:
-
-- **One feature.** Name it in a sentence. If you can't name it without "and", split it.
-- **Bounded.** What is *not* included? The trellis's "Out of scope" section is load-bearing — without it, the loop chases adjacent improvements.
-- **Convergence criterion.** What does \`ALIGNED\` look like? If you can't sketch a reviewer's checklist of present/partial/absent claims, the trellis isn't ready to write.
-
-If any of these is unclear, ask the operator before drafting.
-
-### 2. Spine
-
-Every trellis has three required pieces in the file's header:
-
-\`\`\`markdown
-# <Feature name>
-
-Intent paragraph including the literal phrase "the code is wrong" so the reviewer treats this document as authoritative.
-
-<!-- trellis: v1 -->
-\`\`\`
-
-The title is on line 1. The sentinel must appear in the first ~2KB. The tag must appear in the first 200 bytes. \`garden trellis new <project> <name>\` scaffolds these correctly — prefer it over hand-crafting the file.
-
-### 3. Recommended sections
-
-The reviewer treats the trellis as prose, but the following sections make the three-way diff tractable:
-
-- **Intent** — one paragraph: what the feature does and why. The reviewer judges this loosely.
-- **Surface** — concrete API/CLI/UI surface that must exist. Function signatures, command flags, file paths. The reviewer verifies via grep + signature checks. Be specific: "exports \`foo(timeout?: number)\` from \`src/foo.ts\`" beats "has a foo function with timeout support".
-- **Behavior** — invariants the feature must satisfy. Mix of objective ("error path returns \`{ok: false, reason}\`") and judgment-graded ("errors should be specific and structured"). Number them so drift items can cite them.
-- **Tests** — concrete test cases that should exist. File paths or test names. The reviewer verifies via grep on test files.
-- **Docs** — concrete documentation that should exist or update. Paths + section titles. Don't request docs the project doesn't already maintain.
-- **Out of scope** — explicit non-goals. Lists every adjacent improvement the reviewer should bounce back as drift, not accept as part of the trellis.
-
-### 4. Self-review pass
-
-Before saving, walk the trellis end-to-end:
-
-- **Ambiguity.** Pick three claims at random. Could two reasonable readers disagree on whether they're satisfied? If yes, rewrite for concreteness.
-- **Contradiction.** Read every Surface claim against every Behavior claim. Any conflict? Either the trellis is wrong (rewrite) or you've discovered a real design tension (resolve before planting).
-- **Completeness.** For each Surface claim, is there a corresponding Tests claim? For each Behavior claim, is the test path clear? Gaps here become drift the loop will keep flagging.
-- **Out of scope.** Is the boundary tight enough that the worker won't keep "fixing" adjacent code? The most common failure mode is a too-loose boundary.
-
-A trellis that survives a self-review pass cleanly produces a small, fast loop. A trellis that doesn't will burn iterations on rework.
-
-### 5. Commit and report
-
-Commit the trellis to the project's main branch (not the worker's branch — the trellis lives on main as authority). Use a clear commit message: \`trellis: <name> — <one-line summary>\`. After committing, tell the operator the trellis path and offer to plant a vine: \`garden workers new <project> --workflow trellis --trellis <name>\`.
-
-## After authoring
-
-The trellis is now a durable artifact. It outlives any vine that consumes it; multiple vines can be planted on the same trellis (competitive bake-off), and a converged trellis remains as a design record for the feature. The operator decides when to retire it via \`garden trellis retire\`.
-`;
-
 export const HANDOFF_SKILL_DIRNAME = "handoff";
 export const HANDOFF_SKILL_FILENAME = "SKILL.md";
 
@@ -487,7 +386,7 @@ Walks you through:
 ## When NOT to use
 
 - The operator did not ask. Self-conversion is not the intended pattern.
-- This worker is already on a non-default workflow (\`garden whoami\` shows \`workflow: grow\` or \`trellis\`). The CLI rejects re-conversion. Tell the operator to either edit \`.garden/grow-goal.md\` directly (for grow) or amend the trellis (for trellis).
+- This worker is already on a non-default workflow (\`garden whoami\` shows \`workflow: grow\`, for example). The CLI rejects re-conversion. For grow, tell the operator to edit \`.garden/grow-goal.md\` directly.
 - The current work is not yet committed and you are mid-debug. Convert *after* you have a clean stopping point — iter 1's review picks up whatever you push, so don't push half-broken state.
 
 ## How to invoke
@@ -502,7 +401,7 @@ Write a 1-3 paragraph goal capturing what we've decided in this session:
 
 - **What is the work?** A sentence summarizing the feature/fix/refactor.
 - **What is in scope?** Bullet list of the concrete changes we agreed on (files, functions, behaviors).
-- **What is out of scope?** Bullet list of adjacent improvements the loop should NOT chase. This is the equivalent of trellis's "Out of scope" section — without it, future iterations drift toward "while I'm here" cleanups.
+- **What is out of scope?** Bullet list of adjacent improvements the loop should NOT chase. Without it, future iterations drift toward "while I'm here" cleanups.
 - **What does done look like?** A sentence on the convergence criterion. "All checks pass and the API matches the spec above" is fine; "the auth feels good" is not.
 
 Write as if future-you (with no conversation history, in iter 2's fresh context) needs to understand the goal from this paragraph alone. Names of files, function signatures, command flags, test names — concrete enough that the next iteration can verify against the diff.
@@ -528,8 +427,6 @@ Use the Bash tool. The CLI prints \`Converted worker <project>/<name> to grow (u
 
 If the CLI errors with "already on the 'grow' workflow", the worker was already converted — point the operator at \`.garden/grow-goal.md\` for amends and stop.
 
-If the CLI errors with "already on the 'trellis' workflow", the worker is a trellis vine — re-conversion isn't supported. Tell the operator and stop.
-
 ### 5. Continue your work
 
 - **If you were mid-implementation:** resume from where you paused. Finish your current work, commit, push. The push triggers iter 1 of the now-grow loop on its next merge.
@@ -550,8 +447,7 @@ export const DESIGNER_SKILL_FILENAME = "SKILL.md";
 // it. Teaches the four-phase design pipeline: frame the problem, sketch options
 // + ask questions (then pause for the operator), converge on an approach, then
 // publish the approved artifact to a tracked docs/ path and hand off to the
-// builder the operator approved (default-workflow via garden handoff; trellis
-// stays an operator-run plant).
+// builder the operator approved (a default-workflow worker via garden handoff).
 export const DESIGNER_SKILL_CONTENT = `---
 name: designer
 description: The method for a garden designer (design-workflow) worker. Use when you are on the designer workflow (garden whoami shows workflow: designer) to run the four-phase design pipeline — frame, options, converge, publish — whose deliverable is a design artifact (a document), not code. Covers where to write artifacts, how to format options and questions, how to pause at the human gate, and how to publish and hand off to a builder once the operator approves. Do NOT edit src/, tests, or configs.
@@ -580,7 +476,7 @@ When the operator responds, capture their answers to \`.garden/designer/answers.
 
 This phase **loops**: if the operator says "explore another option" or "try again," return to phase-2-style options, then re-converge. Re-enter the gate each time you need direction — \`garden blocked "<the decision you need>"\` and end your turn. Keep going until the operator approves.
 
-When the artifact looks final, ask for approval and state your handoff plan **in the same message**, so one "approve" carries both. The default plan: publish, then spawn a **default-workflow builder** yourself, seeded with the design. Name the alternatives so the operator can redirect in their approval: a **trellis builder** (which they spawn — see phase 4), **no builder**, or \`--ultracode\` for a full-strength builder. A bare "approve" means the stated plan runs as-is, handoff included.
+When the artifact looks final, ask for approval and state your handoff plan **in the same message**, so one "approve" carries both. The default plan: publish, then spawn a **default-workflow builder** yourself, seeded with the design. Name the alternatives so the operator can redirect in their approval: **no builder**, or \`--ultracode\` for a full-strength builder. A bare "approve" means the stated plan runs as-is, handoff included.
 
 ### 4. Publish and hand off
 Only when the operator **explicitly approves** ("approve", "ship it", "publish"):
@@ -588,7 +484,6 @@ Only when the operator **explicitly approves** ("approve", "ship it", "publish")
 2. Run \`garden designer publish --to docs/future/<name>.md\` (pick a descriptive \`<name>\`). This moves the artifact to that tracked path, commits it, and marks you done — the poller then merges it with **no reviewer** (the operator already reviewed the prose at the gate). Pass \`--dry-run\` first to preview. The target MUST be under \`docs/\` — a designer publishes docs, not code, and the merge refuses anything else. Do NOT publish to \`.garden/\` (git-excluded, would never merge). Do NOT hand-commit code files: committing anything outside \`docs/\` parks you in \`failing\`.
 3. Execute the handoff plan the operator approved. Publish first, then hand off — never the reverse: a failed publish must not leave a builder working from an unpublished design.
    - **Default builder** (the default plan): write \`.garden/designer/handoff-brief.md\` — a self-contained implementation briefing that **inlines the full design**. The new worker branches from \`origin/<base>\` before your doc merges, so the published path does not exist in its worktree yet; name \`docs/future/<name>.md\` as where the canonical copy will land. Then run \`garden handoff <project> < .garden/designer/handoff-brief.md\` (add \`--ultracode\` only if the operator asked for it) and report the new worker's name. The builder inherits your crew automatically — the crew whose design seat you fill also names who builds and who reviews — so pass \`--crew <name>\` only when the operator asked for a different one. Do NOT pass \`--expect-callback\` — a later callback would submit a new prompt and reopen the completed designer.
-   - **Trellis builder**: this route is operator-run and two-step — the handoff mechanism spawns default-workflow workers only, and \`--trellis\` resolves a *named*, tagged trellis inside the project checkout's configured trellis dir (\`.garden/trellises/\` by default), never a \`docs/\` path. Before publishing, format the artifact with the trellis spine (see the \`trellis-author\` skill: the \`<!-- trellis: v1 -->\` tag in the first lines, the spec sentinel, the recommended sections). Then publish as usual and give the operator the exact two-step command printed by publish, run in the project checkout after the merge lands: it copies \`docs/future/<name>.md\` to the project's configured \`trellisDir\` as \`<name>.md\`, then runs \`garden workers new <project> --workflow trellis --trellis <name>\`. For a non-default builder crew, they set it on the project first (\`garden config <project> crew <name>\`) — per-spawn \`--crew\` is default-workflow only today, so it cannot ride the trellis plant.
    - **No builder**: just report the publish.
 
 ## What NOT to do
@@ -696,7 +591,6 @@ export function installClaudeSkills(targetDir: string): void {
   writeSkill(skillsRoot, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME, DONE_SKILL_CONTENT);
   writeSkill(skillsRoot, BLOCKED_SKILL_DIRNAME, BLOCKED_SKILL_FILENAME, BLOCKED_SKILL_CONTENT);
   writeSkill(skillsRoot, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME, HANDOFF_SKILL_CONTENT);
-  writeSkill(skillsRoot, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME, TRELLIS_AUTHOR_SKILL_CONTENT);
   writeSkill(skillsRoot, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME, GROW_SKILL_CONTENT);
   writeSkill(skillsRoot, DESIGNER_SKILL_DIRNAME, DESIGNER_SKILL_FILENAME, DESIGNER_SKILL_CONTENT);
   writeSkill(skillsRoot, PLANNER_SKILL_DIRNAME, PLANNER_SKILL_FILENAME, PLANNER_SKILL_CONTENT);

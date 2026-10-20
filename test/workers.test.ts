@@ -152,7 +152,6 @@ vi.mock("../src/dashboard/create.js", () => ({
   buildResumeCommand: vi.fn(() => "claude --resume FAKE-ID-NW"),
   buildWorktreeContextText: vi.fn(() => "rules"),
   createShellWindow: vi.fn(),
-  trellisRelativePathForEntry: vi.fn(() => undefined),
   // Pure helper — use the real semantics so the provider view bounce installs
   // its runtime config under is genuinely exercised ("" clears, absent inherits).
   workerProject: (project: { provider?: string }, provider: string | undefined) =>
@@ -1187,35 +1186,6 @@ describe("newWorker", () => {
     expect(entry.effort).toBeUndefined();
   });
 
-  it("effort: ignored for trellis vines (they resolve their own model per iteration)", () => {
-    vi.mocked(readDashState).mockReturnValue(makeState());
-    newWorker({
-      workflow: "trellis",
-      trellis: { name: "auth", path: "/repo/myproject/.garden/trellises/auth.md", maxIterations: 30 },
-      effort: "xhigh",
-    });
-    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
-    expect(entry.workflow).toBe("trellis");
-    expect(entry.effort).toBeUndefined();
-  });
-
-  it("ultracode: ignored for trellis vines (they resolve their own model per iteration)", () => {
-    // The guard is `opts.ultracode === true && workflowName !== "trellis"`.
-    // A trellis plant with ultracode:true must stamp NEITHER the Opus pin
-    // (it would clobber per-iteration vine model resolution) nor entry.ultracode.
-    vi.mocked(readDashState).mockReturnValue(makeState());
-    newWorker({
-      workflow: "trellis",
-      trellis: { name: "auth", path: "/repo/myproject/.garden/trellises/auth.md", maxIterations: 30 },
-      ultracode: true,
-    });
-    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
-    expect(entry.workflow).toBe("trellis");
-    expect(entry.ultracode).toBeUndefined();
-    expect(entry.model).toBeUndefined();
-    expect(entry.trellis).toBeDefined();
-  });
-
   // The `garden handoff --model/--effort` path: the dispatcher spawns the
   // child in the background under the crew the caller forwarded, and the
   // explicit rung/model must outrank that crew's builder seat and land on the
@@ -1241,8 +1211,8 @@ describe("newWorker", () => {
   // ===== Project-level model/effort defaults (ProjectConfig.model/.effort) =====
   // These layer beneath the per-spawn opts in newWorker (per-spawn > project >
   // account default), exactly as resolveSpawnBase layers project.baseBranch
-  // beneath --base. Applied to default+grow only; trellis and ultracode
-  // interact per the precedence comment in newWorker.
+  // beneath --base. Applied to default+grow only; ultracode interacts per the
+  // precedence comment in newWorker.
 
   it("project model default: stamped when no per-spawn --model", () => {
     vi.mocked(tryGetProject).mockReturnValueOnce({ name: "myproject", path: "/repo/myproject", model: "sonnet" });
@@ -1283,21 +1253,6 @@ describe("newWorker", () => {
     const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
     expect(entry.ultracode).toBe(true);
     expect(entry.model).toBe("opus[1m]"); // ULTRACODE_MODEL pin
-    expect(entry.effort).toBeUndefined();
-  });
-
-  it("project model/effort defaults are ignored for a trellis vine", () => {
-    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "myproject", path: "/repo/myproject", model: "sonnet", effort: "high" });
-    vi.mocked(readDashState).mockReturnValue(makeState());
-    newWorker({
-      workflow: "trellis",
-      trellis: { name: "auth", path: "/repo/myproject/.garden/trellises/auth.md", maxIterations: 30 },
-    });
-    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
-    expect(entry.workflow).toBe("trellis");
-    // trellis vines resolve their own model per iteration (trellis.workerModel),
-    // never entry.model; effort never applies.
-    expect(entry.model).toBeUndefined();
     expect(entry.effort).toBeUndefined();
   });
 
@@ -1733,10 +1688,10 @@ describe("newWorker", () => {
 
   // ===== Project-default harness (config <p> harness / crew) =====
   // A default worker inherits project.harness when no per-worker --harness is
-  // given. But the project default is DEFAULT-WORKFLOW ONLY — a trellis/grow
-  // plant (which passes no harness) must NOT inherit a codex project default,
+  // given. But the project default is DEFAULT-WORKFLOW ONLY — a grow plant
+  // (which passes no harness) must NOT inherit a codex project default,
   // mirroring the CLI's explicit --harness guard. Otherwise a project set to
-  // `crew all-codex` would silently spawn an unsupported codex vine.
+  // `crew all-codex` would silently spawn an unsupported codex grow loop.
 
   it("harness: a default worker inherits project.harness when no --harness is given", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
@@ -1760,20 +1715,6 @@ describe("newWorker", () => {
       "myproject",
       expect.objectContaining({ harness: "claude-code" }),
     );
-  });
-
-  it("harness: project.harness does NOT leak to a trellis vine (default-workflow only)", () => {
-    vi.mocked(readDashState).mockReturnValue(makeState());
-    vi.mocked(tryGetProject).mockReturnValueOnce({
-      name: "myproject", path: "/repo/myproject", harness: "codex",
-    });
-    newWorker({
-      workflow: "trellis",
-      trellis: { name: "auth", path: "/repo/myproject/.garden/trellises/auth.md", maxIterations: 30 },
-    });
-    const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
-    expect(entry.workflow).toBe("trellis");
-    expect(entry.harness).toBeUndefined();
   });
 
   it("harness: project.harness does NOT leak to a grow worker (default-workflow only)", () => {

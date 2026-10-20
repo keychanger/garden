@@ -82,14 +82,6 @@ function showProjectConfig(project: ProjectConfig & { name: string }): void {
       if (project.provider) data.provider = project.provider;
     } else if (key === "logColor") {
       if (project.logColor) data.logColor = project.logColor;
-    } else if (key === "maxTrellisIterations") {
-      if (project.maxTrellisIterations !== undefined) {
-        data.maxTrellisIterations = String(project.maxTrellisIterations);
-      }
-    } else if (key === "trellisOpusFallback") {
-      if (project.trellisOpusFallback !== undefined) {
-        data.trellisOpusFallback = String(project.trellisOpusFallback);
-      }
     } else if (key === "maxGrowIterations") {
       if (project.maxGrowIterations !== undefined) {
         data.maxGrowIterations = String(project.maxGrowIterations);
@@ -149,18 +141,6 @@ function showConfigKey(project: ProjectConfig & { name: string }, key: SettableK
   if (key === "logColor") {
     const v = project.logColor;
     if (v) output({ [key]: v }, () => v);
-    else output({ [key]: null }, () => `(not set)`);
-    return;
-  }
-  if (key === "maxTrellisIterations") {
-    const v = project.maxTrellisIterations;
-    if (v !== undefined) output({ [key]: v }, () => String(v));
-    else output({ [key]: null }, () => `(not set)`);
-    return;
-  }
-  if (key === "trellisOpusFallback") {
-    const v = project.trellisOpusFallback;
-    if (v !== undefined) output({ [key]: v }, () => String(v));
     else output({ [key]: null }, () => `(not set)`);
     return;
   }

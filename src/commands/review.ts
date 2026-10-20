@@ -80,17 +80,14 @@ function colorVerdict(verdict: string): string {
 }
 
 // Best-effort translation of the workflow verdict into a universal checks
-// signal. A verdict that reached merge (clean/fixed/aligned/drift) means the
-// reviewer ran the project's checks command and it passed; failed means it did
-// not. FLAGGED is a trellis spec contradiction, not a checks outcome (a flagged
-// vine can have green checks), so it gets a neutral line rather than a false
-// "not passing". Unknown verdicts fall back to the raw string.
+// signal. A verdict that reached merge (clean/fixed) means the reviewer ran
+// the project's checks command and it passed; failed means it did not.
+// Unknown verdicts fall back to the raw string.
 function checksLine(verdict: string): string {
   const v = verdict.toLowerCase();
-  if (v === "clean" || v === "fixed" || v === "aligned" || v === "drift") {
+  if (v === "clean" || v === "fixed") {
     return "\x1b[32mpassed\x1b[0m \x1b[2m(reviewer ran the project checks)\x1b[0m";
   }
-  if (v === "flagged") return "\x1b[2mn/a (spec flagged)\x1b[0m";
   if (v === "failed") return "\x1b[31mnot passing\x1b[0m";
   return `\x1b[2m${verdict}\x1b[0m`;
 }

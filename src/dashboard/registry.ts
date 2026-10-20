@@ -50,23 +50,13 @@ export const PR_STATE_KIND: Record<PrState, { pollerOwed: boolean; windowed: boo
   done: { pollerOwed: false, windowed: false },
 };
 
-// Trellis reviewer verdict vocabulary. See WORKFLOWS.md "Reviewer prompt and
-// verdict". Persisted on WorkerEntry.trellis.lastVerdict for trellis vines.
-export type TrellisVerdict = "ALIGNED" | "DRIFT" | "FAILED" | "FLAGGED";
-
 // Why the clean-tree gate held a review back. See WorkerEntry.reviewBlockedReason.
 export type ReviewBlockedReason = "dirty" | "indeterminate";
 
-// Reason a worker is in `failing`. Allowed values per WORKFLOWS.md
-// "Worker entry additions" + "Equilibrium and termination". Default
-// workflow uses "code" and "unparseable-verdict"; trellis adds the rest.
-// Optional: legacy entries lack this field; consumers default to "code"
-// when absent on a `failing` worker.
+// Reason a worker is in `failing`. Optional: legacy entries lack this field;
+// consumers default to "code" when absent on a `failing` worker.
 export type FailingReason =
   | "code"
-  | "trellis-flagged"
-  | "iteration-budget"
-  | "stagnation"
   | "unparseable-verdict"
   // Set by handleTransientReviewFailure after the auto-retry budget for
   // transient API errors (5xx, 429, overloaded_error) is exhausted. Distinct
@@ -108,16 +98,6 @@ export type FailingReason =
   // action reason: removing the offending files and re-pushing auto-retries the
   // publish after the failing debounce.
   | "designer-scope";
-
-// Failing reasons that park the worker until the operator runs a specific
-// command (a trellis disposition) — pushing new commits does NOT auto-resume
-// them. Both the failing-state debounce (handleFailing) and the watchdog's
-// failing-debounce backstop (isWatchedState) skip these so a parked worker is
-// left alone. Every other reason follows the "push a fix, it re-reviews after
-// the debounce" path.
-export const OPERATOR_ACTION_FAILING_REASONS: ReadonlySet<FailingReason> = new Set([
-  "trellis-flagged", "iteration-budget", "stagnation",
-]);
 
 // Durable record of the worker's most recent completed review, kept so
 // `garden review <worker>` can show what the reviewer decided and changed
@@ -382,8 +362,8 @@ export interface WorkerEntry {
   //
   //  - mergeCount: completed-merge counter, +1 per merge in transitionToTerminal.
   //    The `>=2` gate. NOT incremented on grow's direct-done path (which bypasses
-  //    transitionToTerminal), so grow/trellis are excluded by both the workflow
-  //    clause and (for grow) the increment site.
+  //    transitionToTerminal), so grow is excluded by both the workflow clause
+  //    and the increment site.
   //  - baseBranchSha: origin/<baseBranch> tip captured at worker creation — the
   //    `from` endpoint of the whole-task cumulative diff.
   //  - holisticTouchedFiles: union of each cycle's preMergeChangedFiles; scopes
@@ -482,9 +462,8 @@ export interface WorkerEntry {
   // workers. Opaque string: an Anthropic alias ("opus"/"sonnet" — resolved
   // through the provider's modelMap on provider-backed projects) or any
   // concrete model id the backend accepts. Threaded into every launch,
-  // respawn, and bounce so the pin survives the worker's lifetime. Trellis
-  // vines use `trellis.workerModel` instead (iteration-resolved with the
-  // Sonnet-exhaustion fallback). See docs/MULTI-MODEL.md "Layer 2".
+  // respawn, and bounce so the pin survives the worker's lifetime. See
+  // docs/MULTI-MODEL.md "Layer 2".
   model?: string;
   // The model the worker is OBSERVED to be running, read back from the
   // harness's own transcript (model-drift.ts). Intent lives in `model` above
@@ -516,23 +495,13 @@ export interface WorkerEntry {
   // Rendered by the harness buildAgentCommand as `--effort <level>`; threaded
   // into every launch/resume/bounce like `model`. The top rung (max effort +
   // dynamic workflows) is the `ultracode` flag above, not an effort value, so
-  // the two never co-occur. Default/grow only (trellis resolves its own model
-  // and does not carry effort). A top-level scalar — no readRegistry migration.
+  // the two never co-occur. A top-level scalar — no readRegistry migration.
   effort?: string;
-  // Reason the worker is in `failing`. See FailingReason above and
-  // WORKFLOWS.md "Equilibrium and termination". Default workflow sets "code"
-  // (Q8 retrofit) or "unparseable-verdict" (Q9 retrofit, phase 2).
+  // Reason the worker is in `failing`. See FailingReason above.
   failingReason?: FailingReason;
-  // Trellis-vine-only data. Populated only when workflow === "trellis";
-  // absent on default workers. Migration of legacy flat trellis* fields
-  // happens in readRegistry. updateWorkerFields deep-merges this sub-object
-  // (passing `{ trellis: { lastVerdict: "ALIGNED" } }` updates only that
-  // one key without clobbering the rest). See WORKFLOWS.md "Worker entry
-  // additions" for field contracts.
-  trellis?: TrellisData;
   // Grow-loop-only data. Populated only when workflow === "grow"; absent
-  // on default and trellis workers. updateWorkerFields deep-merges this
-  // sub-object (same pattern as `trellis`).
+  // on other workers. updateWorkerFields deep-merges this sub-object
+  // (passing `{ grow: { iteration: 3 } }` updates only that key).
   grow?: GrowData;
   // Epoch ms a thread-title generation was ATTEMPTED for this worker (see
   // task-title.ts). Claimed before the model call and never released, so the
@@ -543,54 +512,12 @@ export interface WorkerEntry {
   titleGeneratedAt?: number;
 }
 
-/** Trellis-workflow per-worker data. All fields except `name` and `path`
- *  are runtime mutations the poller writes during the review loop. */
-export interface TrellisData {
-  /** Logical trellis identifier — e.g. "auth-rewrite". */
-  name: string;
-  /** Resolved absolute path to the trellis file at plant time. Stable
-   *  lookup even if the project's trellisDir changes later. */
-  path: string;
-  /** Iteration counter. Incremented on each working → reviewing
-   *  transition before the budget check and dispatch. Reads as 1 during
-   *  the first review, 2 during the second, etc. Starts at 0. */
-  iteration?: number;
-  maxIterations?: number;
-  lastVerdict?: TrellisVerdict;
-  lastDrift?: string[];
-  alignedCount?: number;
-  /** Bounded (length 5) history of drift lists for stagnation detection (v1.5). */
-  driftHistory?: string[][];
-  /** Bounded (length 5) history of HEAD SHAs at iteration boundaries (v1.5). */
-  shaHistory?: string[];
-  /** Epoch ms when stagnation was detected; cleared on next push (v1.5). */
-  stagnationConfirmedAt?: number;
-  /** Cited clauses from a FLAGGED verdict — used in the alert and the
-   *  resume command's diagnostic output. */
-  flaggedClauses?: string[];
-  /** True when the terminal `done` was reached via reviewer ALIGNED
-   *  rather than operator-set `.garden-done`. Drives the `✓ aligned,
-   *  N iters` status row decoration. Set by finalizeMerge on the
-   *  ALIGNED path. */
-  aligned?: boolean;
-  /** Epoch ms of the most recent Sonnet → Opus fallback. Used to
-   *  dedupe alerts within a single Sonnet 5h reset window (phase 3). */
-  modelFallbackAt?: number;
-  /** Per-worker model override, set via `--model` at plant time. Read
-   *  each iteration; falls back to WorkflowDefinition.workerModel,
-   *  then project default. Trellis-only — default/grow workers carry
-   *  the flat `WorkerEntry.model` instead. Opaque string: Anthropic
-   *  aliases or any concrete model id the backend accepts. */
-  workerModel?: string;
-}
-
 /** Grow-workflow per-worker data. The seed prompt is captured at plant
  *  time and inlined verbatim into every iter ≥ 2 continue prompt — that's
  *  why it lives on the entry rather than only on disk in a one-shot file.
- *  iteration is incremented on each working → reviewing transition (same
- *  pattern as TrellisData.iteration); maxIterations bounds the loop and
- *  is enforced at the post-merge auto-continue dispatch site (not at
- *  preflight, unlike trellis). */
+ *  iteration is incremented on each working → reviewing transition;
+ *  maxIterations bounds the loop and is enforced at the post-merge
+ *  auto-continue dispatch site. */
 export interface GrowData {
   /** Operator-supplied task description from `--seed` / `--seed-file` /
    *  picker prompt. Inlined verbatim into iter ≥ 2 continue prompts so
@@ -975,13 +902,11 @@ export function readRegistry(): WorkerRegistry {
     return { workers: {} };
   }
 
-  // Lazily migrate legacy flat trellis* fields to the nested entry.trellis
-  // sub-object. Idempotent: entries already in the new shape pass through
-  // unchanged. The next writeRegistry persists the new shape; readers below
-  // this layer never see the old flat keys.
+  // Lazily migrate legacy field shapes. Idempotent: entries already in the
+  // new shape pass through unchanged. The next writeRegistry persists the new
+  // shape; readers below this layer never see the old keys.
   for (const entries of Object.values(raw.workers)) {
     for (const e of entries as WorkerEntry[]) {
-      migrateLegacyTrellisFields(e);
       migrateLegacyStatusFields(e);
       migrateCreatedAt(e);
       migrateLastStateChangeAt(e);
@@ -992,55 +917,24 @@ export function readRegistry(): WorkerRegistry {
   return structuredClone(raw);
 }
 
-const LEGACY_TRELLIS_KEYS = [
-  "trellisName", "trellisPath", "trellisIteration", "trellisMaxIterations",
-  "trellisLastVerdict", "trellisLastDrift", "trellisAlignedCount",
-  "trellisDriftHistory", "trellisShaHistory", "trellisStagnationConfirmedAt",
-  "trellisFlaggedClauses", "trellisAligned", "trellisModelFallbackAt",
-  "workerModel",
-] as const;
-
-function migrateLegacyTrellisFields(entry: WorkerEntry): void {
-  const e = entry as unknown as Record<string, unknown>;
-  // Only migrate when the entry has at least the load-bearing trellisName
-  // legacy field and no nested `trellis` sub-object yet. workerModel was
-  // shared by trellis-only call sites so it migrates with the rest.
-  if (typeof e.trellisName !== "string") return;
-  if (entry.trellis !== undefined) {
-    // Both shapes present — strip the legacy fields. The nested form wins.
-    for (const k of LEGACY_TRELLIS_KEYS) delete e[k];
-    return;
-  }
-  entry.trellis = {
-    name: e.trellisName as string,
-    path: typeof e.trellisPath === "string" ? e.trellisPath : "",
-    iteration: e.trellisIteration as number | undefined,
-    maxIterations: e.trellisMaxIterations as number | undefined,
-    lastVerdict: e.trellisLastVerdict as TrellisVerdict | undefined,
-    lastDrift: e.trellisLastDrift as string[] | undefined,
-    alignedCount: e.trellisAlignedCount as number | undefined,
-    driftHistory: e.trellisDriftHistory as string[][] | undefined,
-    shaHistory: e.trellisShaHistory as string[] | undefined,
-    stagnationConfirmedAt: e.trellisStagnationConfirmedAt as number | undefined,
-    flaggedClauses: e.trellisFlaggedClauses as string[] | undefined,
-    aligned: e.trellisAligned as boolean | undefined,
-    modelFallbackAt: e.trellisModelFallbackAt as number | undefined,
-    workerModel: e.workerModel as string | undefined,
-  };
-  for (const k of LEGACY_TRELLIS_KEYS) delete e[k];
-}
-
 // Lazily migrate the pre-multi-model status field names: claudeStatus →
 // agentStatus, lastHookAt → lastEventAt (docs/MULTI-MODEL.md "Layer 2").
 // Idempotent: migrated entries pass through untouched, and when both names
 // are somehow present the new name wins. The next writeRegistry persists
-// the new shape, exactly like the trellis migration above.
+// the new shape.
 // The design workflow shipped as "botanist" and was renamed; entries written
 // before the rename (and tombstones `garden resurrect` restores from) still
-// carry the old workflow name and failing reason.
+// carry the old workflow name and failing reason. The trellis workflow was
+// retired: an entry that ran it carries on as a default worker, and one parked
+// on a failing reason only trellis could clear re-reviews on its next push.
 function migrateLegacyWorkflowNames(entry: WorkerEntry): void {
   if (entry.workflow === "botanist") entry.workflow = "designer";
-  if ((entry.failingReason as string) === "botanist-scope") entry.failingReason = "designer-scope";
+  if (entry.workflow === "trellis") entry.workflow = "default";
+  const reason = entry.failingReason as string | undefined;
+  if (reason === "botanist-scope") entry.failingReason = "designer-scope";
+  if (reason === "trellis-flagged" || reason === "iteration-budget" || reason === "stagnation") {
+    entry.failingReason = "code";
+  }
 }
 
 function migrateLegacyStatusFields(entry: WorkerEntry): void {
@@ -1213,13 +1107,11 @@ export function updateWorkerTask(project: string, workerName: string, task: stri
 }
 
 /** Field-update payload accepted by updateWorkerFields. Top-level fields
- *  are shallow-merged onto the entry. The nested `trellis` and `grow` fields
- *  are deep-merged into the existing sub-object — passing
- *  `{ trellis: { lastVerdict: "ALIGNED" } }` or `{ grow: { iteration: 3 } }`
- *  updates only that one field without clobbering the rest of the sub-object. */
+ *  are shallow-merged onto the entry. The nested `grow` field is deep-merged
+ *  into the existing sub-object — passing `{ grow: { iteration: 3 } }`
+ *  updates only that one field without clobbering the rest of it. */
 export interface WorkerFieldsUpdate
-  extends Partial<Omit<WorkerEntry, "name" | "trellis" | "grow">> {
-  trellis?: Partial<TrellisData>;
+  extends Partial<Omit<WorkerEntry, "name" | "grow">> {
   grow?: Partial<GrowData>;
 }
 
@@ -1236,17 +1128,10 @@ function applyWorkerFields(
     });
   }
 
-  const { trellis: trellisUpdate, grow: growUpdate, ...rest } = fields;
+  const { grow: growUpdate, ...rest } = fields;
   Object.assign(entry, rest);
-  if (trellisUpdate !== undefined) {
-    // Merge into existing trellis. If entry.trellis is unset (a default
-    // worker received a stray trellis update — caller bug), the spread
-    // still produces a TrellisData-shaped object from whatever was passed.
-    entry.trellis = { ...(entry.trellis ?? {}), ...trellisUpdate } as TrellisData;
-  }
   if (growUpdate !== undefined) {
-    // Same deep-merge pattern as trellis. Caller bug if entry.grow is
-    // unset and the update lacks `seed`; the resulting object would have
+    // Caller bug if entry.grow is unset and the update lacks `seed`; the resulting object would have
     // no anchoring seed for iter ≥ 2 prompts. The cast lets the broken
     // shape persist (rather than throw) so the loop can surface it
     // visibly via a missing-seed iteration prompt.

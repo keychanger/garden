@@ -16,14 +16,12 @@ import {
   continueWorkerIfStuck, deliverHandoffCallbacks, rearmContinueIfDrafting, seedWorker,
 } from "./continue.js";
 import { growAutoContinueAfterMerge } from "./grow-continue.js";
-import { trellisAutoContinueAfterMerge } from "./trellis-continue.js";
 import {
-  runTrellisPicker, plantVineFromPicker, spawnTrellisAuthor, runReviveSubmenu,
   runWorkflowPicker, plantGrowFromPicker, plantDesignerFromPicker,
   runComposeBaseSubmenu, runComposeCrewSubmenu, runComposeMemberSubmenu,
   runComposeModelSubmenu, runComposeEffortSubmenu,
   stageSpawnDraft, composeDefaultFromPicker,
-} from "./trellis-picker.js";
+} from "./workflow-picker.js";
 import {
   runCrewPicker, applyCrewFromPicker, runCrewComposer, runStoredCrewPicker,
   runCrewDimSubmenu, setCrewDimFromPicker, saveCrewFromPicker, runCrewEdit,
@@ -46,7 +44,7 @@ import {
 import { switchProject, focusWorker, focusShell, focusGrowhouse, focusRoot, focusLogs, focusHistory, focusDiary, focusAlerts, cyclePane, cyclePlot } from "./navigate.js";
 import { diaryFilePath } from "../diary.js";
 import { openLogsFilterPrompt, applyLogsFilter } from "./logs-filter.js";
-import { takePromptReply, tmuxDisplay } from "./tmux.js";
+import { takePromptReply } from "./tmux.js";
 import { poll, triggerProjectPoll, postPush, stopAllPollers } from "./poller.js";
 import { runUsagePollerLoop, stopUsagePoller } from "./usage-poller.js";
 import { runWatchdogLoop, stopWatchdog } from "./watchdog.js";
@@ -179,16 +177,8 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     }
     return;
   }
-  if (sub === "_trellis-continue-after-merge") {
-    if (args[1] && args[2]) trellisAutoContinueAfterMerge(args[1], args[2]);
-    return;
-  }
   if (sub === "_grow-continue-after-merge") {
     if (args[1] && args[2]) growAutoContinueAfterMerge(args[1], args[2]);
-    return;
-  }
-  if (sub === "_trellis-picker") {
-    runTrellisPicker(args[1]);
     return;
   }
   if (sub === "_workflow-picker") {
@@ -381,29 +371,6 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_designer-plant") {
     if (args[1]) plantDesignerFromPicker(args[1]);
-    return;
-  }
-  if (sub === "_trellis-plant") {
-    if (args[1] && args[2]) plantVineFromPicker(args[1], args[2]);
-    return;
-  }
-  if (sub === "_trellis-plant-author") {
-    if (args[1]) spawnTrellisAuthor(args[1]);
-    return;
-  }
-  if (sub === "_trellis-new") {
-    // The picker's scaffold row: the typed name arrives via _prompt-reply.
-    if (!args[1] || !args[2]) return;
-    const { trellis } = await import("../commands/trellis.js");
-    try {
-      await trellis(["new", args[1], args[2]]);
-    } catch (err) {
-      tmuxDisplay(err instanceof Error ? err.message : String(err), { untilKey: true });
-    }
-    return;
-  }
-  if (sub === "_trellis-revive-submenu") {
-    if (args[1]) runReviveSubmenu(args[1]);
     return;
   }
   if (sub === "_seed-worker") {

@@ -111,6 +111,17 @@ describe("rebuildEntry", () => {
     expect(rebuilt.workflow).toBe("designer");
   });
 
+  it("rebuilds a retired trellis vine as a default worker", async () => {
+    const { telemetry, resurrect } = await mods();
+    telemetry.recordWorkerRemoved("proj", "vine", 1, "trellis", baseEntry("vine", {
+      workflow: "trellis",
+    }));
+
+    const rebuilt = resurrect.rebuildEntry(resurrect.listTombstones()[0]);
+
+    expect(rebuilt.workflow).toBe("default");
+  });
+
   it("keeps identity, config, and history counters; drops transient state", async () => {
     const { telemetry, resurrect } = await mods();
     telemetry.recordWorkerRemoved("proj", "oak", 1, "default", baseEntry("oak", {

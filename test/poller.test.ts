@@ -136,7 +136,6 @@ vi.mock("../src/dashboard/registry.js", () => {
     },
   );
   return {
-    OPERATOR_ACTION_FAILING_REASONS: new Set(["trellis-flagged", "iteration-budget", "stagnation"]),
     readRegistry: vi.fn(() => ({ workers: entries })),
     getWorkers: vi.fn((project: string) => entries[project] ?? []),
     updateWorkerFields,
@@ -2012,62 +2011,6 @@ describe("poll — reviewing state (async)", () => {
     expect(workingCall).toBeDefined();
   });
 
-  it("a quota-retry relaunch does NOT re-increment the trellis iteration counter", () => {
-    // A quota cutoff re-queues the SAME iteration through `working` on a flat
-    // 15-min ladder (budget 24). launchReview must NOT treat each relaunch as a
-    // fresh iteration, or a multi-hour quota wait would inflate trellis.iteration
-    // by up to 24 and trip the iteration-budget cap prematurely — parking the
-    // vine in the non-kick-recoverable failing/"iteration-budget" instead of the
-    // kick-recoverable quota wait it actually is. quotaRetryCount marks the retry.
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        name: "swift-vine",
-        prState: "working",
-        agentStatus: "idle",
-        workflow: "trellis",
-        pendingReviewAt: Date.now(),
-        quotaRetryCount: 1,
-        reviewRetryAt: Date.now() - 1000, // backoff already elapsed
-        trellis: { name: "auth", path: "/tmp/auth.md", iteration: 20, maxIterations: 30 },
-      }),
-    ]);
-
-    poll("myproject");
-
-    // No iteration write of any value: the relaunch reviews iteration 20 again.
-    const iterWrite = vi.mocked(updateWorkerFields).mock.calls.find(
-      c => c[1] === "swift-vine"
-        && (c[2] as { trellis?: { iteration?: number } }).trellis?.iteration !== undefined,
-    );
-    expect(iterWrite).toBeUndefined();
-    // And the cap was not tripped by a phantom increment.
-    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "swift-vine",
-      expect.objectContaining({ failingReason: "iteration-budget" }),
-    );
-  });
-
-  it("a fresh (non-retry) trellis launch DOES increment the iteration counter", () => {
-    // Positive control for the guard above: without retry state, launchReview
-    // advances the counter exactly as before (20 -> 21). This proves the
-    // !isRetryRelaunch guard doesn't disable the normal per-iteration increment.
-    registryMock._setEntries("myproject", [
-      makeWorker({
-        name: "swift-vine",
-        prState: "working",
-        agentStatus: "idle",
-        workflow: "trellis",
-        pendingReviewAt: Date.now(),
-        trellis: { name: "auth", path: "/tmp/auth.md", iteration: 20, maxIterations: 30 },
-      }),
-    ]);
-
-    poll("myproject");
-
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "swift-vine",
-      expect.objectContaining({ trellis: { iteration: 21 } }),
-    );
-  });
-
   it("a quota-retry relaunch does NOT re-increment the grow iteration counter (but still launches)", () => {
     // Same guard for grow: an inflated grow.iteration would make maybeAutoContinue
     // see the budget as spent and end the hardening loop several passes early once
@@ -2312,7 +2255,7 @@ describe("poll — reviewing state (async)", () => {
     expect(cmd).not.toContain("codex");
     // The relaunch re-reviews the same commits — the transition to reviewing
     // still fires (isRetryRelaunch keys off reviewFallbackHarness, so a
-    // trellis/grow iteration counter would not advance here).
+    // grow iteration counter would not advance here).
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
     );
@@ -2551,7 +2494,7 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
-  it("a no-commit unparseable retry relaunch does NOT re-increment the trellis iteration counter", () => {
+  it("a no-commit unparseable retry relaunch does NOT re-increment the grow iteration counter", () => {
     // Same guard as the transient/quota retries: an unparseable retry re-reviews
     // the SAME commits (the reviewer emitted no verdict and did no work), so
     // launchReview must not treat it as a fresh iteration. unparseableRetryCount
@@ -2561,11 +2504,11 @@ describe("poll — reviewing state (async)", () => {
         name: "swift-vine",
         prState: "working",
         agentStatus: "idle",
-        workflow: "trellis",
+        workflow: "grow",
         pendingReviewAt: Date.now(),
         unparseableRetryCount: 1,
         reviewRetryAt: Date.now() - 1000, // backoff already elapsed
-        trellis: { name: "auth", path: "/tmp/auth.md", iteration: 20, maxIterations: 30 },
+        grow: { seed: "harden", iteration: 20, maxIterations: 30 },
       }),
     ]);
 
@@ -2574,7 +2517,7 @@ describe("poll — reviewing state (async)", () => {
     // No iteration write of any value: the relaunch reviews iteration 20 again.
     const iterWrite = vi.mocked(updateWorkerFields).mock.calls.find(
       c => c[1] === "swift-vine"
-        && (c[2] as { trellis?: { iteration?: number } }).trellis?.iteration !== undefined,
+        && (c[2] as { grow?: { iteration?: number } }).grow?.iteration !== undefined,
     );
     expect(iterWrite).toBeUndefined();
     // The review still launches.
@@ -4253,7 +4196,7 @@ describe("poll — merge-pending state", () => {
 
   // ─── grow workflow: budget exhaustion → done at the auto-continue site ──
   // Locked decision 2 in declarative-singing-graham.md: grow's
-  // terminal-on-budget is `done` (not `failing` like trellis), and the
+  // terminal-on-budget is `done` (not `failing`), and the
   // check fires post-merge in maybeAutoContinue (not at preflight). Reaching
   // the cap means "we did the work we said we'd do."
 
@@ -5625,21 +5568,6 @@ describe("poll — merged state", () => {
 
     poll("myproject");
 
-    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
-  });
-
-  it("sweep routes a stranded trellis worker through the trellis dispatch", () => {
-    registryMock._setEntries("myproject", [
-      strandedWorker({ workflow: "trellis" }),
-    ]);
-
-    poll("myproject");
-
-    expect(spawn).toHaveBeenCalledWith(
-      "sh",
-      ["-c", expect.stringContaining("_trellis-continue-after-merge")],
-      expect.objectContaining({ detached: true }),
-    );
     expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
   });
 

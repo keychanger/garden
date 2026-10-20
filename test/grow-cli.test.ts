@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { useTmpHome, captureConsoleLog } from "./helpers.js";
 
 // Tests for `garden workers new --workflow grow`. Uses the same
-// real-temp-home pattern as trellis-cli.test.ts: a real project on disk
+// real-temp-home pattern as the other CLI tests: a real project on disk
 // (so resolveProject() returns a real config) plus mocked dashboard
 // internals (so we don't actually spawn tmux panes). The dashboard's
 // newWorker is mocked to return a fixed name; we assert on the options
@@ -245,7 +245,9 @@ describe("garden workers new --workflow grow", () => {
     ).rejects.toThrow(/--model requires a non-empty value/);
   });
 
-  it("rejects --trellis on grow workers", async () => {
+  // The flag parser accepts any --flag, so the retired one is named instead of
+  // being silently ignored.
+  it("rejects the retired --trellis flag", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
     await expect(
@@ -255,7 +257,7 @@ describe("garden workers new --workflow grow", () => {
         "--seed", "x",
         "--trellis", "auth",
       ]),
-    ).rejects.toThrow(/--trellis can only be used with --workflow trellis/);
+    ).rejects.toThrow(/--trellis was removed along with the trellis workflow/);
   });
 
   it("writes the iter-1 seed prompt to a file under SESSIONS_DIR/seeds", async () => {
@@ -440,7 +442,7 @@ describe("--workflow whitelist", () => {
     const { workers } = await importWorkersCmd();
     await expect(
       workers(["new", "proj", "--workflow", "loop"]),
-    ).rejects.toThrow(/--workflow must be 'default', 'trellis', 'grow', 'designer', or 'planner'/);
+    ).rejects.toThrow(/--workflow must be 'default', 'grow', 'designer', or 'planner'/);
   });
 });
 
@@ -492,7 +494,7 @@ describe("garden workers new --workflow planner", () => {
     const { workers } = await importWorkersCmd();
     await expect(
       workers(["new", "proj", "--workflow", "planner", "--trellis", "x"]),
-    ).rejects.toThrow(/--trellis can only be used/);
+    ).rejects.toThrow(/--trellis was removed/);
     await expect(
       workers(["new", "proj", "--workflow", "planner", "--max-iterations", "3"]),
     ).rejects.toThrow(/--max-iterations can only be used/);
@@ -679,34 +681,6 @@ describe("garden workers grow (convert)", () => {
     await expect(
       workers(["grow", "already-grown", "--seed", "new"]),
     ).rejects.toThrow(/grow-goal\.md.*amend/);
-  });
-
-  it("rejects conversion of a trellis worker with workflow-specific guidance", async () => {
-    const projectDir = await setupProject("proj");
-    const wtPath = path.join(projectDir, "..", "wt5");
-    fs.mkdirSync(wtPath, { recursive: true });
-    const reg = await importRegistry();
-    reg.addWorker("proj", {
-      name: "vine", sessionId: "s", task: "",
-      worktreePath: wtPath, branchName: "vine", baseBranch: "main",
-      workflow: "trellis",
-      trellis: { name: "auth", path: "/tmp/auth.md", iteration: 1, maxIterations: 30 },
-    });
-
-    const { workers } = await importWorkersCmd();
-    // Trellis vines have no grow-goal.md — telling the operator to edit
-    // it would point them at a non-existent file. The trellis-specific
-    // path is `garden trellis amend` against the trellis doc. The error
-    // must say so.
-    await expect(
-      workers(["grow", "vine", "--seed", "x"]),
-    ).rejects.toThrow(/trellis vine/);
-    await expect(
-      workers(["grow", "vine", "--seed", "x"]),
-    ).rejects.toThrow(/garden trellis amend/);
-    // Must NOT mention grow-goal.md — that's the wrong path for trellis.
-    const err = await workers(["grow", "vine", "--seed", "x"]).catch(e => e as Error);
-    expect(err.message).not.toContain("grow-goal.md");
   });
 
   it("rejects when --seed and --seed-file are both passed", async () => {
@@ -1224,14 +1198,4 @@ describe("garden workers new --effort", () => {
     expect(newWorker).not.toHaveBeenCalled();
   });
 
-  it("rejects --effort on a trellis worker", async () => {
-    await setupProject("proj");
-    const { workers } = await importWorkersCmd();
-    const { newWorker } = await importDashboardWorkers();
-
-    await expect(
-      workers(["new", "proj", "--workflow", "trellis", "--effort", "xhigh"]),
-    ).rejects.toThrow(/--effort is only supported with --workflow default, grow, designer, or planner/);
-    expect(newWorker).not.toHaveBeenCalled();
-  });
 });

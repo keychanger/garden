@@ -219,9 +219,8 @@ export function recordStateTransition(
 }
 
 // review.verdict — a reviewer produced a parseable verdict. Emitted at the
-// single point where the verdict is known for both default and trellis
-// (poller-review.ts), so it captures every clean/fixed/failed (and trellis
-// ALIGNED/DRIFT/FLAGGED) outcome. The signal the `state` event can't carry:
+// single point where the verdict is known (poller-review.ts), so it captures
+// every clean/fixed/failed outcome. The signal the `state` event can't carry:
 // the verdict vocabulary, the review duration, and the reviewer's FIX MAGNITUDE
 // — the numstat of preReviewSha..tipSha, which is 0 on a CLEAN review and the
 // reviewer's edit size on a FIXED one (with the caveat that a mid-review rebase

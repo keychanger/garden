@@ -34,6 +34,5 @@ export const growWorkflow: WorkflowDefinition = {
     done: handleDone,
   },
   // workerModel and reviewerModel both unset — grow uses the account
-  // default. Loops are bounded by N, not by quality concerns the way
-  // trellis is.
+  // default. Loops are bounded by N.
 };

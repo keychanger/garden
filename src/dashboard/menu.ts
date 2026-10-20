@@ -1,5 +1,5 @@
-// Shared tmux display-menu primitive. crew-picker, trellis-picker, and the
-// workflow picker each hand-rolled the same `["display-menu","-O","-T",title,
+// Shared tmux display-menu primitive. crew-picker and the workflow picker
+// each hand-rolled the same `["display-menu","-O","-T",title,
 // "-x","C","-y","C", ...triples]` argv + execFileSync + catch/log block; the
 // config/worker menus would make five copies. This centralizes it.
 //

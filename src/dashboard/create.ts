@@ -35,7 +35,6 @@ import {
   DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME,
   BLOCKED_SKILL_CONTENT, BLOCKED_SKILL_DIRNAME, BLOCKED_SKILL_FILENAME,
   HANDOFF_SKILL_CONTENT, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME,
-  TRELLIS_AUTHOR_SKILL_CONTENT, TRELLIS_AUTHOR_SKILL_DIRNAME, TRELLIS_AUTHOR_SKILL_FILENAME,
   GROW_SKILL_CONTENT, GROW_SKILL_DIRNAME, GROW_SKILL_FILENAME,
   DESIGNER_SKILL_CONTENT, DESIGNER_SKILL_DIRNAME, DESIGNER_SKILL_FILENAME,
   PLANNER_SKILL_CONTENT, PLANNER_SKILL_DIRNAME, PLANNER_SKILL_FILENAME,
@@ -143,8 +142,6 @@ export function ensureDashboard(): void {
           installPollTriggerHook(entry.worktreePath, resolveGardenRunner(), pname);
           try {
             const runtimeRulesOpts: WorktreeCommandOptions = {};
-            const trellisRelativePath = trellisRelativePathForEntry(entry, proj.path);
-            if (trellisRelativePath) runtimeRulesOpts.trellisRelativePath = trellisRelativePath;
             if (entry.workflow === "grow" && entry.grow) {
               runtimeRulesOpts.grow = {
                 iteration: entry.grow.iteration ?? 0,
@@ -647,14 +644,9 @@ export interface WorktreeCommandOptions {
    *  command rendering, runtime install, and tmux credential injection consume
    *  the same validated tuple. Direct builder callers may omit it. */
   launchPlan?: WorkerLaunchPlan;
-  /** Worktree-relative path to the trellis file. When set,
-   *  buildWorktreeRules appends the three trellis paragraphs to the
-   *  worker's system prompt. Default workers omit this and get the
-   *  baseline rules. */
-  trellisRelativePath?: string;
   /** When set, buildWorktreeRules appends the three grow paragraphs
    *  (Concept / Bias / Termination) referencing the iteration count.
-   *  Mutually exclusive with `trellisRelativePath` — a worker is one
+   *  Mutually exclusive with `designer` / `planner` — a worker is one
    *  workflow at a time. */
   grow?: {
     iteration: number;
@@ -664,10 +656,8 @@ export interface WorktreeCommandOptions {
    *  invocation. When set, the launched claude process is pinned to that
    *  model. When unset, claude uses the account default and no `--model`
    *  flag is passed. Opaque string: an Anthropic alias or any concrete
-   *  model id the backend accepts. Default/grow workers thread the
-   *  persisted `entry.model`; trellis vines resolve per iteration
-   *  (per-worker `trellis.workerModel` override + the Sonnet exhaustion
-   *  fallback via `resolveVineModel`). */
+   *  model id the backend accepts. Workers thread the persisted
+   *  `entry.model`. */
   model?: string;
   /** Ultracode preset (`WorkerEntry.ultracode`). When set, the launched
    *  claude gets `--effort max` plus the dynamic-workflow keyword trigger.
@@ -703,7 +693,7 @@ export interface WorktreeCommandOptions {
    *  (design) worker and suppresses the checks paragraph. Threaded from the
    *  spawn (workflow === "designer") and re-derived on resume/bounce from
    *  `entry.workflow` so the inversion survives the worker's lifetime.
-   *  Mutually exclusive with `trellisRelativePath` / `grow`. */
+   *  Mutually exclusive with `grow`. */
   designer?: boolean;
   /** When set, buildWorktreeRules inverts the worktree posture for a planner
    *  (decomposition) worker — the deliverable is a bead DAG in the bd store,
@@ -724,7 +714,7 @@ export function buildWorktreeWorkerCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
+    { grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
   const project = resolveProjectForHooks(projectName, projectPath);
   const launchPlan = commandLaunchPlan(project, opts, false);
@@ -754,15 +744,13 @@ function commandLaunchPlan(
   resume: boolean,
 ): WorkerLaunchPlan {
   if (opts?.launchPlan) return opts.launchPlan;
-  const workflow = opts?.trellisRelativePath
-    ? "trellis"
-    : opts?.grow
-      ? "grow"
-      : opts?.designer
-        ? "designer"
-        : opts?.planner
-          ? "planner"
-          : "default";
+  const workflow = opts?.grow
+    ? "grow"
+    : opts?.designer
+      ? "designer"
+      : opts?.planner
+        ? "planner"
+        : "default";
   return resolveWorkerLaunchPlan({
     project,
     provider: opts?.provider,
@@ -794,27 +782,6 @@ function codexWorktreeGitDirs(harness: string | undefined, projectPath: string, 
 function resolveProjectForHooks(projectName: string, projectPath: string): ProjectConfig {
   const registered = tryGetProject(projectName);
   return registered ?? { path: projectPath };
-}
-
-// Compute the worktree-relative trellis path for a worker entry, suitable
-// for buildWorktreeRules's trellis option. Returns undefined for default
-// workers and trellis workers without a stored trellis.path. The trellis
-// file lives at the same project-relative path inside the worktree
-// (worktrees share the project's working tree layout post-rebase), so
-// this is a path-prefix swap from project-rooted to worktree-rooted.
-export function trellisRelativePathForEntry(
-  entry: { workflow?: string; trellis?: { path?: string }; worktreePath?: string },
-  projectPath: string,
-): string | undefined {
-  if (entry.workflow !== "trellis") return undefined;
-  const tPath = entry.trellis?.path;
-  if (!tPath) return undefined;
-  const projectPrefix = projectPath.endsWith(path.sep) ? projectPath : projectPath + path.sep;
-  if (tPath.startsWith(projectPrefix)) {
-    return tPath.slice(projectPrefix.length);
-  }
-  // Trellis lives outside the project tree (unusual). Fall back to absolute.
-  return tPath;
 }
 
 // The bootstrap's dependency install. `npm install` rewrites a committed
@@ -853,7 +820,7 @@ export function buildWorktreeBootstrapScript(
   // Write the context file eagerly (fast, just file I/O)
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
+    { grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
 
   const fifoLit = shellEscape(signalFifoPath(projectName));
@@ -913,9 +880,6 @@ export function buildWorktreeBootstrapScript(
   const handoffSkillLit = shellEscape(HANDOFF_SKILL_CONTENT);
   const handoffSkillDirnameLit = shellEscape(HANDOFF_SKILL_DIRNAME);
   const handoffSkillFilenameLit = shellEscape(HANDOFF_SKILL_FILENAME);
-  const trellisAuthorSkillLit = shellEscape(TRELLIS_AUTHOR_SKILL_CONTENT);
-  const trellisAuthorSkillDirnameLit = shellEscape(TRELLIS_AUTHOR_SKILL_DIRNAME);
-  const trellisAuthorSkillFilenameLit = shellEscape(TRELLIS_AUTHOR_SKILL_FILENAME);
   const growSkillLit = shellEscape(GROW_SKILL_CONTENT);
   const growSkillDirnameLit = shellEscape(GROW_SKILL_DIRNAME);
   const growSkillFilenameLit = shellEscape(GROW_SKILL_FILENAME);
@@ -1118,8 +1082,6 @@ mkdir -p ${wtPathLit}/.claude/skills/${doneSkillDirnameLit}
 printf '%s' ${doneSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${doneSkillDirnameLit}/${doneSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${handoffSkillDirnameLit}
 printf '%s' ${handoffSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${handoffSkillDirnameLit}/${handoffSkillFilenameLit}
-mkdir -p ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}
-printf '%s' ${trellisAuthorSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${trellisAuthorSkillDirnameLit}/${trellisAuthorSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${growSkillDirnameLit}
 printf '%s' ${growSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${growSkillDirnameLit}/${growSkillFilenameLit}
 mkdir -p ${wtPathLit}/.claude/skills/${designerSkillDirnameLit}
@@ -1131,8 +1093,8 @@ printf '%s' ${blockedSkillLit} | atomic_write ${wtPathLit}/.claude/skills/${bloc
 
 # Ensure garden-managed dirs are excluded from git status.
 # Writing to the common info/exclude covers all worktrees and never gets committed.
-# .garden/ covers per-worker artifacts (grow-goal.md, grow-log.md,
-# trellis-lessons.md) — none of these belong in version control. .garden-done
+# .garden/ covers per-worker artifacts (grow-goal.md, grow-log.md, the
+# designer's working notes) — none of these belong in version control. .garden-done
 # is the auto-continue suppression sentinel; the done skill description
 # advertises this exclusion as the reason workers should not \`git add\` it.
 # .garden-awaiting-input is the human-gate sentinel (designer / garden blocked), excluded
@@ -1199,11 +1161,7 @@ export function respawnWorkerWindow(
   // back to current-checkout resolution for legacy entries.
   const baseBranch = getWorkerBaseBranch(entry, projectConfig.path);
   const workerCwd = entry.worktreePath ?? projectConfig.path;
-  const trellisRelativePath = trellisRelativePathForEntry(entry, projectConfig.path);
-  // entry.model: default/grow per-worker pin; trellis resolves per
-  // iteration, so vines never carry it.
   const resumeOpts: WorktreeCommandOptions = { launchPlan, worktreePath: entry.worktreePath };
-  if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
   if (entry.workflow === "grow" && entry.grow) {
     resumeOpts.grow = {
       iteration: entry.grow.iteration ?? 0,
@@ -1291,7 +1249,7 @@ export function buildWorktreeResumeCommand(
 ): string {
   const contextFile = writeWorktreeContextFile(
     projectName, projectPath, branchName, baseBranch,
-    { trellisRelativePath: opts?.trellisRelativePath, grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
+    { grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
   const gardenRunner = resolveGardenRunner();
   const project = resolveProjectForHooks(projectName, projectPath);
@@ -1366,7 +1324,6 @@ function writeWorktreeContextFile(
   branchName: string,
   baseBranch?: string,
   opts?: {
-    trellisRelativePath?: string;
     grow?: { iteration: number; maxIterations: number };
     designer?: boolean;
     planner?: boolean;
@@ -1386,7 +1343,6 @@ export function buildWorktreeContextText(
   branchName: string,
   baseBranch?: string,
   opts?: {
-    trellisRelativePath?: string;
     grow?: { iteration: number; maxIterations: number };
     designer?: boolean;
     planner?: boolean;
@@ -1398,9 +1354,6 @@ export function buildWorktreeContextText(
     branchName,
     baseBranch,
     {
-      ...(opts?.trellisRelativePath
-        ? { trellis: { relativePath: opts.trellisRelativePath } }
-        : {}),
       ...(opts?.grow ? { grow: opts.grow } : {}),
       ...(opts?.designer ? { designer: true } : {}),
       ...(opts?.planner ? { planner: true } : {}),

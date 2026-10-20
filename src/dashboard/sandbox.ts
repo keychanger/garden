@@ -52,8 +52,8 @@ const DEFAULT_DOMAINS: readonly string[] = [
 // self-mutating subcommands. The registry's withFileLock + atomicWriteFile
 // pattern means writes go through `<file>.lock` and `<file>.tmp.<pid>`
 // staging files, so the entire directory needs to be writable, not just
-// the JSON file. Workers already need this dir for seed files (handoff,
-// trellis vine plant) — formalizing the allowance here keeps the convert
+// the JSON file. Workers already need this dir for seed files (handoff)
+// — formalizing the allowance here keeps the convert
 // flow ergonomic without one-off sandbox bypasses per invocation.
 const DEFAULT_ALLOW_WRITE: readonly string[] = [
   "~/.npm",

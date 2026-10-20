@@ -45,7 +45,6 @@ import { handoff } from "./handoff.js";
 import { reply } from "./reply.js";
 import { workers } from "./workers.js";
 import { resurrect } from "./resurrect.js";
-import { trellis } from "./trellis.js";
 import { designer } from "./designer.js";
 import { diag } from "./diag.js";
 import { checks } from "./checks.js";
@@ -101,7 +100,6 @@ export const commands: Record<string, Command> = {
   reply,
   workers,
   resurrect,
-  trellis,
   designer,
   diag,
   checks,

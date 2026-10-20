@@ -57,7 +57,7 @@ import {
   composerModels, composerEfforts, effectiveBuildMember, claudeOnlyLaunchOpts,
   providerModelAliases, memberProvider,
   plantGrowFromPicker, plantDesignerFromPicker, stageSpawnDraft,
-} from "../src/dashboard/trellis-picker.js";
+} from "../src/dashboard/workflow-picker.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { tryGetProject, loadConfig } from "../src/config.js";
 import { tmuxDisplay } from "../src/dashboard/tmux.js";
@@ -73,18 +73,17 @@ beforeEach(() => {
 // ─── buildWorkflowPickerPlan ──────────────────────────────────────────────
 
 describe("buildWorkflowPickerPlan", () => {
-  it("returns the d/o/t/h workflow rows, a separator, then the p/m/e/c/b composer rows", () => {
+  it("returns the d/s/h workflow rows, a separator, then the p/m/e/c/b composer rows", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
     expect(rows[0].key).toBe("d");
     expect(rows[1].key).toBe("s"); // designer ('d' is the default row)
-    expect(rows[2].key).toBe("t");
-    expect(rows[3].key).toBe("h"); // hoop — the grow workflow's operator-facing name
-    expect(rows[4].sep).toBe(true);
-    expect(rows[5].key).toBe("p"); // provider — who builds ('b' is base, 'm' is model)
-    expect(rows[6].key).toBe("m");
-    expect(rows[7].key).toBe("e");
-    expect(rows[8].key).toBe("c");
-    expect(rows[9].key).toBe("b");
+    expect(rows[2].key).toBe("h"); // hoop — the grow workflow's operator-facing name
+    expect(rows[3].sep).toBe(true);
+    expect(rows[4].key).toBe("p"); // provider — who builds ('b' is base, 'm' is model)
+    expect(rows[5].key).toBe("m");
+    expect(rows[6].key).toBe("e");
+    expect(rows[7].key).toBe("c");
+    expect(rows[8].key).toBe("b");
   });
 
   it("binds every quick-key at most once", () => {
@@ -106,13 +105,11 @@ describe("buildWorkflowPickerPlan", () => {
     expect(def.run).toContain("proj");
   });
 
-  it("trellis + hoop rows are pre-wrapped tmux commands", () => {
+  it("the hoop row is a pre-wrapped command-prompt", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER).rows;
-    expect(rows[2].tmux).toContain("_trellis-picker");
-    expect(rows[2].tmux!.startsWith("run-shell ")).toBe(true);
-    expect(rows[3].tmux!.startsWith("command-prompt ")).toBe(true);
+    expect(rows[2].tmux!.startsWith("command-prompt ")).toBe(true);
     // The seed reaches _grow-plant as typed, never through a shell.
-    expect(rows[3].tmux).toContain("_prompt-reply _grow-plant proj");
+    expect(rows[2].tmux).toContain("_prompt-reply _grow-plant proj");
   });
 
   it("the designer row spawns instantly — no command-prompt for a design brief", () => {
@@ -126,17 +123,17 @@ describe("buildWorkflowPickerPlan", () => {
     const rows = buildWorkflowPickerPlan("proj", RUNNER, {
       member: "codex", model: "gpt-5.6-sol", effort: "xhigh", crew: "all-codex", base: "v2-api",
     }).rows;
-    expect(rows[5].run).toContain("_compose-member-submenu");
-    expect(rows[5].label).toContain("provider");
-    expect(rows[5].label).toContain("codex");
-    expect(rows[6].run).toContain("_compose-model-submenu");
-    expect(rows[6].label).toContain("gpt-5.6-sol");
-    expect(rows[7].run).toContain("_compose-effort-submenu");
-    expect(rows[7].label).toContain("xhigh");
-    expect(rows[8].run).toContain("_compose-crew-submenu");
-    expect(rows[8].label).toContain("all-codex");
-    expect(rows[9].run).toContain("_compose-base-submenu");
-    expect(rows[9].label).toContain("v2-api");
+    expect(rows[4].run).toContain("_compose-member-submenu");
+    expect(rows[4].label).toContain("provider");
+    expect(rows[4].label).toContain("codex");
+    expect(rows[5].run).toContain("_compose-model-submenu");
+    expect(rows[5].label).toContain("gpt-5.6-sol");
+    expect(rows[6].run).toContain("_compose-effort-submenu");
+    expect(rows[6].label).toContain("xhigh");
+    expect(rows[7].run).toContain("_compose-crew-submenu");
+    expect(rows[7].label).toContain("all-codex");
+    expect(rows[8].run).toContain("_compose-base-submenu");
+    expect(rows[8].label).toContain("v2-api");
   });
 
   it("reflects a staged draft in the title bracket, reading like the spoken recipe", () => {
@@ -158,11 +155,11 @@ describe("buildWorkflowPickerPlan", () => {
   it("re-opens on the dim just staged, so a choice doesn't walk the cursor back to the top", () => {
     // tmux's -C indexes every item, separator included — the row positions
     // asserted above are the indexes.
-    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "member").startingChoice).toBe(5);
-    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "model").startingChoice).toBe(6);
-    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "effort").startingChoice).toBe(7);
-    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "crew").startingChoice).toBe(8);
-    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "base").startingChoice).toBe(9);
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "member").startingChoice).toBe(4);
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "model").startingChoice).toBe(5);
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "effort").startingChoice).toBe(6);
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "crew").startingChoice).toBe(7);
+    expect(buildWorkflowPickerPlan("proj", RUNNER, {}, "base").startingChoice).toBe(8);
   });
 
   it("opens at the top when nothing was staged (the ⌥⇧N hotkey path)", () => {

@@ -21,7 +21,7 @@ export type Verb = "worked" | "planned" | "answered";
 
 export interface Turn {
   // "garden" marks a garden-injected prompt (post-merge auto-continue, handoff
-  // callback, trellis/grow iteration, or a handoff seed briefing) — rendered as
+  // callback, grow iteration, or a handoff seed briefing) — rendered as
   // a compact labeled marker, not the multi-paragraph text.
   role: "user" | "assistant" | "garden";
   text: string;
@@ -531,7 +531,7 @@ export interface ToolUse {
 // into a Claude one, so the marker collapsing belongs here rather than in each
 // adapter.
 //   - garden's own continuation prompts (interrupt/merge auto-continue, handoff
-//     callbacks, trellis/grow iterations) carry a [garden] fence and collapse to
+//     callbacks, grow iterations) carry a [garden] fence and collapse to
 //     a compact labeled marker instead of their multi-paragraph text. The
 //     response is kept: a post-merge auto-continue is often a whole phase of work.
 //   - a handoff seed (`[handoff from <project>/<worker>]`) is garden-injected in
@@ -574,14 +574,11 @@ export function isInjectedSystemMessage(raw: string, promptSource: string | unde
 // are multi-paragraph and usually lead with a branch-identity preamble, so
 // match the distinctive phrase anywhere in the collapsed text, most-specific
 // first. Kept in sync with the prompt builders in continue.ts / grow-continue.ts
-// / trellis-continue.ts / trellis-picker.ts / poller-merge.ts.
+// / workflow-picker.ts / poller-merge.ts.
 export function gardenLabel(text: string): string {
   const grow = text.match(/Iteration (\d+) of \d+.{0,4}keep growing/i);
   if (grow) return `grow iteration ${grow[1]}`;
   if (/Grow loop, iteration 1 of/i.test(text)) return "grow start";
-  if (/previous iteration was merged\..*trellis/i.test(text)) return "trellis iteration";
-  if (/trellis vine bound/i.test(text)) return "trellis start";
-  if (/trellis-author/i.test(text)) return "author a trellis";
   if (/Handoff callback:/i.test(text)) return "handoff callback";
   if (/just merged into/i.test(text)) return "sibling merged";
   if (/interrupted by a restart/i.test(text)) return "resumed after interrupt";

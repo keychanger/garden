@@ -92,8 +92,7 @@ interface WorkerInfo {
   // Identity fields, rendered grey and override-only. The worker's harness (a
   // member badge shows when it differs from the project's default member) and
   // the workflow (drives workflowRowDecor) join the badge cluster, and the
-  // pinned model (default/grow use entry.model, vines use trellis.workerModel)
-  // is the cluster's trailing tag — the whole cluster trails the detail column
+  // pinned model (entry.model) is the cluster's trailing tag — the whole cluster trails the detail column
   // (see renderWorkerRow), so a badge costs width only on the row carrying it.
   // All undefined for a plain default-workflow worker on the account default,
   // in which case nothing renders — default is invisible.
@@ -116,20 +115,9 @@ interface WorkerInfo {
   // reviewer) IN PLACE OF the build-member badge — so a worker with a
   // non-default reviewer is visible at a glance, not just in the ⌥i menu.
   crew?: string;
-  // Grow loop counter for the workflow-row decoration (grow N/M), the parity
-  // fix for trellis's iteration bracket. Undefined for non-grow workers.
+  // Grow loop counter for the workflow-row decoration (grow N/M). Undefined
+  // for non-grow workers.
   grow?: { iteration: number; maxIterations: number };
-  // Trellis-specific decoration fields. Populated only when
-  // entry.workflow === "trellis"; default workers leave them undefined
-  // and the renderer omits the bracket.
-  trellis?: {
-    name: string;
-    iteration: number;
-    maxIterations: number;
-    driftCount: number;
-    aligned: boolean;
-    failingReason?: string;
-  };
   // True while the worker sits in `reviewing` for its interposed whole-task
   // final review (entry.holisticFinalActive) — NOT a per-phase review. The
   // renderer tags the row so the operator sees the final coherence pass is in
@@ -608,7 +596,7 @@ function wrapRow(style: string, line: string): string {
 }
 
 // Render a status row dimmed (faint). Rows embed inner ANSI that ends in a full
-// reset — the branch hint and the trellis iteration counter — so a
+// reset — the branch hint, for one — so a
 // naive `\x1b[2m…\x1b[0m` wrap would let the first inner reset cancel the faint
 // attribute, half-brightening the rest of the row. Re-arm faint after every
 // inner reset so the whole line stays dimmed. Only ever applied to active/recent
@@ -772,9 +760,8 @@ export function isFailingBusy(
   return entry?.prState === "failing" && entry?.agentStatus === "working";
 }
 
-// Distill the trellis fields off a registry entry into the WorkerInfo
-// shape used by the renderer. Returns undefined for default-workflow
-// workers — the bracket is omitted.
+// Distill the CI-fix state off a registry entry into the WorkerInfo shape the
+// renderer uses. Undefined when the worker is neither fixing nor failing on CI.
 function ciInfoFor(entry?: {
   workflow?: string;
   prState?: string;
@@ -783,8 +770,6 @@ function ciInfoFor(entry?: {
   ciFixAttempts?: number;
 }): WorkerInfo["ci"] {
   if (!entry) return undefined;
-  // Trellis vines already get a full bracket — don't double-decorate.
-  if (entry.workflow === "trellis") return undefined;
   const inCiFix = entry.prState === "ci-fixing";
   const ciFailing = entry.prState === "failing" && entry.failingReason === "ci";
   if (!inCiFix && !ciFailing) return undefined;
@@ -801,21 +786,8 @@ function ciInfoFor(entry?: {
 // Kept inline to avoid commands/status.ts pulling in the poller graph.
 const CI_FIX_BUDGET_DISPLAY = 3;
 
-function trellisInfoFor(entry?: { workflow?: string; trellis?: { name: string; iteration?: number; maxIterations?: number; lastDrift?: string[]; lastVerdict?: string; aligned?: boolean }; failingReason?: string }): WorkerInfo["trellis"] {
-  if (!entry || entry.workflow !== "trellis") return undefined;
-  const t = entry.trellis;
-  return {
-    name: t?.name ?? "?",
-    iteration: t?.iteration ?? 0,
-    maxIterations: t?.maxIterations ?? 30,
-    driftCount: t?.lastVerdict === "DRIFT" ? (t.lastDrift?.length ?? 0) : 0,
-    aligned: t?.aligned === true,
-    failingReason: entry.failingReason,
-  };
-}
-
 // Distill the grow loop counter off a registry entry. Returns undefined for
-// non-grow workers — the parity counterpart of trellisInfoFor.
+// non-grow workers.
 function growInfoFor(entry?: { workflow?: string; grow?: { iteration?: number; maxIterations?: number } }): WorkerInfo["grow"] {
   if (!entry || entry.workflow !== "grow") return undefined;
   return {
@@ -826,8 +798,7 @@ function growInfoFor(entry?: { workflow?: string; grow?: { iteration?: number; m
 
 // Format the CI bracket for a default-workflow row when the worker is in
 // `ci-fixing` (auto-fix in flight) or `failing` with reason `ci` (auto-fix
-// exhausted). Trellis vines route through formatTrellisBracket above and
-// don't reach here. The bracket is a status-class flag: collectSegments folds
+// exhausted). The bracket is a status-class flag: collectSegments folds
 // it into `seg.flags`, placed at the end of the row after the detail column
 // and never truncated. Its single leading space separates it from the
 // preceding column.
@@ -843,41 +814,6 @@ export function formatCiBracket(ci: WorkerInfo["ci"]): string {
     return ` [CI ✗${sha}]`;
   }
   return "";
-}
-
-// Format the trellis bracket for a vine row. Layout per WORKFLOWS.md
-// "Worker row":
-//   Active vine, drifting:   [trellis: auth-rewrite | 4/30 | 3 drift]
-//   Aligned terminal:        [trellis: auth-rewrite | ✓ aligned, 7 iters]
-//   Flagged:                 [trellis: auth-rewrite | flagged]
-//   Budget exhausted:        [trellis: auth-rewrite | budget exhausted]
-//   Stagnated (v1.5):        [trellis: auth-rewrite | stagnated]
-// Iteration counter color: white normally, yellow at ≥80% of cap,
-// red at ≥95%. The bracket is returned without a leading separator;
-// workflowRowDecor places it in the detail column (the elastic slot) so its
-// "[" aligns with the detail column of sibling rows.
-export function formatTrellisBracket(t: WorkerInfo["trellis"]): string {
-  if (!t) return "";
-  // Failed states: prefer the failure reason over the iteration counter.
-  if (t.failingReason === "trellis-flagged") {
-    return `[trellis: ${t.name} | flagged]`;
-  }
-  if (t.failingReason === "iteration-budget") {
-    return `[trellis: ${t.name} | budget exhausted]`;
-  }
-  if (t.failingReason === "stagnation") {
-    return `[trellis: ${t.name} | stagnated]`;
-  }
-  // Aligned terminal: distinguish reviewer-declared success from operator
-  // sentinel-set with a check decoration + iteration count.
-  if (t.aligned) {
-    const noun = t.iteration === 1 ? "iter" : "iters";
-    return `[trellis: ${t.name} | ✓ aligned, ${t.iteration} ${noun}]`;
-  }
-  // Active loop. Iteration counter with color thresholds.
-  const iterStr = colorizeIteration(t.iteration, t.maxIterations);
-  const driftSeg = t.driftCount > 0 ? ` | ${t.driftCount} drift` : "";
-  return `[trellis: ${t.name} | ${iterStr}${driftSeg}]`;
 }
 
 // The detail column leads with the thread's topic in every lifecycle state, so
@@ -896,13 +832,10 @@ function composeDetail(topic: string, annotation?: string, workflowDetail?: stri
 // full poller graph into status.ts's import closure (used by `garden status`,
 // plot-status.ts, and the dist/hook.js bundle) — the exact boundary
 // CI_FIX_BUDGET_DISPLAY is inlined to preserve. `detail` fills the elastic
-// detail column; a vine shows its bracket, a grow loop its "grow N/M" counter
-// (the parity fix — trellis had a counter, grow had nothing). `badge` joins
+// detail column; a grow loop shows its "grow N/M" counter. `badge` joins
 // the grey trailing identity cluster — the designer tag lives there.
 function workflowRowDecor(worker: WorkerInfo): { badge?: string; detail?: string } {
   switch (worker.workflow) {
-    case "trellis":
-      return { detail: formatTrellisBracket(worker.trellis) };
     case "grow":
       return { detail: `grow ${worker.grow?.iteration ?? 0}/${worker.grow?.maxIterations ?? 0}` };
     case "designer":
@@ -1093,14 +1026,6 @@ function formatCrewBadge(project: ProjectConfig, config: GardenConfig): string {
   return ` \x1b[90m${deriveCrew(project, config) ?? "custom"}\x1b[0m`;
 }
 
-function colorizeIteration(iter: number, max: number): string {
-  const ratio = max > 0 ? iter / max : 0;
-  const text = `${iter}/${max}`;
-  if (ratio >= 0.95) return `\x1b[31m${text}\x1b[0m`;   // red
-  if (ratio >= 0.80) return `\x1b[33m${text}\x1b[0m`;   // yellow
-  return text;                                          // default
-}
-
 // States that carry a dim elapsed-time-in-state suffix ("reviewing 12m",
 // "merging 47m", "asking 2h"). These are the pipeline and blocked states — the
 // "autonomous middle" where a row is otherwise log-shaped and the operator
@@ -1248,7 +1173,6 @@ function collectWorkers(
       workflow: entry?.workflow,
       crew: entry?.crew,
       grow: growInfoFor(entry),
-      trellis: trellisInfoFor(entry),
       holisticFinal: entry?.holisticFinalActive,
       ci: ciInfoFor(entry),
       reviewBlocked: entry?.reviewBlockedReason,
@@ -1283,7 +1207,6 @@ function collectWorkers(
       workflow: entry?.workflow,
       crew: entry?.crew,
       grow: growInfoFor(entry),
-      trellis: trellisInfoFor(entry),
       holisticFinal: entry?.holisticFinalActive,
       ci: ciInfoFor(entry),
       reviewBlocked: entry?.reviewBlockedReason,

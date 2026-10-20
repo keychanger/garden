@@ -11,8 +11,8 @@ import { resolveWorkerArg } from "./resolve-worker.js";
 // went off-rails without emitting a verdict, reviewer killed by the wall-clock
 // cap before it could emit one. For these, `kick` re-queues the review without
 // requiring new commits. A FAILED verdict is re-queued only on the explicit
-// --retry-review; everything else (trellis-flagged, iteration-budget, ci)
-// needs new commits or the specific workflow command — kick should refuse.
+// --retry-review; everything else (code, ci, oversized-diff) needs new commits
+// — kick should refuse.
 const REVIEW_SIDE_FAILING_REASONS: ReadonlySet<FailingReason> = new Set<FailingReason>([
   "unparseable-verdict",
   "transient-review",
@@ -51,11 +51,7 @@ export async function kick(args: string[]): Promise<void> {
         `review-side failures (${[...REVIEW_SIDE_FAILING_REASONS].join(", ")}); ` +
         `for code failures push a new commit (or, after repairing the review environment, ` +
         `inspect garden review and use --retry-review for a fresh full review), for oversized-diff split the work ` +
-        `across smaller branches (a retry on the same diff fails identically), ` +
-        `for trellis-flagged run ` +
-        `'garden trellis resume', for an exhausted iteration budget inspect and ` +
-        `amend the trellis, then re-spawn the vine with a higher --max-iterations ` +
-        `(or kill it).`
+        `across smaller branches (a retry on the same diff fails identically).`
       : `. Kick only re-arms workers stranded in working or review-side failing — ` +
         `for other states, investigate the poller log or the alerts panel.`;
     throw new Error(

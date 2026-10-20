@@ -64,30 +64,34 @@ describe("resolveReviewRole", () => {
     expect(r.model).toBe("sonnet");
   });
 
+  // No shipped workflow pins a reviewer model, so these register one that does.
+  // It pins "sonnet", which the Opus safety-net default cannot be mistaken for.
+  async function pinnedReviewerWorkflow(): Promise<string> {
+    const { registerWorkflow, defaultWorkflow } = await import("../src/dashboard/workflows/index.js");
+    registerWorkflow({ ...defaultWorkflow, name: "pinned-reviewer", reviewerModel: "sonnet" });
+    return "pinned-reviewer";
+  }
+
   it("an explicit reviewer model beats the workflow's reviewerModel", async () => {
     const { resolveReviewRole } = await importRoles();
-    // trellis pins reviewerModel=opus; an explicit override wins over it.
     const r = resolveReviewRole(
-      project({ roles: { reviewer: { model: "haiku" } } }), "trellis", "reviewer");
+      project({ roles: { reviewer: { model: "haiku" } } }), await pinnedReviewerWorkflow(), "reviewer");
     expect(r.model).toBe("haiku");
   });
 
   it("still applies the workflow's reviewerModel on the claude-code path", async () => {
     const { resolveReviewRole } = await importRoles();
-    // trellis pins reviewerModel=opus; a default (unpinned) claude-code reviewer
-    // on a trellis worker inherits it.
-    const r = resolveReviewRole(project(), "trellis", "reviewer");
+    const r = resolveReviewRole(project(), await pinnedReviewerWorkflow(), "reviewer");
     expect(r.harness).toBe("claude-code");
-    expect(r.model).toBe("opus");
+    expect(r.model).toBe("sonnet");
   });
 
   it("uses Codex defaults instead of leaking the workflow's reviewerModel", async () => {
     const { resolveReviewRole } = await importRoles();
-    // trellis pins reviewerModel=opus, an Anthropic alias meaningless to Codex.
-    // The workflow model is a claude-code-only term; the Codex harness applies
-    // its own model and effort defaults instead.
+    // The workflow model is an Anthropic alias, meaningless to Codex; the Codex
+    // harness applies its own model and effort defaults instead.
     const r = resolveReviewRole(
-      project({ roles: { reviewer: { harness: "codex" } } }), "trellis", "reviewer");
+      project({ roles: { reviewer: { harness: "codex" } } }), await pinnedReviewerWorkflow(), "reviewer");
     expect(r.harness).toBe("codex");
     expect(r.model).toBe("gpt-6-astra");
     expect(r.effort).toBe("high");

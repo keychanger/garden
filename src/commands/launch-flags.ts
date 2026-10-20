@@ -18,8 +18,7 @@ export function requireModelValue(raw: string): string {
 
 // --effort accepts the four reasoning rungs or "ultra" (the ultracode preset:
 // max effort + dynamic workflows). Maps to newWorker's effort/ultracode fields
-// — the two are mutually exclusive, so exactly one is returned. Default/grow
-// only; trellis resolves its own model and carries no effort.
+// — the two are mutually exclusive, so exactly one is returned.
 export function parseEffortFlag(raw: string): { effort?: string; ultracode?: boolean } {
   const value = raw.trim();
   if (value === "ultra") return { ultracode: true };

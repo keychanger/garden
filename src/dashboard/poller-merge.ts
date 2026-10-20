@@ -18,7 +18,6 @@ import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
 import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel, workerInputBlocker } from "./continue.js";
 import { dispatchDelayedGrowContinue } from "./grow-continue.js";
-import { dispatchDelayedTrellisContinue } from "./trellis-continue.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
   abortRebase, cleanWorktree, deleteRemoteBranch, ensureNoRebaseInProgress,
@@ -180,9 +179,8 @@ export function handleMergePending(
   // re-running rebase + force-push here hits a force-with-lease "stale info"
   // rejection against the now-deleted/diverged remote branch, and the force-push
   // catch below now re-arms a full re-review of an already-merged worker and
-  // fires a spurious push-failed alert (it no longer strands, but the wasted
-  // cycle also masks a trellis ALIGNED convergence). Detect it and resume
-  // finalization idempotently instead.
+  // fires a spurious push-failed alert (it no longer strands, but the cycle
+  // is wasted). Detect it and resume finalization idempotently instead.
   const headSha = getBranchHeadSha(wtPath);
   if (headSha && isAncestor(wtPath, headSha, `origin/${baseBranch}`)) {
     resumeInterruptedMerge(projectName, projectPath, baseBranch, entry);
@@ -1034,11 +1032,9 @@ function maybeAutoContinue(
       trigger,
     },
   });
-  // Trellis and grow loops reset to a fresh Claude session every iteration
-  // (per-iteration context reset). Default workers send into the live session.
-  if (entry.workflow === "trellis") {
-    dispatchDelayedTrellisContinue(resolveGardenRunner(), projectName, entry.name);
-  } else if (entry.workflow === "grow") {
+  // Grow loops reset to a fresh Claude session every iteration (per-iteration
+  // context reset). Default workers send into the live session.
+  if (entry.workflow === "grow") {
     dispatchDelayedGrowContinue(resolveGardenRunner(), projectName, entry.name);
   } else {
     dispatchDelayedAutoContinue(resolveGardenRunner(), projectName, entry.name);

@@ -19,9 +19,6 @@ import {
   HANDOFF_SKILL_DIRNAME,
   HANDOFF_SKILL_FILENAME,
   HANDOFF_SKILL_CONTENT,
-  TRELLIS_AUTHOR_SKILL_DIRNAME,
-  TRELLIS_AUTHOR_SKILL_FILENAME,
-  TRELLIS_AUTHOR_SKILL_CONTENT,
   GROW_SKILL_DIRNAME,
   GROW_SKILL_FILENAME,
   GROW_SKILL_CONTENT,
@@ -151,8 +148,6 @@ describe("installClaudeSkills", () => {
     );
     expect(DESIGNER_SKILL_CONTENT).toContain("inlines the full design");
     expect(DESIGNER_SKILL_CONTENT).toContain("Do NOT pass `--expect-callback`");
-    // Trellis builders stay operator-run — the handoff IPC is default-only.
-    expect(DESIGNER_SKILL_CONTENT).toContain("--workflow trellis --trellis");
   });
 
   it("writes the planner skill alongside the others", () => {
@@ -332,61 +327,6 @@ describe("HANDOFF_SKILL_CONTENT", () => {
   });
 });
 
-describe("TRELLIS_AUTHOR_SKILL_CONTENT", () => {
-  it("starts with valid frontmatter declaring the skill name", () => {
-    expect(TRELLIS_AUTHOR_SKILL_CONTENT).toMatch(/^---\nname: trellis-author\n/);
-  });
-
-  it("description triggers on operator intent to formalize a feature as a trellis", () => {
-    const match = TRELLIS_AUTHOR_SKILL_CONTENT.match(/description: ([^\n]+)/);
-    expect(match).not.toBeNull();
-    const desc = match![1].toLowerCase();
-    expect(desc).toContain("trellis");
-    // The trigger must be operator-driven; the skill should not self-fire.
-    expect(desc).toMatch(/operator|formaliz/);
-  });
-
-  it("walks through scope sizing, spine, sections, and self-review", () => {
-    const body = TRELLIS_AUTHOR_SKILL_CONTENT.toLowerCase();
-    expect(body).toContain("scope sizing");
-    expect(body).toContain("spine");
-    expect(body).toMatch(/recommended sections|recommended/i);
-    expect(body).toContain("self-review");
-  });
-
-  it("names the spec sentinel and the trellis tag explicitly", () => {
-    expect(TRELLIS_AUTHOR_SKILL_CONTENT).toContain("the code is wrong");
-    expect(TRELLIS_AUTHOR_SKILL_CONTENT).toContain("<!-- trellis: v1 -->");
-  });
-
-  it("calls out 'Out of scope' as load-bearing", () => {
-    expect(TRELLIS_AUTHOR_SKILL_CONTENT).toContain("Out of scope");
-  });
-});
-
-describe("installClaudeSkills — trellis-author", () => {
-  it("writes SKILL.md under .claude/skills/trellis-author alongside done and handoff", () => {
-    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
-    expect(fs.mkdirSync).toHaveBeenCalledWith(
-      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/trellis-author",
-      { recursive: true },
-    );
-    expect(fs.renameSync).toHaveBeenCalledWith(
-      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/trellis-author/SKILL.md."),
-      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/trellis-author/SKILL.md",
-    );
-    expect(fs.writeFileSync).toHaveBeenCalledWith(
-      expect.stringContaining("/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/trellis-author/SKILL.md."),
-      TRELLIS_AUTHOR_SKILL_CONTENT,
-    );
-  });
-
-  it("constants match what installClaudeSkills writes", () => {
-    expect(TRELLIS_AUTHOR_SKILL_DIRNAME).toBe("trellis-author");
-    expect(TRELLIS_AUTHOR_SKILL_FILENAME).toBe("SKILL.md");
-  });
-});
-
 describe("GROW_SKILL_CONTENT", () => {
   it("starts with valid frontmatter declaring the skill name", () => {
     expect(GROW_SKILL_CONTENT).toMatch(/^---\nname: grow\n/);
@@ -400,7 +340,7 @@ describe("GROW_SKILL_CONTENT", () => {
     expect(desc).toContain("grow loop");
     expect(desc).toMatch(/\/grow|harden|improvement pass|convert/);
     // Self-fire is forbidden: the description must explicitly negate
-    // unprompted invocation, the same way handoff and trellis-author do.
+    // unprompted invocation, the same way handoff does.
     expect(desc).toContain("not");
   });
 
@@ -422,9 +362,9 @@ describe("GROW_SKILL_CONTENT", () => {
     expect(body).toMatch(/done look|convergence criterion/);
   });
 
-  it("calls out when NOT to invoke the skill (already grow/trellis, unprompted)", () => {
+  it("calls out when NOT to invoke the skill (already grow, unprompted)", () => {
     expect(GROW_SKILL_CONTENT.toLowerCase()).toContain("when not to use");
-    // Should warn about both re-conversion (already on grow/trellis) and
+    // Should warn about both re-conversion (already on grow) and
     // unprompted self-invocation, so the worker doesn't fire it on its own.
     expect(GROW_SKILL_CONTENT.toLowerCase()).toMatch(/already on.*workflow|re-conversion|already.*grow/);
     expect(GROW_SKILL_CONTENT.toLowerCase()).toMatch(/operator did not ask|self-conversion/);

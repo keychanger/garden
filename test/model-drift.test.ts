@@ -197,17 +197,6 @@ describe("sweepWorkerModels", () => {
     expect(hasModelDrift(workers.wolf[0])).toBe(true);
   });
 
-  it("compares a trellis vine against its own workerModel pin", () => {
-    workers.wolf = [worker({
-      workflow: "trellis",
-      trellis: { name: "auth", iteration: 2, maxIterations: 30, workerModel: "gpt-5.6-sol" },
-      transcriptPath: rollout("vine", ["gpt-6-astra"]),
-    })];
-
-    sweepWorkerModels({ workers } as never);
-    expect(hasModelDrift(workers.wolf[0])).toBe(true);
-  });
-
   it("re-sweeps a standing drift without re-writing", () => {
     workers.wolf = [worker({
       model: "gpt-5.6-sol",

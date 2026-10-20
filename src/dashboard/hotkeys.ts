@@ -190,7 +190,7 @@ function bindMeta(key: string, command: string): void {
   // bind-key makes tmux treat it as a top-level command separator: bind-key
   // gets only `send-keys -X cancel` and the `run-shell <guarded>` fires
   // immediately at setup time — once per key per table, dispatching every
-  // dashboard hotkey command (including _trellis-picker) every time
+  // dashboard hotkey command (including _workflow-picker) every time
   // setupKeybindings runs (e.g., after each garden post-merge rebuild).
   const body = `send-keys -X cancel ; run-shell -b ${tmuxDoubleQuote(guarded)}`;
   for (const table of ["copy-mode", "copy-mode-vi"]) {

@@ -157,7 +157,7 @@ export function tmuxBatch(...groups: string[][]): void {
 // is the old behavior rather than a prompt that never lands.
 //
 // A confirming Enter follows PASTE_CONFIRM_ENTER_MS later — the cold-respawn
-// safety net. On a freshly respawned TUI (per-iteration trellis/grow reseed,
+// safety net. On a freshly respawned TUI (per-iteration grow reseed,
 // handoff seeds) the first Enter can still be absorbed while the TUI finishes
 // binding its input handler, leaving the prompt sitting unsent until an
 // operator hits Enter by hand. Sending a second Enter unconditionally is safe:

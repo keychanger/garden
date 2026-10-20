@@ -525,7 +525,7 @@ cannot be expressed as "wait for an event":
   classifier also can't determine one.
 - **Auto-continue prompt delays (3 / 5 / 6 s)** — give Claude's TUI
   time to take over the pane's stdin before send-keys lands keystrokes.
-  Source: `continue.ts` and `trellis-continue.ts` `dispatchDelayed*`.
+  Source: `continue.ts` and `grow-continue.ts` `dispatchDelayed*`.
 - **Garden post-rebuild refresh** — fired after `npm run build`
   succeeds so the dashboard picks up the new code. Source:
   `poller-merge.ts` `runPostMerge`.
@@ -558,9 +558,8 @@ cannot be expressed as "wait for an event":
   `ci-fixing`, `merge-pending`, `merged`; plus two stranding sub-states in
   otherwise-quiescent states — `working` with `pendingReviewAt` set, and
   `failing` mid-debounce, where an operator's pushed fix advanced `lastSeenSha`
-  past the pinned `failingSha` so a debounced failing→working poke is owed
-  (operator-action dispositions — `trellis-flagged`/`iteration-budget`/
-  `stagnation` — are excluded, they stay parked)) whose latest activity
+  past the pinned `failingSha` so a debounced failing→working poke is owed)
+  whose latest activity
   timestamp has aged past a
   5 min threshold, recovering dropped one-shot events (a poke lost in the
   poller kill→spawn gap, a reboot-killed detached delayed poke, a dropped

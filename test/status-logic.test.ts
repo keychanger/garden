@@ -757,34 +757,7 @@ describe("renderQuickStatus", () => {
     expect(result).toContain("beta");
   });
 
-  it("renders a trellis vine's bracket in the activity slot and drops its activity", () => {
-    vi.mocked(getWorkers).mockReturnValue([
-      {
-        name: "bold-ash",
-        sessionId: "abc",
-        task: "implementing the auth rewrite per the trellis",
-        agentStatus: "working",
-        workflow: "trellis",
-        trellis: {
-          name: "auth-rewrite",
-          iteration: 4,
-          maxIterations: 30,
-          lastVerdict: "DRIFT",
-          lastDrift: ["a", "b", "c"],
-        },
-      },
-    ]);
-    const result = renderQuickStatus(state);
-    // The bracket renders, and the live activity is dropped (redundant with
-    // the trellis name) so the row can't blow its width and wrap in the pane.
-    expect(result).toContain("[trellis: auth-rewrite | 4/30 | 3 drift]");
-    expect(result).not.toContain("implementing the auth rewrite");
-    // The bracket sits in the activity slot — two spaces ahead of "[" — so its
-    // "[" lines up with the activity column on sibling rows.
-    expect(result).toContain("  [trellis: auth-rewrite");
-  });
-
-  it("keeps the live activity on a default-workflow row (bracket drop is trellis-only)", () => {
+  it("keeps the live activity on a default-workflow row", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "rewiring the poller", agentStatus: "working" },
     ]);
@@ -998,17 +971,11 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).not.toContain(GREY);
   });
 
-  it("badges a pinned worker model, and a trellis vine's workerModel", () => {
+  it("badges a pinned worker model", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", model: "sonnet" },
     ]);
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}sonnet${RESET}`);
-
-    vi.mocked(getWorkers).mockReturnValue([
-      { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle", workflow: "trellis",
-        trellis: { name: "auth", iteration: 2, maxIterations: 30, workerModel: "opus" } },
-    ]);
-    expect(lineFor(renderQuickStatus(state), "bold-ash")).toContain(`${GREY}opus${RESET}`);
   });
 
   it("renders the OBSERVED model, not the pin, when the harness moved off it", () => {
@@ -1212,14 +1179,14 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(line).toContain("wiring the DAG");
   });
 
-  it("renders grow N/M in the detail column (parity with the trellis counter)", () => {
+  it("renders grow N/M in the detail column", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "polishing", agentStatus: "working",
         workflow: "grow", grow: { seed: "harden", iteration: 2, maxIterations: 5 } },
     ]);
     const line = lineFor(renderQuickStatus(state), "bold-ash");
     expect(line).toContain("grow 2/5");
-    // The counter replaces the live activity, just as the trellis bracket does.
+    // The counter replaces the live activity.
     expect(line).not.toContain("polishing");
   });
 

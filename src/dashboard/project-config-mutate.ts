@@ -37,8 +37,8 @@ import {
 export const SETTABLE_KEYS = [
   "baseBranch", "checks", "postMerge", "sandboxDomains", "sandboxDenyCredentials", "sandboxAllowLocalBinding",
   "claudeProfile", "provider",
-  "harness", "model", "effort", "logColor", "displayName", "trellisDir", "maxTrellisIterations",
-  "trellisOpusFallback", "maxGrowIterations", "requireCiSuccess", "holisticReview",
+  "harness", "model", "effort", "logColor", "displayName",
+  "maxGrowIterations", "requireCiSuccess", "holisticReview",
   "beadIntake", "beadIntakeCap", "beadsDir",
 ] as const;
 export type SettableKey = typeof SETTABLE_KEYS[number];
@@ -190,7 +190,7 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
         message = `Cleared ${key} for ${projectName} (workers use the account/provider default)`;
       } else {
         project.model = value.trim();
-        message = `Set ${key} = ${project.model} for ${projectName} (default/grow workers; per-spawn --model and the ultracode preset override it; trellis and the review family ignore it)`;
+        message = `Set ${key} = ${project.model} for ${projectName} (default/grow workers; per-spawn --model and the ultracode preset override it; the review family ignores it)`;
       }
     } else if (key === "effort") {
       if (value === "" || value === "unset" || value === "null") {
@@ -201,31 +201,9 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
         const suffix = value === "ultra"
           ? " (ultracode preset: max effort + dynamic workflows)"
           : "";
-        message = `Set ${key} = ${value} for ${projectName}${suffix} (default/grow workers; per-spawn --effort overrides it; trellis ignores it)`;
+        message = `Set ${key} = ${value} for ${projectName}${suffix} (default/grow workers; per-spawn --effort overrides it)`;
       } else {
         throw new Error(`effort must be one of: ${PROJECT_EFFORT_VALUES.join(", ")}, got '${value}'`);
-      }
-    } else if (key === "maxTrellisIterations") {
-      if (value === "" || value === "unset" || value === "null") {
-        delete project.maxTrellisIterations;
-        message = `Cleared ${key} for ${projectName} (default: 30)`;
-      } else {
-        const n = Number.parseInt(value, 10);
-        if (!Number.isFinite(n) || n < 1) {
-          throw new Error(`maxTrellisIterations must be a positive integer, got '${value}'`);
-        }
-        project.maxTrellisIterations = n;
-        message = `Set ${key} = ${n} for ${projectName}`;
-      }
-    } else if (key === "trellisOpusFallback") {
-      if (value === "" || value === "unset" || value === "null") {
-        delete project.trellisOpusFallback;
-        message = `Cleared ${key} for ${projectName} (default: true)`;
-      } else if (value === "true" || value === "false") {
-        project.trellisOpusFallback = value === "true";
-        message = `Set ${key} = ${value} for ${projectName}`;
-      } else {
-        throw new Error(`trellisOpusFallback must be 'true' or 'false', got '${value}'`);
       }
     } else if (key === "maxGrowIterations") {
       if (value === "" || value === "unset" || value === "null") {

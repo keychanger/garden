@@ -398,27 +398,6 @@ describe("updateWorkerFields", () => {
     expect(worker.parentWorker).toBe("bold-ash");
   });
 
-  // Deep-merge regression: a partial trellis update must preserve the other
-  // trellis fields. A naive shallow Object.assign would have replaced the
-  // whole sub-object and dropped name/path/iteration on every poller write.
-  it("deep-merges the trellis sub-object instead of clobbering it", async () => {
-    const { addWorker, updateWorkerFields, getWorkers } = await importRegistry();
-    addWorker("proj", {
-      name: "swift-vine", sessionId: "s1", task: "", workflow: "trellis",
-      trellis: { name: "auth", path: "/tmp/auth.md", iteration: 2, maxIterations: 30 },
-    });
-    updateWorkerFields("proj", "swift-vine", {
-      trellis: { lastVerdict: "DRIFT", lastDrift: ["1. [tests] missing"] },
-    });
-    const t = getWorkers("proj")[0].trellis!;
-    expect(t.name).toBe("auth");
-    expect(t.path).toBe("/tmp/auth.md");
-    expect(t.iteration).toBe(2);
-    expect(t.maxIterations).toBe(30);
-    expect(t.lastVerdict).toBe("DRIFT");
-    expect(t.lastDrift).toEqual(["1. [tests] missing"]);
-  });
-
   // Same regression check for the grow sub-object — every iteration's
   // increment writes only `{ grow: { iteration: N } }`, so the seed and
   // maxIterations must survive without being clobbered.
@@ -524,29 +503,6 @@ describe("batchUpdateWorkerFields", () => {
     expect(() => batchUpdateWorkerFields([])).not.toThrow();
   });
 
-  it("deep-merges the trellis sub-object and logs prState transitions", async () => {
-    const { addWorker, batchUpdateWorkerFields, getWorkers } = await importRegistry();
-    addWorker("proj", {
-      name: "swift-vine", sessionId: "s1", task: "",
-      workflow: "trellis", prState: "working",
-      trellis: { name: "auth", path: "/tmp/auth.md", iteration: 1 },
-    });
-    batchUpdateWorkerFields([
-      {
-        project: "proj", workerName: "swift-vine",
-        fields: {
-          prState: "reviewing",
-          trellis: { lastVerdict: "DRIFT" },
-        },
-      },
-    ]);
-    const w = getWorkers("proj")[0];
-    expect(w.prState).toBe("reviewing");
-    expect(w.trellis?.name).toBe("auth");
-    expect(w.trellis?.iteration).toBe(1);
-    expect(w.trellis?.lastVerdict).toBe("DRIFT");
-  });
-
   it("deep-merges the grow sub-object across batch writes", async () => {
     const { addWorker, batchUpdateWorkerFields, getWorkers } = await importRegistry();
     addWorker("proj", {
@@ -633,234 +589,6 @@ describe("getAllWorkerNames", () => {
   it("returns empty array when no workers", async () => {
     const { getAllWorkerNames } = await importRegistry();
     expect(getAllWorkerNames()).toEqual([]);
-  });
-});
-
-// Trellis workflow adds an optional `trellis` sub-object to WorkerEntry
-// holding all per-vine state. Round-trip it through addWorker → readRegistry
-// to confirm shape changes don't break the registry's persistence contract.
-// See WORKFLOWS.md "Worker entry additions".
-describe("trellis WorkerEntry fields", () => {
-  it("round-trips every trellis sub-object field plus failingReason", async () => {
-    const { addWorker, getWorkers } = await importRegistry();
-    addWorker("proj", {
-      name: "swift-oak",
-      sessionId: "s1",
-      task: "",
-      workflow: "trellis",
-      failingReason: "trellis-flagged",
-      trellis: {
-        name: "auth-rewrite",
-        path: "/tmp/auth-rewrite.md",
-        iteration: 3,
-        maxIterations: 30,
-        lastVerdict: "DRIFT",
-        lastDrift: ["[surface] foo() missing", "[tests] no test"],
-        alignedCount: 7,
-        driftHistory: [["a"], ["b"]],
-        shaHistory: ["sha1", "sha2"],
-        stagnationConfirmedAt: 1234567890,
-        flaggedClauses: ["line 47 contradicts line 91"],
-        aligned: true,
-        modelFallbackAt: 1234567899,
-        workerModel: "sonnet",
-      },
-    });
-    const w = getWorkers("proj")[0];
-    expect(w.workflow).toBe("trellis");
-    expect(w.failingReason).toBe("trellis-flagged");
-    const t = w.trellis!;
-    expect(t.name).toBe("auth-rewrite");
-    expect(t.path).toBe("/tmp/auth-rewrite.md");
-    expect(t.iteration).toBe(3);
-    expect(t.maxIterations).toBe(30);
-    expect(t.lastVerdict).toBe("DRIFT");
-    expect(t.lastDrift).toEqual(["[surface] foo() missing", "[tests] no test"]);
-    expect(t.alignedCount).toBe(7);
-    expect(t.driftHistory).toEqual([["a"], ["b"]]);
-    expect(t.shaHistory).toEqual(["sha1", "sha2"]);
-    expect(t.stagnationConfirmedAt).toBe(1234567890);
-    expect(t.flaggedClauses).toEqual(["line 47 contradicts line 91"]);
-    expect(t.aligned).toBe(true);
-    expect(t.modelFallbackAt).toBe(1234567899);
-    expect(t.workerModel).toBe("sonnet");
-  });
-
-  it("default workers omit trellis fields and round-trip cleanly", async () => {
-    const { addWorker, getWorkers } = await importRegistry();
-    addWorker("proj", {
-      name: "bold-ash",
-      sessionId: "s2",
-      task: "",
-      workflow: "default",
-    });
-    const w = getWorkers("proj")[0];
-    expect(w.workflow).toBe("default");
-    expect(w.trellis).toBeUndefined();
-    expect(w.failingReason).toBeUndefined();
-  });
-
-  it("readRegistry migrates legacy flat trellis* fields into the nested trellis sub-object", async () => {
-    // Hand-write a legacy-shape registry to disk: pre-migration entries
-    // carry trellis* fields directly on the entry rather than nested.
-    // readRegistry should detect and migrate them on read; the legacy
-    // keys disappear and the nested shape appears with the same values.
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    const { SESSIONS_DIR } = await import("../src/config.js");
-    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.writeFileSync(registryFile, JSON.stringify({
-      workers: {
-        proj: [{
-          name: "legacy-vine",
-          sessionId: "s1",
-          task: "",
-          workflow: "trellis",
-          // Legacy flat fields:
-          trellisName: "auth",
-          trellisPath: "/tmp/auth.md",
-          trellisIteration: 5,
-          trellisMaxIterations: 30,
-          trellisLastVerdict: "DRIFT",
-          trellisAligned: false,
-          workerModel: "sonnet",
-        }],
-      },
-    }, null, 2));
-
-    const { readRegistry } = await importRegistry();
-    const reg = readRegistry();
-    const w = reg.workers.proj[0];
-    expect(w.trellis).toBeDefined();
-    expect(w.trellis?.name).toBe("auth");
-    expect(w.trellis?.path).toBe("/tmp/auth.md");
-    expect(w.trellis?.iteration).toBe(5);
-    expect(w.trellis?.maxIterations).toBe(30);
-    expect(w.trellis?.lastVerdict).toBe("DRIFT");
-    expect(w.trellis?.aligned).toBe(false);
-    expect(w.trellis?.workerModel).toBe("sonnet");
-    // Legacy fields must be stripped — the entry shape after migration
-    // matches what writers from this build produce.
-    expect((w as Record<string, unknown>).trellisName).toBeUndefined();
-    expect((w as Record<string, unknown>).workerModel).toBeUndefined();
-  });
-
-  it("strips legacy flat fields when both shapes are present (nested form wins)", async () => {
-    // Edge case: a registry written by a mid-rollout build could end up with
-    // both shapes on the same entry. The nested form is authoritative; the
-    // legacy keys must be stripped so subsequent writes don't preserve them.
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    const { SESSIONS_DIR } = await import("../src/config.js");
-    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.writeFileSync(registryFile, JSON.stringify({
-      workers: {
-        proj: [{
-          name: "mixed-vine",
-          sessionId: "s1",
-          task: "",
-          workflow: "trellis",
-          // Both shapes present:
-          trellisName: "stale-name",
-          trellisIteration: 99,
-          trellis: { name: "fresh-name", path: "/tmp/fresh.md", iteration: 7 },
-        }],
-      },
-    }, null, 2));
-
-    const { readRegistry } = await importRegistry();
-    const w = readRegistry().workers.proj[0];
-    expect(w.trellis?.name).toBe("fresh-name");
-    expect(w.trellis?.iteration).toBe(7);
-    expect((w as Record<string, unknown>).trellisName).toBeUndefined();
-    expect((w as Record<string, unknown>).trellisIteration).toBeUndefined();
-  });
-
-  it("readRegistry migrates legacy claudeStatus/lastHookAt to agentStatus/lastEventAt", async () => {
-    // Pre-rename entries (and writes from an in-flight old binary during the
-    // rebuild window) carry the legacy field names on disk. readRegistry
-    // migrates on read, exactly like the trellis migration above.
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    const { SESSIONS_DIR } = await import("../src/config.js");
-    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.writeFileSync(registryFile, JSON.stringify({
-      workers: {
-        proj: [{
-          name: "legacy-status",
-          sessionId: "s1",
-          task: "",
-          claudeStatus: "working",
-          lastHookAt: 1234567,
-        }],
-      },
-    }, null, 2));
-
-    const { readRegistry } = await importRegistry();
-    const w = readRegistry().workers.proj[0];
-    expect(w.agentStatus).toBe("working");
-    expect(w.lastEventAt).toBe(1234567);
-    expect((w as Record<string, unknown>).claudeStatus).toBeUndefined();
-    expect((w as Record<string, unknown>).lastHookAt).toBeUndefined();
-  });
-
-  it("readRegistry migrates the legacy 'botanist' workflow name to 'designer'", async () => {
-    // The design workflow was renamed; entries written before the rename and
-    // the tombstones `garden resurrect` restores from carry the old name.
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    const { SESSIONS_DIR } = await import("../src/config.js");
-    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.writeFileSync(registryFile, JSON.stringify({
-      workers: {
-        proj: [
-          { name: "old-design", sessionId: "s1", task: "", workflow: "botanist", prState: "failing", failingReason: "botanist-scope" },
-          { name: "builder", sessionId: "s2", task: "", workflow: "default" },
-        ],
-      },
-    }, null, 2));
-
-    const { readRegistry } = await importRegistry();
-    const [design, builder] = readRegistry().workers.proj;
-    expect(design.workflow).toBe("designer");
-    expect(design.failingReason).toBe("designer-scope");
-    expect(builder.workflow).toBe("default");
-    expect(builder.failingReason).toBeUndefined();
-  });
-
-  it("keeps the new status fields when both old and new names are present", async () => {
-    // A fresh old-binary write landing on an already-migrated entry leaves
-    // both names on disk; the migrated name is authoritative and the legacy
-    // key is stripped so subsequent writes don't resurrect it.
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    const { SESSIONS_DIR } = await import("../src/config.js");
-    const registryFile = path.join(SESSIONS_DIR, "dashboard.registry.json");
-    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
-    fs.writeFileSync(registryFile, JSON.stringify({
-      workers: {
-        proj: [{
-          name: "mixed-status",
-          sessionId: "s1",
-          task: "",
-          claudeStatus: "idle",
-          agentStatus: "working",
-          lastHookAt: 1,
-          lastEventAt: 2,
-        }],
-      },
-    }, null, 2));
-
-    const { readRegistry } = await importRegistry();
-    const w = readRegistry().workers.proj[0];
-    expect(w.agentStatus).toBe("working");
-    expect(w.lastEventAt).toBe(2);
-    expect((w as Record<string, unknown>).claudeStatus).toBeUndefined();
-    expect((w as Record<string, unknown>).lastHookAt).toBeUndefined();
   });
 });
 
@@ -1213,5 +941,35 @@ describe("createdAt backfill on read", () => {
     const { readRegistry, REGISTRY_FILE } = await importRegistry();
     writeEntry(REGISTRY_FILE, { lastStateChangeAt: 5, lastEventAt: 999 });
     expect(readRegistry().workers.proj[0].lastStateChangeAt).toBe(5);
+  });
+});
+
+// The trellis workflow was retired. An entry that ran it (or one parked on a
+// failing reason only trellis could clear) must stay manageable, not stranded
+// on a workflow and a disposition nothing handles any more.
+describe("retired trellis workflow on read", () => {
+  function writeEntry(REGISTRY_FILE: string, entry: Record<string, unknown>): void {
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [{ name: "w", sessionId: "s", task: "", ...entry }] } }));
+  }
+
+  it("carries a trellis worker on as a default worker", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    writeEntry(REGISTRY_FILE, { workflow: "trellis" });
+    expect(readRegistry().workers.proj[0].workflow).toBe("default");
+  });
+
+  it.each(["trellis-flagged", "iteration-budget", "stagnation"])(
+    "re-files a %s failure as a code failure, which a new push re-reviews",
+    async (reason) => {
+      const { readRegistry, REGISTRY_FILE } = await importRegistry();
+      writeEntry(REGISTRY_FILE, { workflow: "trellis", prState: "failing", failingReason: reason });
+      expect(readRegistry().workers.proj[0].failingReason).toBe("code");
+    },
+  );
+
+  it("leaves other failing reasons alone", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    writeEntry(REGISTRY_FILE, { prState: "failing", failingReason: "ci" });
+    expect(readRegistry().workers.proj[0].failingReason).toBe("ci");
   });
 });

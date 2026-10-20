@@ -7,7 +7,7 @@
 // re-wrap the value in `shellEscape(...)` — that would single-quote the
 // whole multi-token string and turn it into a non-existent filename
 // containing a literal space (the bug from commit 8d334f3 that broke the
-// status pane, Claude Code hooks, auto-continue, and trellis menus
+// status pane, Claude Code hooks, auto-continue, and the dashboard menus
 // silently — the shell printed `No such file or directory` for a path
 // containing the space between `node` and the script).
 //

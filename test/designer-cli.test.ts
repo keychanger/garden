@@ -56,24 +56,6 @@ describe("garden designer publish", () => {
     );
   });
 
-  it("threads the project's configured trellisDir into the publish guidance", async () => {
-    seedDesigner();
-    vi.mocked(tryGetProject).mockReturnValue({
-      name: "proj",
-      path: "/tmp/proj",
-      trellisDir: "docs/trellises",
-    });
-    vi.spyOn(console, "log").mockImplementation(() => {});
-
-    await designer(["publish", "--to", "docs/future/design.md"]);
-
-    expect(publishDesignerArtifact).toHaveBeenCalledWith(
-      "/tmp/wt/proj/bold-ash",
-      "docs/future/design.md",
-      { dryRun: false, project: "proj", trellisDir: "docs/trellises" },
-    );
-  });
-
   it("requires --to", async () => {
     seedDesigner();
     await expect(designer(["publish"])).rejects.toThrow(/--to is required/);

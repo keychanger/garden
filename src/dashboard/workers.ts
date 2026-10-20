@@ -29,11 +29,10 @@ import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
 import { log } from "./log.js";
 import { explainPtyFailure } from "./pty-census.js";
-import { resolveAndApplyVineModel } from "./trellis-model.js";
 import { getWorkflow } from "./workflows/index.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  buildWorktreeContextText, createShellWindow, trellisRelativePathForEntry,
+  buildWorktreeContextText, createShellWindow,
   type WorktreeCommandOptions,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
@@ -116,19 +115,15 @@ export interface NewWorkerOptions {
   // to the builder it spawns. Default and designer workflows only.
   crew?: string;
   // Workflow that drives the new worker's lifecycle. Defaults to "default".
-  // Trellis vines pass "trellis" along with the trellis.name/trellis.path
-  // pair below; see WORKFLOWS.md "Spawning a trellis vine".
   workflow?: string;
   // Per-worker model from `--model` for default and grow workers. Persisted
   // to entry.model and threaded into every launch/respawn/bounce. Opaque
-  // string: an Anthropic alias or a concrete model id. Trellis vines use
-  // trellis.workerModel below instead (iteration-resolved with fallback).
+  // string: an Anthropic alias or a concrete model id.
   model?: string;
   // Ultracode preset (`garden handoff --ultracode`). When true, the worker is
   // stamped with the Opus model pin and launches in Claude Code's ultracode
   // mode (`--effort max` + the dynamic-workflow keyword trigger). Persisted to
   // entry.ultracode + entry.model and threaded into every launch/resume/bounce.
-  // Ignored for trellis vines (they resolve their own model per iteration).
   ultracode?: boolean;
   // Per-worker reasoning effort for default/grow workers. Persisted to
   // entry.effort and rendered by the target harness's adapter. The value is in
@@ -139,19 +134,8 @@ export interface NewWorkerOptions {
   // (CODEX_EFFORT_LEVELS, which include a genuine "ultra" unrelated to the
   // ultracode preset) and renders `-c model_reasoning_effort=<level>`. Stored
   // opaquely — the composer and the CLI each validate against the ladder the
-  // chosen harness actually accepts. Ignored for trellis vines.
+  // chosen harness actually accepts.
   effort?: string;
-  // Trellis-specific options, ignored unless workflow === "trellis".
-  trellis?: {
-    name: string;
-    path: string;
-    maxIterations: number;
-    /** Per-worker model override from `--model` at plant time. Persisted
-     *  to entry.trellis.workerModel and read by each iteration's
-     *  resolveVineModel call. Absent → workflow.workerModel default
-     *  ("sonnet"). */
-    workerModel?: string;
-  };
   // Grow-specific options, ignored unless workflow === "grow". The seed is
   // the operator's task description, persisted on entry.grow.seed and
   // inlined into iter ≥ 2 continue prompts. maxIterations bounds the loop.
@@ -212,13 +196,13 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
   // Worker harness selection (agent CLI in the pane): per-worker --harness,
   // else the project default (set directly or by a crew), else claude-code.
-  // The project default applies to the DEFAULT workflow ONLY — trellis/grow
-  // loop mechanics (per-iteration model resolution, cold-respawn session
-  // identity) are wired for claude-code, so a foreign harness worker is
-  // "default workflow only". This mirrors the CLI's explicit --harness guard
-  // (commands/workers.ts), which rejects `--harness` with a non-default
-  // workflow; without this gate a project defaulting to codex (via a crew or
-  // `config <p> harness`) would silently stamp codex onto a trellis/grow vine.
+  // The project default applies to the DEFAULT workflow ONLY — grow's loop
+  // mechanics (cold-respawn session identity) are wired for claude-code, so a
+  // foreign harness worker is "default workflow only". This mirrors the CLI's
+  // explicit --harness guard (commands/workers.ts), which rejects `--harness`
+  // with a non-default workflow; without this gate a project defaulting to
+  // codex (via a crew or `config <p> harness`) would silently stamp codex onto
+  // a grow loop.
   // Validate against the registry so an unknown name fails loudly here rather
   // than silently falling back at launch.
   const workflowName = opts.workflow ?? "default";
@@ -283,8 +267,8 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // member (opts.provider alongside opts.harness) > the per-worker crew's
   // worker half > the project key > the project's bound crew. The one
   // asymmetry is the default-workflow gate: harness is default-only, and a
-  // provider rides with it, so a trellis/grow vine keeps the project's
-  // provider whatever member was named.
+  // provider rides with it, so a grow loop keeps the project's provider
+  // whatever member was named.
   const projectProvider = project.provider ?? projectCrew?.worker.provider;
   // Was a build member named for THIS worker at all? Only then does the pair
   // rule apply; otherwise the project key answers, exactly as before.
@@ -378,16 +362,8 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     }
   }
 
-  // --workflow trellis without opts.trellis is a bug — the CLI must
-  // surface this with a clear error before we add the worker.
-  if (opts.workflow === "trellis" && !opts.trellis) {
-    tmuxDisplay("--workflow trellis requires the trellis options to be set (caller bug).");
-    log.error("workers", "rejected newWorker: workflow=trellis but no trellis opts", {
-      data: { project: targetProject },
-    });
-    return null;
-  }
-  // --workflow grow without opts.grow is the same caller bug.
+  // --workflow grow without opts.grow is a bug — the CLI must surface this
+  // with a clear error before we add the worker.
   if (opts.workflow === "grow" && !opts.grow) {
     tmuxDisplay("--workflow grow requires the grow options to be set (caller bug).");
     log.error("workers", "rejected newWorker: workflow=grow but no grow opts", {
@@ -446,27 +422,16 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     });
   }
 
-  // Compute the worktree-relative trellis path so buildWorktreeRules can
-  // append the trellis-specific paragraphs to the worker's system prompt.
-  // Default workers leave this undefined and get the baseline rules.
-  const trellisRelativePath =
-    opts.workflow === "trellis" && opts.trellis
-      ? path.relative(project.path, opts.trellis.path)
-      : undefined;
-
-  // Stamp the registry entry FIRST so model resolution (below) can read
-  // it. If model resolution refuses (Sonnet exhausted + fallback
-  // disabled), we roll back via removeWorker before any tmux/disk work.
-  // (workflowName resolved above, alongside harness selection.)
+  // Stamp the registry entry FIRST, before any tmux/disk work, so a later
+  // failure rolls back through removeWorker. (workflowName resolved above,
+  // alongside harness selection.)
   // Ultracode preset pins Opus (unless an explicit --model was also passed).
-  // Trellis vines resolve their own model per iteration, so the preset's
-  // model pin does not apply there — only its non-trellis workers get it.
   // Project-level model/effort defaults (config.ts ProjectConfig.model /
   // .effort) sit one layer beneath the per-spawn opts, exactly as
   // resolveSpawnBase layers project.baseBranch beneath --base: per-spawn
   // opts win, the project default fills the gap, the account/provider default
-  // is the floor. They apply to default+grow only — trellis resolves its own
-  // model per iteration and carries no effort, so it never consults them.
+  // is the floor. They apply to default+grow only; the designer and planner
+  // seats carry their own.
   const projectDefaultsApply = workflowName === "default" || workflowName === "grow";
   // The project effort default may itself be "ultra" (the ultracode preset).
   // A per-spawn effort/ultracode gesture wins; otherwise the project default
@@ -503,14 +468,12 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     ? (workerSeat?.model ?? project.model ?? projectSeat?.model)
     : buildingDesignSeat?.model;
   // Workflow-level model/effort defaults (the designer/planner seats → Opus /
-  // xhigh) sit one layer beneath the per-spawn and project defaults, mirroring
-  // how trellis reads workflow.workerModel per iteration. Not applied for
-  // trellis, which resolves its own model per iteration and carries no effort.
+  // xhigh) sit one layer beneath the per-spawn and project defaults.
   const workflowDef = getWorkflow(workflowName);
-  const workflowModelDefault = workflowName !== "trellis" ? workflowDef.workerModel : undefined;
-  const workflowEffortDefault = workflowName !== "trellis" ? workflowDef.workerEffort : undefined;
+  const workflowModelDefault = workflowDef.workerModel;
+  const workflowEffortDefault = workflowDef.workerEffort;
 
-  const ultracode = reqUltracode && workflowName !== "trellis";
+  const ultracode = reqUltracode;
   // Model precedence: per-spawn --model > the ultracode preset's Opus pin
   // (an explicit per-spawn gesture, more specific than a project default) >
   // project.model > the workflow's own default (designer Opus) > account/
@@ -518,13 +481,12 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const effectiveModel = ultracode
     ? (opts.model ?? ULTRACODE_MODEL)
     : (opts.model ?? projectModel ?? workflowModelDefault);
-  // Per-worker effort rung for default/grow/designer. Suppressed for trellis
-  // (own model resolution) and when ultracode is set (that preset already
-  // fixes max effort — the composer/CLI keep them mutually exclusive, this is
-  // defense-in-depth so a caller passing both never double-sets effort). The
-  // workflow default (designer xhigh) fills in when no per-spawn/project rung
-  // was requested.
-  const effectiveEffort = !ultracode && workflowName !== "trellis"
+  // Per-worker effort rung. Suppressed when ultracode is set (that preset
+  // already fixes max effort — the composer/CLI keep them mutually exclusive,
+  // this is defense-in-depth so a caller passing both never double-sets
+  // effort). The workflow default (designer xhigh) fills in when no
+  // per-spawn/project rung was requested.
+  const effectiveEffort = !ultracode
     ? (reqEffort ?? workflowEffortDefault)
     : undefined;
   // origin/<baseBranch> tip at creation — the `from` endpoint of the
@@ -577,34 +539,18 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       // Per-worker crew — its review half, applied live by resolveReviewRole
       // (the build half is already folded into resolvedHarness above).
       ...(opts.crew ? { crew: opts.crew } : {}),
-      // Per-worker model pin for default/grow workers (trellis resolves
-      // per iteration via trellis.workerModel below). Ultracode folds its
-      // Opus pin into effectiveModel above.
-      ...(workflowName !== "trellis" && effectiveModel ? { model: effectiveModel } : {}),
+      // Per-worker model pin. Ultracode folds its Opus pin into
+      // effectiveModel above.
+      ...(effectiveModel ? { model: effectiveModel } : {}),
       // Ultracode launch mode (max effort + dynamic-workflow trigger),
       // threaded into every launch/resume/bounce.
       ...(ultracode ? { ultracode: true } : {}),
       // Per-worker effort rung (default/grow), threaded like model. Never set
       // alongside ultracode (effectiveEffort is undefined then).
       ...(effectiveEffort ? { effort: effectiveEffort } : {}),
-      // Trellis vine data — populated only when workflow === "trellis".
-      // iteration starts at 0; launchReview increments to 1 before the
-      // first review fires. See WORKFLOWS.md "Worker entry additions".
-      ...(workflowName === "trellis" && opts.trellis
-        ? {
-            trellis: {
-              name: opts.trellis.name,
-              path: opts.trellis.path,
-              iteration: 0,
-              maxIterations: opts.trellis.maxIterations,
-              workerModel: opts.trellis.workerModel,
-            },
-          }
-        : {}),
-      // Grow loop data — populated only when workflow === "grow". Same
-      // iteration counter pattern as trellis (starts at 0, launchReview
-      // increments before dispatch). The seed anchors iter ≥ 2 prompts
-      // across context resets.
+      // Grow loop data — populated only when workflow === "grow". The
+      // iteration counter starts at 0 and launchReview increments it before
+      // dispatch. The seed anchors iter ≥ 2 prompts across context resets.
       ...(workflowName === "grow" && opts.grow
         ? {
             grow: {
@@ -631,36 +577,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     createdAt,
   } = createdEntry;
 
-  // For trellis vines, resolve the iteration's model now (before the
-  // bootstrap is built). Resolution may fall back Sonnet → Opus, or
-  // refuse outright when Sonnet is exhausted and trellisOpusFallback
-  // is false. A refusal rolls back the entry and bails — no pane
-  // spawned, no worktree created.
-  let resolvedModel: string | undefined =
-    workflowName !== "trellis" ? effectiveModel : undefined;
-  if (workflowName === "trellis") {
-    const stamped = findWorkerByName(targetProject, workerName);
-    if (stamped) {
-      const m = resolveAndApplyVineModel(targetProject, stamped, getWorkflow("trellis"));
-      if (m === null) {
-        // Sonnet exhausted + trellisOpusFallback=false. Roll back.
-        // Pre-work rollback: no bd claim can exist yet, so raw removeWorker
-        // (not the finalizeWorkerRemoval bead-unclaim tail) is deliberate.
-        removeWorker(targetProject, workerName);
-        tmuxDisplay(
-          `Cannot plant vine: Sonnet exhausted and trellisOpusFallback=false. ` +
-          `Wait for the Sonnet meter to reset, run 'garden auto on', or ` +
-          `set 'garden config ${targetProject} trellisOpusFallback true'.`,
-        );
-        return null;
-      }
-      resolvedModel = m;
-    }
-  }
 
   const launchPlan: WorkerLaunchPlan = {
     ...preflightPlan,
-    model: resolvedModel ?? preflightPlan.model,
+    model: effectiveModel ?? preflightPlan.model,
     ultracode: ultracode || undefined,
     effort: effectiveEffort ?? preflightPlan.effort,
   };
@@ -670,7 +590,6 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // with progress output instead of blocking the hotkey handler. Every
   // production spawn carries the resolved launch plan through this boundary.
   const bootstrapOpts: WorktreeCommandOptions = { launchPlan };
-  if (trellisRelativePath) bootstrapOpts.trellisRelativePath = trellisRelativePath;
   if (workflowName === "designer") bootstrapOpts.designer = true;
   if (workflowName === "planner") bootstrapOpts.planner = true;
   const scriptFile = buildWorktreeBootstrapScript(
@@ -813,7 +732,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       });
     }
   } catch (err) {
-    // addWorker (and trellis model resolution) already wrote the registry
+    // addWorker already wrote the registry
     // entry; if pane creation fails it would otherwise sit in agentStatus=
     // "loading" forever with no pane. Roll back so the next attempt isn't
     // blocked by name collision and the dashboard isn't lying about pending
@@ -823,7 +742,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     // claim is its own first action), so raw removeWorker without the
     // finalizeWorkerRemoval bead-unclaim tail is deliberate.
     //
-    // Unlike the trellis-model rollback above, this one can NOT assume "no
+    // Unlike a pre-spawn rollback, this one can NOT assume "no
     // worktree created". The bootstrap script (git fetch, worktree add, npm
     // install) runs inside the pane, so once respawn-pane has handed it off
     // it is already running detached — a throw from any later step leaves it
@@ -862,7 +781,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
   log.info("workers", "created", {
     worker: workerName,
-    data: { project: targetProject, branch: branchName, model: resolvedModel, background },
+    data: { project: targetProject, branch: branchName, model: effectiveModel, background },
   });
 
   // Ledger the launch now that the pane has actually spawned — emitting
@@ -891,7 +810,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       workflow: workflowName,
       harness: resolvedHarness ?? "claude-code",
       provider: rawProvider ?? null,
-      model: resolvedModel ?? null,
+      model: effectiveModel ?? null,
       ultracode,
       crew: opts.crew ?? project.crew ?? null,
       roles: {
@@ -1117,7 +1036,7 @@ export function killPane(target?: WorkerRemovalTarget): void {
 // exist in exactly one place. Runs OUTSIDE the dashboard state lock: the
 // unclaim shells out to bd (up to ~20s per call under store-lock retries) and
 // must not freeze the dashboard. The pre-work rollback removal sites
-// (trellis-model refusal, tmux spawn failure, bootstrap aborts) deliberately
+// (tmux spawn failure, bootstrap aborts) deliberately
 // stay on raw removeWorker — no bd claim exists there to unclaim.
 export function finalizeWorkerRemoval(
   projectName: string,
@@ -1274,13 +1193,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
   // The worker's own backend, so a bounce cannot rewrite the sandbox's egress
   // allowlist back to the project's provider under a worker launching at
   // another (`""` = explicitly first-party — see workerProject).
-  const trellisRelativePath = projectInfo
-    ? trellisRelativePathForEntry(entry, projectInfo.path)
-    : undefined;
-  // entry.model carries the default/grow per-worker pin; trellis vines
-  // resolve their model per iteration, not on bounce.
   const resumeOpts: WorktreeCommandOptions = { launchPlan, worktreePath: entry.worktreePath };
-  if (trellisRelativePath) resumeOpts.trellisRelativePath = trellisRelativePath;
   if (entry.workflow === "grow" && entry.grow) {
     resumeOpts.grow = {
       iteration: entry.grow.iteration ?? 0,

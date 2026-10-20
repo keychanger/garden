@@ -629,12 +629,6 @@ describe("gardenLabel", () => {
       .toBe("grow iteration 3");
     expect(gardenLabel("[garden] Grow loop, iteration 1 of 5."))
       .toBe("grow start");
-    expect(gardenLabel("[garden] Your previous iteration was merged. The trellis at `t.md`"))
-      .toBe("trellis iteration");
-    expect(gardenLabel("[garden] You are a trellis vine bound to `t.md`."))
-      .toBe("trellis start");
-    expect(gardenLabel("[garden] Please invoke the `trellis-author` skill"))
-      .toBe("author a trellis");
   });
   it("falls back to a generic autocontinue label", () => {
     expect(gardenLabel("[garden] Something new we don't recognize yet")).toBe("autocontinue");

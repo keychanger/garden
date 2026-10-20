@@ -40,11 +40,6 @@ describe("evaluateHolisticGate", () => {
       .toEqual({ eligible: false, reason: "workflow" });
   });
 
-  it("excludes trellis workers despite mergeCount>=2 (load-bearing: only the workflow clause stops trellis)", () => {
-    expect(evaluateHolisticGate(entry({ workflow: "trellis", mergeCount: 9 })))
-      .toEqual({ eligible: false, reason: "workflow" });
-  });
-
   it("excludes designer workers (a docs-only design worker runs no reviewer; a holistic pass would defeat skip-review)", () => {
     expect(evaluateHolisticGate(entry({ workflow: "designer", mergeCount: 3 })))
       .toEqual({ eligible: false, reason: "workflow" });

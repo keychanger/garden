@@ -493,7 +493,7 @@ describe("poller failure modes (real fs/git, mocked tmux/dashboard)", () => {
         .toBe(git(worktreePath, "rev-parse", "HEAD"));
     });
 
-    it("resumes to done when the .garden-done sentinel is set (trellis ALIGNED)", async () => {
+    it("resumes to done when the .garden-done sentinel is set", async () => {
       await setUpInterruptedMerge();
       // ALIGNED writes the sentinel before going merge-pending; finalizeMerge
       // picks the terminal `done` state off it. The interrupted finalize must

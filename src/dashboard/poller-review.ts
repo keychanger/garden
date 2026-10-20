@@ -35,12 +35,6 @@ import {
 } from "./registry.js";
 import { windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { growLoopHooks } from "./grow-continue.js";
-import { trellisLoopHooks } from "./trellis-continue.js";
-import { buildTrellisReviewPrompt } from "./trellis-prompts.js";
-import {
-  parseTrellisVerdict, parseDriftList, parseFlaggedClauses, renderDriftItem,
-  type TrellisVerdictResult,
-} from "./trellis-verdict.js";
 import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
 import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
@@ -393,15 +387,11 @@ export function handleReviewing(
   // verdict and loop the review. The result file is the unambiguous signal
   // that the reviewer completed its turn.
   //
-  // The trellis workflow has its own verdict vocabulary
-  // (ALIGNED/DRIFT/FAILED/FLAGGED); default keeps CLEAN/FIXED/FAILED.
-  // Unparseable handling below is workflow-agnostic. We read the raw output
-  // once up front so transient-failure detection
+  // We read the raw output once up front so transient-failure detection
   // (handleTransientReviewFailure) and the unparseable-verdict path can both
   // introspect it without re-reading after cleanReviewFiles deletes the file.
   const wtPath = entry.worktreePath ?? projectPath;
   const branchName = entry.branchName ?? entry.name;
-  const isTrellis = entry.workflow === "trellis";
   const rawOutput = readReviewOutputRaw(projectName, entry);
   // Read the stderr sidecar up front too: cleanReviewFiles below deletes it,
   // and a non-claude reviewer's transient error lands only there (empty when
@@ -409,9 +399,7 @@ export function handleReviewing(
   const rawStderrSidecar = readReviewStderrSidecar(projectName, entry);
   const review = rawOutput === null
     ? null
-    : isTrellis
-      ? parseTrellisReviewResult(rawOutput, entry.name, projectName)
-      : parseReviewResult(rawOutput, entry.name, projectName);
+    : parseReviewResult(rawOutput, entry.name, projectName);
 
   // Clean up files
   cleanReviewFiles(projectName, entry.name);
@@ -422,7 +410,7 @@ export function handleReviewing(
       data: { project: projectName, verdict: review.verdict },
     });
     return recordAndDispatchReview(
-      projectName, projectPath, baseBranch, entry, review, isTrellis, wtPath,
+      projectName, projectPath, baseBranch, entry, review, wtPath,
     );
   }
 
@@ -514,10 +502,8 @@ export function handleReviewing(
   // and it is not a transient/quota error (those returned above). Rather than
   // re-run the whole review, ask a cheap Haiku to read the reviewer's own output
   // and classify its verdict — the reviewer already decided, it just failed to
-  // format the final line. Default workflow only: the trellis DRIFT verdict
-  // carries a structured drift list a one-word extraction can't reconstruct, so
-  // trellis keeps re-reviewing (falls straight through to handleUnparseableReview).
-  if (!isTrellis && rawOutput && rawOutput.trim()) {
+  // format the final line.
+  if (rawOutput && rawOutput.trim()) {
     const project = tryGetProject(projectName) ?? {};
     const extracted = extractReviewVerdict(rawOutput, {
       env: { ...process.env, ...reviewerEnvObject(project) },
@@ -529,7 +515,7 @@ export function handleReviewing(
       });
       const recovered: ReviewResult = { verdict: extracted.toLowerCase() as ReviewResult["verdict"], body: rawOutput.trim() };
       return recordAndDispatchReview(
-        projectName, projectPath, baseBranch, entry, recovered, false, wtPath,
+        projectName, projectPath, baseBranch, entry, recovered, wtPath,
       );
     }
     log.info("poller", "haiku found no verdict; re-reviewing", {
@@ -712,8 +698,7 @@ function recordAndDispatchReview(
   projectPath: string,
   baseBranch: string,
   entry: WorkerEntry,
-  review: ReviewResult | TrellisVerdictResult,
-  isTrellis: boolean,
+  review: ReviewResult,
   wtPath: string,
 ): boolean {
   const tipSha = getBranchHeadSha(wtPath) ?? undefined;
@@ -750,14 +735,7 @@ function recordAndDispatchReview(
     tipSha,
   });
 
-  if (isTrellis) {
-    return dispatchTrellisVerdict(
-      projectName, projectPath, entry, review as TrellisVerdictResult,
-    );
-  }
-  return dispatchDefaultVerdict(
-    projectName, projectPath, baseBranch, entry, review as ReviewResult,
-  );
+  return dispatchDefaultVerdict(projectName, projectPath, baseBranch, entry, review);
 }
 
 // Did the reviewer's run move HEAD past the SHA captured at launch? The
@@ -782,7 +760,7 @@ function didReviewerAdvanceHead(projectPath: string, entry: WorkerEntry): boolea
 // (reviewRetryCount / reviewRetryAt). handleWorking honors reviewRetryAt to
 // avoid relaunching before the backoff elapses even if the FIFO is poked
 // early by a sibling event. Both fields clear on any parseable verdict
-// (dispatchDefaultVerdict / dispatchTrellisVerdict), on the non-transient
+// (dispatchDefaultVerdict), on the non-transient
 // unparseable path (handleUnparseableReview), on review timeout, and on a
 // mid-review worker push (resetToWorkingOnWorkerPush).
 function handleTransientReviewFailure(
@@ -1156,9 +1134,8 @@ function handleUnparseableReview(
   });
   transitionState(projectName, entry.name, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
-    // Q9 retrofit: unparseable-verdict is its own failingReason, distinct
-    // from "code" failures. Both default and trellis paths funnel through
-    // here; the renderer distinguishes them in phase 4.
+    // unparseable-verdict is its own failingReason, distinct from "code"
+    // failures.
     failingReason: "unparseable-verdict",
     // Pin the failing SHA so handleFailing's debounce gate refuses to
     // retry until a new commit actually arrives.
@@ -1183,9 +1160,8 @@ function handleUnparseableReview(
 // return false so the caller can early-return without further state work.
 // Returns true on success.
 //
-// `context` is a short tag for the log line ("review", "trellis review",
-// "trellis DRIFT") so an operator grepping logs can tell which verdict
-// path failed to push.
+// `context` is a short tag for the log line ("review", "holistic review") so
+// an operator grepping logs can tell which verdict path failed to push.
 function tryForcePushAfterReview(
   projectName: string,
   entry: WorkerEntry,
@@ -1233,9 +1209,8 @@ function tryForcePushAfterReview(
   }
 }
 
-// Default workflow verdict dispatcher. Pre-trellis, this logic was inline
-// in handleReviewing; phase 2 extracted it so the trellis dispatcher
-// can sit beside it without growing handleReviewing into a giant branch.
+// Verdict dispatcher for the CLEAN/FIXED/FAILED vocabulary every reviewing
+// workflow uses.
 function dispatchDefaultVerdict(
   projectName: string,
   projectPath: string,
@@ -1369,194 +1344,6 @@ function stampBeadReviewFailure(
     });
     return ` (bead ${beadId}: dispatch:failed write failed)`;
   }
-}
-
-// Trellis verdict dispatcher. See WORKFLOWS.md "One iteration, in detail" /
-// "Branch on verdict" for the contract on each disposition.
-//
-// ALIGNED → write `.garden-done`, force-push, merge-pending; finalizeMerge
-//   picks `done` and skips auto-continue, terminating the loop.
-// DRIFT   → force-push, merge-pending. finalizeMerge sets `merged`,
-//   resets the worker's Claude context, and dispatches the trellis
-//   continue prompt with the drift list.
-// FLAGGED → failing with failingReason="trellis-flagged". The
-//   handleFailing push debounce skips this state — only `garden trellis
-//   resume` clears it.
-// FAILED  → failing with failingReason="code". Same shape as default.
-function dispatchTrellisVerdict(
-  projectName: string,
-  projectPath: string,
-  entry: WorkerEntry,
-  review: TrellisVerdictResult,
-): boolean {
-  const wtPath = entry.worktreePath ?? projectPath;
-  const branchName = entry.branchName ?? entry.name;
-
-  // Log a single structured info line per iteration. driftCount and
-  // alignedCount are only meaningful on DRIFT verdicts (the body parses
-  // a structured drift block); the other verdicts log the same shape with
-  // 0 / undefined so the operator can grep iteration history uniformly.
-  // See WORKFLOWS.md "Logs".
-  const trellisData = entry.trellis;
-  const driftPreview = review.verdict === "DRIFT" ? parseDriftList(review.body) : undefined;
-  log.info("poller", "trellis iteration", {
-    worker: entry.name,
-    data: {
-      project: projectName,
-      trellis: trellisData?.name,
-      iteration: trellisData?.iteration,
-      verdict: review.verdict,
-      driftCount: driftPreview?.items.length ?? 0,
-      alignedCount: driftPreview?.alignedCount ?? trellisData?.alignedCount,
-    },
-  });
-
-  if (review.verdict === "ALIGNED") {
-    if (!tryForcePushAfterReview(projectName, entry, wtPath, branchName, "trellis review")) {
-      return true;
-    }
-    // Write the sentinel only after the force-push succeeds. If we wrote it
-    // earlier and the push failed, the sentinel would persist on disk; a
-    // later DRIFT-then-merge cycle would then have finalizeMerge pick `done`
-    // off the stale sentinel even though alignment had been lost.
-    setDoneSentinel(entry.worktreePath);
-    transitionState(projectName, entry.name, "merge-pending", {
-      mergePendingAt: new Date().toISOString(),
-      mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
-      lastReviewBody: review.body,
-      reviewWindowName: undefined,
-      reviewStartedAt: undefined,
-      unparseableReviewAt: undefined,
-      reviewRetryCount: undefined,
-      unparseableRetryCount: undefined,
-      quotaRetryCount: undefined,
-      reviewFallbackHarness: undefined,
-      reviewRetryAt: undefined,
-      trellis: {
-        lastVerdict: "ALIGNED",
-        // `aligned` distinguishes reviewer-declared success from operator
-        // sentinel-set; finalizeMerge preserves it into `done`.
-        aligned: true,
-        // Clear the drift list — the loop converged.
-        lastDrift: undefined,
-      },
-    });
-    refreshDashboard();
-    scheduleDelayedPoke(projectName, 0);
-    return true;
-  }
-
-  if (review.verdict === "DRIFT") {
-    const drift = parseDriftList(review.body);
-    // DRIFT is mergeable; iterate. When the reviewer named drift but emitted no
-    // parseable bullets (parseDriftList null), seed the continue prompt with its
-    // raw prose instead of an empty list — an empty list fires the continue
-    // builder's "none reported" branch, inviting a false convergence.
-    const driftLines = drift
-      ? drift.items.map((it, i) => renderDriftItem(it, i))
-      : [review.body.trim().split("\n").slice(0, 8).join(" ").slice(0, 400)
-          || "reviewer reported drift without structured items"];
-    if (!tryForcePushAfterReview(projectName, entry, wtPath, branchName, "trellis DRIFT")) {
-      return true;
-    }
-    transitionState(projectName, entry.name, "merge-pending", {
-      mergePendingAt: new Date().toISOString(),
-      mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
-      lastReviewBody: review.body,
-      reviewWindowName: undefined,
-      reviewStartedAt: undefined,
-      unparseableReviewAt: undefined,
-      reviewRetryCount: undefined,
-      unparseableRetryCount: undefined,
-      quotaRetryCount: undefined,
-      reviewFallbackHarness: undefined,
-      reviewRetryAt: undefined,
-      trellis: {
-        lastVerdict: "DRIFT",
-        lastDrift: driftLines,
-        alignedCount: drift?.alignedCount,
-      },
-    });
-    refreshDashboard();
-    scheduleDelayedPoke(projectName, 0);
-    return true;
-  }
-
-  if (review.verdict === "FLAGGED") {
-    const clauses = parseFlaggedClauses(review.body);
-    const detail = clauses.length > 0
-      ? clauses.join(", ")
-      : review.body.slice(0, 200);
-    const trellisName = trellisData?.name ?? "?";
-    addAlert({
-      level: "error",
-      source: "trellis",
-      project: projectName,
-      worker: entry.name,
-      message:
-        `Trellis '${trellisName}' flagged for worker ${entry.name}: ${detail}. ` +
-        `Run 'garden trellis amend ${projectName} ${trellisName === "?" ? "<name>" : trellisName}' or ` +
-        `'garden trellis resume ${entry.name}' (override) to continue.`,
-      // Stable key — body and clauses vary across runs; one alert per
-      // flagged transition is enough.
-      dedupKey: `trellis-flagged:${projectName}:${entry.name}`,
-    });
-    const headSha = getBranchHeadSha(wtPath);
-    transitionState(projectName, entry.name, "failing", {
-      failCount: (entry.failCount ?? 0) + 1,
-      failingReason: "trellis-flagged",
-      failingSha: headSha ?? undefined,
-      lastSeenSha: headSha ?? undefined,
-      lastShaChangeAt: new Date().toISOString(),
-      reviewWindowName: undefined,
-      reviewStartedAt: undefined,
-      preReviewSha: undefined,
-      unparseableReviewAt: undefined,
-      reviewRetryCount: undefined,
-      unparseableRetryCount: undefined,
-      quotaRetryCount: undefined,
-      reviewFallbackHarness: undefined,
-      reviewRetryAt: undefined,
-      trellis: {
-        lastVerdict: "FLAGGED",
-        flaggedClauses: clauses.length > 0 ? clauses : undefined,
-      },
-    });
-    refreshDashboard();
-    return true;
-  }
-
-  // FAILED — same shape as default's "failed" verdict, with trellis fields
-  // updated and failingReason: "code" so the renderer doesn't mistake it
-  // for a flagged or budget-exhausted vine.
-  addAlert({
-    level: "error",
-    source: "review",
-    project: projectName,
-    worker: entry.name,
-    message: `Trellis reviewer could not fix issues for worker ${entry.name}: ${review.body.slice(0, 300)}`,
-    dedupKey: `review-failed:${projectName}:${entry.name}`,
-  });
-  const headSha = getBranchHeadSha(wtPath);
-  transitionState(projectName, entry.name, "failing", {
-    failCount: (entry.failCount ?? 0) + 1,
-    failingReason: "code",
-    failingSha: headSha ?? undefined,
-    lastSeenSha: headSha ?? undefined,
-    lastShaChangeAt: new Date().toISOString(),
-    reviewWindowName: undefined,
-    reviewStartedAt: undefined,
-    preReviewSha: undefined,
-    unparseableReviewAt: undefined,
-    reviewRetryCount: undefined,
-    unparseableRetryCount: undefined,
-    quotaRetryCount: undefined,
-    reviewFallbackHarness: undefined,
-    reviewRetryAt: undefined,
-    trellis: { lastVerdict: "FAILED" },
-  });
-  refreshDashboard();
-  return true;
 }
 
 // Reset a worker to `working` after a worker-authored push during review or
@@ -1769,21 +1556,17 @@ function launchReview(
   // The caller (handleWorking) is responsible for the "claude must be idle"
   // check. We don't repeat it here.
   const wtPath = entry.worktreePath ?? projectPath;
-  const isTrellis = entry.workflow === "trellis";
   const isGrow = entry.workflow === "grow";
 
   // A retry relaunch (a transient- or quota-review backoff re-queued the SAME
   // iteration through `working`) re-drives launchReview without any new worker
   // work: the reviewer failed to emit a verdict, the commits are unchanged.
   // The loop iteration counter must track real iterations, not retries, so a
-  // retry must NOT re-increment it (nor re-run the trellis budget check). Left
-  // unguarded, a quota wait's flat 15-min ladder (budget MAX_QUOTA_REVIEW_RETRIES
-  // = 24) would inflate trellis.iteration / grow.iteration by up to 24 while the
-  // operator's Claude window is exhausted — tripping the trellis iteration-budget
-  // cap prematurely (parking in the non-kick-recoverable failing/"iteration-budget"
-  // with amend/raise-budget advice instead of the kick-recoverable failing/"quota"
-  // wait it actually is) and ending grow loops several passes early once the
-  // window resets and the review merges. reviewRetryCount / quotaRetryCount /
+  // retry must NOT re-increment it. Left unguarded, a quota wait's flat 15-min
+  // ladder (budget MAX_QUOTA_REVIEW_RETRIES = 24) would inflate grow.iteration
+  // by up to 24 while the operator's Claude window is exhausted, ending grow
+  // loops several passes early once the window resets and the review merges.
+  // reviewRetryCount / quotaRetryCount /
   // unparseableRetryCount are set by handleTransientReviewFailure /
   // handleQuotaLimitReview / handleUnparseableReview and cleared on any
   // parseable verdict or worker push, so their presence uniquely marks a retry
@@ -1798,57 +1581,10 @@ function launchReview(
     || (entry.unparseableRetryCount ?? 0) > 0
     || entry.reviewFallbackHarness !== undefined;
 
-  // Trellis workflow: increment iteration counter *before* the budget check
-  // and *before* dispatch (WORKFLOWS.md "One iteration, in detail" / step 5).
-  // After the increment, the counter reflects the iteration about to be
-  // reviewed (1 during the first review, 2 during the second, etc.). When
-  // the increment exceeds maxIterations, short-circuit to failing with
-  // failingReason="iteration-budget" — the iteration cap is the primary
-  // safety net (Invariant 4).
-  if (isTrellis && !isRetryRelaunch) {
-    const state = trellisLoopHooks.readIteration(entry);
-    const nextIter = (state?.iteration ?? 0) + 1;
-    const cap = state?.maxIterations ?? 30;
-    if (nextIter > cap) {
-      const headSha = getBranchHeadSha(wtPath);
-      const lastDriftPreview = (entry.trellis?.lastDrift ?? []).slice(0, 3).join("; ");
-      addAlert({
-        level: "error",
-        source: "trellis",
-        project: projectName,
-        worker: entry.name,
-        message:
-          `Trellis '${entry.trellis?.name ?? "?"}' iteration budget exhausted ` +
-          `(${cap} iterations). Last drift: ${lastDriftPreview || "none"}. ` +
-          `Inspect, then amend trellis & retry, raise budget, or kill.`,
-        dedupKey: `trellis-budget:${projectName}:${entry.name}`,
-      });
-      transitionState(projectName, entry.name, "failing", {
-        failCount: (entry.failCount ?? 0) + 1,
-        failingReason: "iteration-budget",
-        failingSha: headSha ?? undefined,
-        lastSeenSha: headSha ?? undefined,
-        lastShaChangeAt: new Date().toISOString(),
-        // Don't increment the counter past the cap — leave it at the
-        // last completed iteration. The renderer reads it for "N/M".
-        pendingReviewAt: undefined,
-      });
-      refreshDashboard();
-      return true;
-    }
-    // Persist the increment before dispatch via the shared loop primitive
-    // (writes to disk + updates the in-memory entry) so handleReviewing's
-    // verdict logging and any concurrent `garden trellis status` see the
-    // right iteration number.
-    persistIteration(projectName, entry.name, entry, trellisLoopHooks, nextIter);
-  }
-
   // Grow workflow: increment iteration counter before dispatch. No budget
   // check at preflight — grow's terminal-on-budget is `done`, fired
-  // post-merge in maybeAutoContinue. The increment + persist is shared
-  // with trellis via persistIteration; the grow-specific bookkeeping is
-  // the sub-object field path (entry.grow.iteration vs
-  // entry.trellis.iteration), encapsulated in growLoopHooks.
+  // post-merge in maybeAutoContinue. The increment goes through the shared
+  // loop primitive (persistIteration) and growLoopHooks.
   if (isGrow && !isRetryRelaunch) {
     const state = growLoopHooks.readIteration(entry);
     const nextIter = (state?.iteration ?? 0) + 1;
@@ -1865,10 +1601,7 @@ function launchReview(
     log.debug("poller", "fetch before review failed", { worker: entry.name, data: { project: projectName, error: String(err) } });
   }
 
-  // Build the review prompt with the workflow-appropriate vocabulary.
-  const prompt = isTrellis
-    ? buildTrellisReviewPrompt(projectName, projectPath, baseBranch, entry)
-    : buildReviewPrompt(projectName, projectPath, baseBranch, entry);
+  const prompt = buildReviewPrompt(projectName, projectPath, baseBranch, entry);
 
   if (prompt === null) {
     log.warn("poller", "failed to build review prompt", { worker: entry.name, data: { project: projectName } });
@@ -1942,8 +1675,8 @@ function launchReview(
   // first-party Opus safety net — the fallback harness, the Opus model, and the
   // neutralizing reviewer env prefix — regardless of project.roles, so a
   // multi-day foreign-subscription window can't wedge the merge pipeline. The
-  // model is SAFE_REVIEW_MODEL for every workflow (trellis's reviewerModel is
-  // also "opus"). Cleared on the next fresh cycle, so the configured reviewer
+  // model is SAFE_REVIEW_MODEL for every workflow. Cleared on the next fresh
+  // cycle, so the configured reviewer
   // resumes automatically (see handleQuotaFallbackReview).
   const projectCfg: ProjectConfig = tryGetProject(projectName) ?? { path: projectPath };
   const reviewer = entry.reviewFallbackHarness
@@ -2005,9 +1738,7 @@ function launchReview(
 
   log.info("poller", "launched review", {
     worker: entry.name,
-    data: isTrellis
-      ? { project: projectName, iteration: entry.trellis?.iteration }
-      : { project: projectName },
+    data: { project: projectName },
   });
   return true;
 }
@@ -2055,26 +1786,6 @@ function parseReviewResult(output: string, workerName: string, projectName: stri
   }
   const body = parsed.body || "No additional comments.";
   return { verdict: parsed.verdict.toLowerCase() as ReviewResult["verdict"], body };
-}
-
-// Trellis variant of parseReviewResult — parses with the trellis vocabulary
-// (ALIGNED/DRIFT/FAILED/FLAGGED). Returns null on unparseable output; the
-// caller's existing unparseable-verdict retry path handles it.
-function parseTrellisReviewResult(
-  output: string,
-  workerName: string,
-  projectName: string,
-): TrellisVerdictResult | null {
-  const parsed = parseTrellisVerdict(output);
-  if (!parsed) {
-    const lastLine = output.split("\n").reverse().find(l => l.trim()) ?? "";
-    log.warn("poller", "could not parse trellis verdict", {
-      worker: workerName,
-      data: { project: projectName, lastLine: lastLine.trim() },
-    });
-    return null;
-  }
-  return { verdict: parsed.verdict, body: parsed.body || "No additional comments." };
 }
 
 export function killReviewWindow(projectName: string, workerName: string): void {

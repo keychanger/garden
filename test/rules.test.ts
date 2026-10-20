@@ -174,46 +174,6 @@ describe("buildWorktreeRules", () => {
   });
 });
 
-// Trellis workflow extends the worktree rules with three additional
-// paragraphs (concept, authority asymmetry, iteration discipline). See
-// WORKFLOWS.md "Worker system prompt".
-describe("buildWorktreeRules — trellis workflow", () => {
-  it("default workers do NOT include trellis paragraphs", async () => {
-    const { buildWorktreeRules } = await importRules();
-    const result = buildWorktreeRules("swift-oak");
-    expect(result).not.toContain("Trellis workflow");
-    expect(result).not.toContain("Authority asymmetry");
-    expect(result).not.toContain("Iteration discipline");
-  });
-
-  it("trellis option appends concept/authority/iteration paragraphs", async () => {
-    const { buildWorktreeRules } = await importRules();
-    const result = buildWorktreeRules("swift-oak", "main", {
-      trellis: { relativePath: ".garden/trellises/auth-rewrite.md" },
-    });
-    expect(result).toContain("Trellis workflow");
-    expect(result).toContain(".garden/trellises/auth-rewrite.md");
-    expect(result).toContain("source of truth");
-    expect(result).toContain("Authority asymmetry");
-    // Bold markdown intervenes between "may" and "edit", so check the
-    // tail substring directly.
-    expect(result).toContain("edit the trellis");
-    expect(result).toContain("Iteration discipline");
-    expect(result).toContain("trellis-lessons.md");
-  });
-
-  it("trellis paragraphs append AFTER the worktree workflow baseline", async () => {
-    const { buildWorktreeRules } = await importRules();
-    const result = buildWorktreeRules("swift-oak", "main", {
-      trellis: { relativePath: ".garden/trellises/foo.md" },
-    });
-    const workflowIdx = result.indexOf("## Worktree workflow");
-    const trellisIdx = result.indexOf("## Trellis workflow");
-    expect(workflowIdx).toBeGreaterThanOrEqual(0);
-    expect(trellisIdx).toBeGreaterThan(workflowIdx);
-  });
-});
-
 describe("buildWorktreeRules — grow workflow", () => {
   it("default workers do NOT include grow paragraphs", async () => {
     const { buildWorktreeRules } = await importRules();
@@ -255,24 +215,6 @@ describe("buildWorktreeRules — grow workflow", () => {
     expect(growIdx).toBeGreaterThan(workflowIdx);
   });
 
-  it("trellis and grow are mutually exclusive — passing both throws", async () => {
-    const { buildWorktreeRules } = await importRules();
-    expect(() =>
-      buildWorktreeRules("any", "main", {
-        trellis: { relativePath: ".garden/trellises/foo.md" },
-        grow: { iteration: 1, maxIterations: 5 },
-      }),
-    ).toThrow(/mutually exclusive/);
-  });
-
-  it("grow rules do NOT include trellis paragraphs", async () => {
-    const { buildWorktreeRules } = await importRules();
-    const result = buildWorktreeRules("tall-fern", "main", {
-      grow: { iteration: 1, maxIterations: 5 },
-    });
-    expect(result).not.toContain("## Trellis workflow");
-    expect(result).not.toContain("trellis-lessons.md");
-  });
 });
 
 // Designer inverts the action-biased worktree posture: design (surface options,
@@ -313,7 +255,7 @@ describe("buildWorktreeRules — designer workflow", () => {
     expect(result).not.toContain("`npm run lint && npm run test:coverage`");
   });
 
-  it("designer is mutually exclusive with trellis and grow", async () => {
+  it("designer is mutually exclusive with grow", async () => {
     const { buildWorktreeRules } = await importRules();
     expect(() =>
       buildWorktreeRules("any", "main", {
@@ -321,18 +263,11 @@ describe("buildWorktreeRules — designer workflow", () => {
         grow: { iteration: 1, maxIterations: 5 },
       }),
     ).toThrow(/mutually exclusive/);
-    expect(() =>
-      buildWorktreeRules("any", "main", {
-        designer: true,
-        trellis: { relativePath: ".garden/trellises/foo.md" },
-      }),
-    ).toThrow(/mutually exclusive/);
   });
 
-  it("designer rules do NOT include trellis or grow paragraphs", async () => {
+  it("designer rules do NOT include grow paragraphs", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("swift-oak", "main", { designer: true });
-    expect(result).not.toContain("## Trellis workflow");
     expect(result).not.toContain("## Grow workflow");
   });
 });
@@ -374,18 +309,12 @@ describe("buildWorktreeRules — planner workflow", () => {
     expect(result).not.toContain("`npm run lint && npm run test:coverage`");
   });
 
-  it("planner is mutually exclusive with trellis, grow, and designer", async () => {
+  it("planner is mutually exclusive with grow and designer", async () => {
     const { buildWorktreeRules } = await importRules();
     expect(() =>
       buildWorktreeRules("any", "main", {
         planner: true,
         grow: { iteration: 1, maxIterations: 5 },
-      }),
-    ).toThrow(/mutually exclusive/);
-    expect(() =>
-      buildWorktreeRules("any", "main", {
-        planner: true,
-        trellis: { relativePath: ".garden/trellises/foo.md" },
       }),
     ).toThrow(/mutually exclusive/);
     expect(() =>
@@ -396,7 +325,6 @@ describe("buildWorktreeRules — planner workflow", () => {
   it("planner rules do NOT include the other workflows' paragraphs", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("swift-oak", "main", { planner: true });
-    expect(result).not.toContain("## Trellis workflow");
     expect(result).not.toContain("## Grow workflow");
     expect(result).not.toContain("## Designer workflow");
   });

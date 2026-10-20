@@ -42,20 +42,10 @@ export function buildRulesContext(projectName: string, projectPath: string): str
 }
 
 export interface WorktreeRulesOptions {
-  /** When set, the rules text appends three trellis-specific paragraphs
-   *  describing the trellis workflow's authority asymmetry, iteration
-   *  discipline, and the path to the bound trellis. See WORKFLOWS.md
-   *  "Worker system prompt". */
-  trellis?: {
-    /** Worktree-relative path to the trellis file (e.g.
-     *  ".garden/trellises/auth-rewrite.md"). Embedded verbatim in the
-     *  paragraph so the worker can grep / read it directly. */
-    relativePath: string;
-  };
   /** When set, the rules text appends three grow-specific paragraphs
    *  describing the bounded-loop discipline. Mutually exclusive with
-   *  `trellis` — a worker is one workflow at a time; the helper throws
-   *  if both are set. */
+   *  `designer` and `planner` — a worker is one workflow at a time; the
+   *  helper throws if more than one is set. */
   grow?: {
     iteration: number;
     maxIterations: number;
@@ -64,8 +54,8 @@ export interface WorktreeRulesOptions {
    *  designer (design-workflow) worker: surface alternatives instead of picking the
    *  first, ask clarifying questions, write design artifacts (not code), and
    *  pause for the operator rather than push per turn. The checks paragraph is
-   *  suppressed (a designer runs no checks). Mutually exclusive with `trellis`
-   *  and `grow` — a worker is one workflow at a time. See
+   *  suppressed (a designer runs no checks). Mutually exclusive with `grow`
+   *  and `planner` — a worker is one workflow at a time. See
    *  docs/future/DESIGNER-WORKFLOW.md. */
   designer?: boolean;
   /** When set, the rules text inverts the worktree posture for a planner
@@ -73,8 +63,8 @@ export interface WorktreeRulesOptions {
    *  project's bd store, not code — no commits, no pushes, no checks. The
    *  exact bd contract (create/dep/label spellings) rides the worker's seed
    *  message; this fragment only sets the posture. The checks paragraph is
-   *  suppressed (a planner runs no checks). Mutually exclusive with
-   *  `trellis`, `grow`, and `designer`. */
+   *  suppressed (a planner runs no checks). Mutually exclusive with `grow`
+   *  and `designer`. */
   planner?: boolean;
   /** The project's configured `checks` command (from `garden config <project>
    *  checks`). When set, the prompt names the exact command and instructs
@@ -112,10 +102,10 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
 
   const baseWithChecks = base + checksParagraph;
 
-  const workflowOpts = [options?.trellis, options?.grow, options?.designer, options?.planner].filter(Boolean);
+  const workflowOpts = [options?.grow, options?.designer, options?.planner].filter(Boolean);
   if (workflowOpts.length > 1) {
     throw new Error(
-      "buildWorktreeRules: trellis, grow, designer, and planner options are "
+      "buildWorktreeRules: grow, designer, and planner options are "
       + "mutually exclusive — a worker is one workflow at a time.",
     );
   }
@@ -165,30 +155,11 @@ You are working in an isolated git worktree on branch \`${branchName}\`. Your wo
     return `${base}\n\n${designerExtras}`;
   }
 
-  if (options?.trellis) {
-    // Trellis-specific extension. Three paragraphs per WORKFLOWS.md "Worker
-    // system prompt": concept, authority asymmetry, iteration discipline.
-    // Replaces the generic "auto-continue across phases" guidance — trellis
-    // vines reset Claude's context every iteration, so multi-phase
-    // reasoning across iterations is structurally not allowed.
-    const trellisPath = options.trellis.relativePath;
-    const trellisExtras = `## Trellis workflow
-
-**Concept.** A trellis is a frozen design document describing what this feature does. The path is \`${trellisPath}\`. Read it before editing anything; it is your source of truth.
-
-**Authority asymmetry.** You may edit code, tests, and documentation. You may **not** edit the trellis. If the trellis is wrong or impossible, do not silently rewrite it — push commits that reflect what the trellis says, and the reviewer will surface the contradiction as \`FLAGGED\`. The operator decides whether to amend.
-
-**Iteration discipline.** You are operating inside a bounded loop. The reviewer's \`DRIFT\` report names priority-ordered gaps between the trellis and the artifact. Close the highest-priority gap first. Do not chase adjacent improvements. Do not redesign. The trellis's "Out of scope" section is the bound of your work. Each iteration starts with a fresh Claude session — disk (the trellis at git HEAD, the code, and \`.garden/trellis-lessons.md\`) is the only state that crosses iteration boundaries. Append a one-line entry to the lessons file each iteration describing what you tried and what you learned.`;
-
-    return `${baseWithChecks}\n\n${trellisExtras}`;
-  }
-
   if (options?.grow) {
-    // Grow-specific extension. Three paragraphs (Concept / Bias / Termination)
-    // mirroring the trellis shape but tuned for the no-design-doc loop. The
-    // "fresh Claude session each iteration" line is the same load-bearing
-    // discipline as trellis — disk is the only state that crosses iteration
-    // boundaries. Replaces the generic "auto-continue across phases" guidance.
+    // Grow-specific extension. Three paragraphs (Concept / Bias / Termination).
+    // The "fresh Claude session each iteration" line is load-bearing — disk is
+    // the only state that crosses iteration boundaries. Replaces the generic
+    // "auto-continue across phases" guidance.
     const { iteration, maxIterations } = options.grow;
     const growExtras = `## Grow workflow
 

@@ -1,9 +1,9 @@
-// Per-iteration context reset for grow loops. Mirrors trellis-continue.ts in
-// shape but supplies grow-flavored hooks: reads/writes entry.grow.iteration,
+// Per-iteration context reset for grow loops. Supplies the loop primitive's
+// hooks (loop.ts): reads/writes entry.grow.iteration,
 // builds the seed-anchored continue prompt that inlines the operator's seed,
 // the changed-files list, and the appended grow-log.
 //
-// Grow's terminal-on-budget is `done` (not `failing` like trellis): hitting
+// Grow's terminal-on-budget is `done` (not `failing`): hitting
 // the cap means "we did the work we said we'd do", not "we ran out of room".
 // The budget check therefore lives in `maybeAutoContinue` (poller-merge.ts),
 // not at preflight — by the time iter K = max completes and merges, the loop
@@ -89,8 +89,8 @@ export function growAutoContinueAfterMerge(
   if (!project) return;
 
   // The upcoming iteration index: launchReview will increment to this value
-  // before dispatching the next review (preflight semantics, same as
-  // trellis). Read it from the entry so the system prompt and the continue
+  // before dispatching the next review (preflight semantics). Read it from the
+  // entry so the system prompt and the continue
   // prompt agree on the iteration number.
   const upcoming = (entry.grow?.iteration ?? 0) + 1;
   const max = entry.grow?.maxIterations ?? 5;

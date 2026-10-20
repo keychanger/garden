@@ -63,8 +63,8 @@ export interface HolisticGate {
 // unit-testable in isolation against synthetic entries.
 export function evaluateHolisticGate(entry: WorkerEntry): HolisticGate {
   if (entry.prState !== "done") return { eligible: false, reason: "not-done" };
-  // Load-bearing: `=== "default"` excludes grow and trellis in one clause. They
-  // legitimately reach mergeCount>=2 via normal merges; only this gate keeps
+  // Load-bearing: `=== "default"` excludes grow (and every other workflow) in
+  // one clause. A grow loop legitimately reaches mergeCount>=2 via normal merges; only this gate keeps
   // them out of the whole-task review, which is a default-workflow concern.
   if ((entry.workflow ?? "default") !== "default") return { eligible: false, reason: "workflow" };
   const mergeCount = entry.mergeCount ?? 0;
