@@ -104,6 +104,14 @@ export function buildSettingsJson(
         matcher: "",
         hooks: [{ type: "command", command: `${hookCmd} stop`, timeout: 5 }],
       }],
+      // A turn that dies on an API error (usage limit, expired login, dropped
+      // connection) fires StopFailure instead of Stop. The turn is just as
+      // over, so it takes the same route; without it the worker read
+      // `working` until the operator typed into the pane (39h once).
+      StopFailure: [{
+        matcher: "",
+        hooks: [{ type: "command", command: `${hookCmd} stop`, timeout: 5 }],
+      }],
       PreToolUse: [{
         matcher: "AskUserQuestion",
         hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
@@ -124,6 +132,14 @@ export function buildSettingsJson(
         // Catch-all: auto-mode escalates any tool the classifier flags (Write,
         // Edit, Read, Bash, WebFetch, ...), not just Bash — so we need to see
         // every tool completion to clear "asking" after the operator approves.
+        matcher: "",
+        hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
+      }],
+      // PostToolUse fires only for a tool that succeeded. A failed one (a Bash
+      // edit chained to a failing `npm test`, an approved tool that errors) is
+      // the same activity: it clears `asking`, and it can rewrite the tree a
+      // reviewer is certifying.
+      PostToolUseFailure: [{
         matcher: "",
         hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
       }],

@@ -462,6 +462,12 @@ function clearAnsweredBlock(entry: WorkerEntry, fields: FieldsDelta): void {
 
 const onTurnEnded: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
+  if (ctx.input.hook_event_name === "StopFailure") {
+    log.info("hook", "turn ended on an API error", {
+      worker: ctx.workerInfo.name,
+      data: { project: ctx.workerInfo.project, error: String(ctx.input.error ?? "unknown") },
+    });
+  }
   const fields: FieldsDelta = { agentStatus: "idle" };
   // Marks the end of the turn that asked, so a main-thread tool call after it
   // can be read as the worker resuming (onToolActivity). claude-code only:

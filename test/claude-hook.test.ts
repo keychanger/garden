@@ -648,6 +648,33 @@ describe("handleClaudeHook — core events", () => {
     expect(statusAfter("garden", "bold-ash")).toBe("idle");
   });
 
+  // A turn that dies on an API error fires StopFailure, registered on the stop
+  // route. It must end the turn, or the worker reads `working` until the
+  // operator types into it.
+  it("a StopFailure ends the turn like stop and logs the error category", async () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "working" });
+    setCwd("garden", "bold-ash");
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ hook_event_name: "StopFailure", error: "rate_limit" }));
+    handleClaudeHook("stop");
+    expect(statusAfter("garden", "bold-ash")).toBe("idle");
+    const { log } = await import("../src/dashboard/log.js");
+    expect(log.info).toHaveBeenCalledWith("hook", "turn ended on an API error", {
+      worker: "bold-ash", data: { project: "garden", error: "rate_limit" },
+    });
+  });
+
+  it("a failed tool (PostToolUseFailure) clears asking like a successful one", async () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "asking" });
+    setCwd("garden", "bold-ash");
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({
+      hook_event_name: "PostToolUseFailure", tool_name: "Bash", error: "Exit code 1",
+    }));
+    handleClaudeHook("posttooluse");
+    expect(statusAfter("garden", "bold-ash")).toBe("working");
+  });
+
   it("stop sets prState=done when .garden-done is present and no commits ahead", async () => {
     seedWorker("garden", "bold-ash", {
       agentStatus: "working",

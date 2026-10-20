@@ -260,16 +260,25 @@ describe("claude-code adapter installRuntimeConfig", () => {
     return String(call[1]);
   }
 
-  it("includes all required hook events", () => {
+  it("registers exactly the hook events garden handles", () => {
     process.argv[1] = "/usr/local/bin/garden";
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
     const parsed = JSON.parse(settingsJsonContent());
-    expect(parsed.hooks.SessionStart).toBeDefined();
-    expect(parsed.hooks.UserPromptSubmit).toBeDefined();
-    expect(parsed.hooks.Stop).toBeDefined();
-    expect(parsed.hooks.PreToolUse).toBeDefined();
-    expect(parsed.hooks.PermissionRequest).toBeDefined();
-    expect(parsed.hooks.PostToolUse).toBeDefined();
+    expect(Object.keys(parsed.hooks).sort()).toEqual([
+      "PermissionRequest", "PostToolUse", "PostToolUseFailure", "PreToolUse",
+      "SessionStart", "Stop", "StopFailure", "UserPromptSubmit",
+    ]);
+  });
+
+  // The failure variants fire in place of their success events, so they take
+  // the same routes.
+  it("routes StopFailure like Stop and PostToolUseFailure like PostToolUse", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
+    const parsed = JSON.parse(settingsJsonContent());
+    expect(parsed.hooks.StopFailure[0].hooks[0].command).toMatch(/hook\.js stop$/);
+    expect(parsed.hooks.PostToolUseFailure[0].matcher).toBe("");
+    expect(parsed.hooks.PostToolUseFailure[0].hooks[0].command).toMatch(/hook\.js posttooluse$/);
   });
 
   it("registers a PermissionRequest hook that flips the worker to idle on approval prompts", () => {

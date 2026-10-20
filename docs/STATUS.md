@@ -44,9 +44,13 @@ display-only exception is `working bg`, derived from an honestly `idle`
 stored state as described below.
 
 It starts the instant the `UserPromptSubmit` hook fires. Claude Code's
-authoritative end signal is `Stop`; for Codex, the rollout's final
-`task_complete` is the backstop when `Stop` is missed. Nothing heuristic
-flips it.
+authoritative end signal is `Stop`, or `StopFailure` for a turn that dies
+on an API error (a usage limit, an expired login, a dropped connection),
+which garden routes to the same turn-end handler; for Codex, the rollout's
+final `task_complete` is the backstop when `Stop` is missed. Nothing
+heuristic flips it. Likewise `PostToolUse` fires only for a tool that
+succeeded, so its failure twin `PostToolUseFailure` shares its handler:
+a failed tool call is the same evidence of activity.
 
 Things that *are* working:
 - Generating tokens
