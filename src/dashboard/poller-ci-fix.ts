@@ -432,6 +432,7 @@ export function handleCiFixing(
 
   transitionState(projectName, entry.name, "merge-pending", {
     mergePendingAt: entry.mergePendingAt ?? new Date().toISOString(),
+    mergeReadySha: headSha ?? undefined,
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     lastSeenSha: headSha ?? undefined,

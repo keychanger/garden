@@ -108,6 +108,11 @@ Run `garden help` for the full command list with arguments (`garden <cmd> --help
 
 Every worker runs in its own git worktree at `~/.garden/worktrees/<project>/<worker>/`, on a branch named after the worker, branched from `origin/<base>` (fetched first). Each project has a dedicated **poller** in a hidden tmux window that drives review/merge using local git — no GitHub PRs. Reviewers and resolvers run headless in hidden `_<project>-review-<worker>` / `_<project>-resolve-<worker>` windows. Multiple reviews run in parallel within a project; the merge queue is serial. Full state machine: `docs/STATUS.md`.
 
+The queue merges only the SHA cleared for it: every move into merge-pending (a review verdict, a verified resolver or
+ci-fix push, the queue's own rebase) stamps `WorkerEntry.mergeReadySha`, and a HEAD that has moved since, such as a
+worker prompted while it waited on CI, goes back through review instead of merging. Entries written before the stamp
+existed carry none and merge as before.
+
 Before merging, the queue rebases onto the current `origin/<base>` through
 `rebaseBranch` (`git.ts`). It skips the rebase when the branch already contains
 the base tip, uses `--rebase-merges` when a genuinely behind branch contains

@@ -42,7 +42,7 @@ import { transitionState } from "./poller-state.js";
 import { recordMerge, recordWorkerTokens } from "./telemetry.js";
 import { resolveTranscriptPath, sumTranscriptUsage } from "./conversation.js";
 import { maybeDispatchHolisticReview } from "./poller-holistic-review.js";
-import { killReviewWindow } from "./poller-review.js";
+import { killReviewWindow, resetToWorkingOnWorkerPush } from "./poller-review.js";
 import { launchResolver } from "./poller-resolve.js";
 import { launchCiFix } from "./poller-ci-fix.js";
 import { checkCiStatus, getGitHubRepoSlug, projectDefinesCi, type CiStatus } from "./poller-ci.js";
@@ -207,6 +207,14 @@ export function handleMergePending(
     return false;
   }
 
+  // Merge only the SHA that was cleared for it. Merge-pending can last minutes
+  // (CI, the serial queue), and a worker prompted in that window commits work
+  // no reviewer saw; with nothing checking, it merged anyway.
+  if (entry.mergeReadySha && headSha && headSha !== entry.mergeReadySha) {
+    resetToWorkingOnWorkerPush(projectName, wtPath, baseBranch, entry, "merge");
+    return true;
+  }
+
   // CI gate: defense-in-depth against merging a branch with red GitHub
   // Actions. Runs BEFORE the rebase/force-push so we read CI for the SHA
   // the worker actually published; the post-merge SHA on base is the same
@@ -299,6 +307,9 @@ export function handleMergePending(
     scheduleDelayedPoke(projectName, 30_000);
     return true;
   }
+  // The rebase rewrote the cleared commits, so the rebased tip is what is
+  // cleared now, in case this merge has to be retried from merge-pending.
+  updateWorkerFields(projectName, entry.name, { mergeReadySha: getBranchHeadSha(wtPath) ?? undefined });
 
   // Merge to base branch
   finalizeMerge(projectName, projectPath, baseBranch, entry);

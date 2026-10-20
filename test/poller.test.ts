@@ -1444,8 +1444,9 @@ describe("poll — reviewing state (async)", () => {
     poll("myproject");
 
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
+    // The reviewed tip, including the reviewer's own fix, is what may merge.
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
-      expect.objectContaining({ prState: "merge-pending" }),
+      expect.objectContaining({ prState: "merge-pending", mergeReadySha: "abc123" }),
     );
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
@@ -3044,6 +3045,62 @@ describe("poll — merge-pending state", () => {
         ciFixAttempts: 0,
       }),
     );
+  });
+
+  // Merge-pending can last minutes (CI, the serial queue). A worker prompted in
+  // that window commits work no reviewer saw, and it used to merge anyway.
+  it("sends commits made after the verdict back to review instead of merging them", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        mergeReadySha: "reviewed1",
+      }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("postverdict2");
+
+    poll("myproject");
+
+    expect(rebaseBranch).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working", pendingReviewAt: expect.any(Number), mergePendingAt: undefined }),
+    );
+  });
+
+  it("merges when HEAD is the SHA cleared for merge, and clears the rebased tip", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        mergeReadySha: "abc123",
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", { mergeReadySha: "abc123" });
+  });
+
+  // In-flight entries from before the stamp existed must not all bounce back
+  // to review the moment the new code deploys.
+  it("merges an entry written before mergeReadySha existed", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("anything9");
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalled();
   });
 
   it("merges without a resolver when the branch already contains the base tip", () => {

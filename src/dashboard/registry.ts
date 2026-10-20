@@ -251,6 +251,12 @@ export interface WorkerEntry {
   // killed and escalated to `failing` rather than wedging the state machine.
   reviewStartedAt?: number;
   mergePendingAt?: string;
+  // The HEAD the poller cleared as the worker entered merge-pending: the
+  // reviewed tip, a verified resolver or ci-fix push, or the merge queue's own
+  // rebase of one of those. handleMergePending merges that SHA and nothing
+  // else, so a commit made after the verdict goes back through review. Absent
+  // on entries written before it existed; those merge as they did then.
+  mergeReadySha?: string;
   lastReviewBody?: string;
   // Durable last-review record for `garden review` (see LastReviewData). Set at
   // verdict dispatch, survives the merge/failing resets. Distinct from

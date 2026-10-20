@@ -347,6 +347,7 @@ a terminal state — it returns to `working` when the operator responds
 | merge-pending | ci-fixing     | Merge queue: CI gate failed, budget remains (ci-fix launched) |
 | merge-pending | failing       | Merge queue: CI gate failed AND ci-fix budget already exhausted |
 | merge-pending | working       | Merge queue: merge fails (non-conflict)              |
+| merge-pending | working       | Merge queue: HEAD is not the SHA cleared for merge (`mergeReadySha`), i.e. commits landed after the verdict; re-arms review |
 | resolving     | merge-pending | Resolver `Stop`, programmatic verification passed    |
 | resolving     | failing       | Resolver `Stop`, budget exhausted or verification failed |
 | resolving     | working       | Worker push event (commits during resolution, aborted) |
@@ -439,7 +440,7 @@ Drives:
 - `merge-pending → resolving` (rebase conflict)
 - `merge-pending → ci-fixing` (CI gate failed; budget remains, agent dispatched)
 - `merge-pending → failing` (CI gate failed; ci-fix budget already exhausted)
-- `merge-pending → working` (merge fails for a non-conflict reason)
+- `merge-pending → working` (merge fails for a non-conflict reason, or HEAD moved past the SHA cleared for merge)
 - `resolving → merge-pending` (resolver succeeded and verification passed)
 - `resolving → failing` (resolver budget exhausted or verification failed)
 - `ci-fixing → ci-fixing` (retrying within budget, without exposing an unverified repair to merging)

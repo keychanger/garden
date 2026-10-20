@@ -323,6 +323,7 @@ function handleSkipReviewMerge(
   });
   transitionState(projectName, entry.name, "merge-pending", {
     mergePendingAt: new Date().toISOString(),
+    mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
     pendingReviewAt: undefined,
   });
   refreshDashboard();
@@ -653,6 +654,7 @@ function handleHolisticFinalReview(
     });
     transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
+      mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
       lastReviewBody: review?.body,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
@@ -1256,6 +1258,7 @@ function dispatchDefaultVerdict(
     // which files the reviewer touched. finalizeMerge clears it.
     transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
+      mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
       lastReviewBody: review.body,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
@@ -1401,6 +1404,7 @@ function dispatchTrellisVerdict(
     setDoneSentinel(entry.worktreePath);
     transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
+      mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
       lastReviewBody: review.body,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
@@ -1439,6 +1443,7 @@ function dispatchTrellisVerdict(
     }
     transitionState(projectName, entry.name, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
+      mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
       lastReviewBody: review.body,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
@@ -1546,13 +1551,13 @@ export function resetToWorkingOnWorkerPush(
   wtPath: string,
   baseBranch: string,
   entry: WorkerEntry,
-  context: "review" | "resolve",
+  context: "review" | "resolve" | "merge",
 ): void {
   log.info(
     "poller",
-    context === "review"
-      ? "new commits during review, resetting to working"
-      : "new commits during resolve, resetting to working",
+    context === "merge"
+      ? "new commits after the review verdict, resetting to working"
+      : `new commits during ${context}, resetting to working`,
     { worker: entry.name, data: { project: projectName } },
   );
   killReviewWindow(projectName, entry.name);
