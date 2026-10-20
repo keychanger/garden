@@ -321,7 +321,10 @@ describe("what garden hands git", () => {
       await runHolisticBacktest(["repo", "bold-ash", "--from", "main~1", "--to", "main"]);
       expect(fs.readFileSync(path.join(out, "holistic-backtest-bold-ash.diff.txt"), "utf8")).toContain("+feature");
     } finally {
-      process.env.TMPDIR = tmpdir;
+      // Assigning undefined stores the string "undefined", which os.tmpdir()
+      // then returns for every later test (CI runners set no TMPDIR).
+      if (tmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = tmpdir;
     }
   });
 
