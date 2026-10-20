@@ -259,6 +259,13 @@ function pagedDiffBlock(heading: string, command: string, stat: string): string 
 export const reviewDocumentationSection: PromptSection = {
   name: "documentation",
   render(ctx) {
+    if (ctx.data.docsPaged && ctx.data.docSections.length > 0) {
+      return pagedFilesBlock(
+        "## Documentation (current state in the worktree — too large to inline)",
+        "Verify these are still accurate after the diff above:",
+        ctx.data.docSections,
+      );
+    }
     const intro = "## Documentation (current state in the worktree)\n\nVerify these are still accurate after the diff above.";
     const docs = ctx.data.docSections.join("\n");
     return docs ? `${intro}\n\n${docs}` : intro;
@@ -269,10 +276,34 @@ export const reviewTestFilesSection: PromptSection = {
   name: "test-files",
   render(ctx) {
     if (ctx.data.testSections.length === 0) return null;
+    if (ctx.data.testsPaged) {
+      return pagedFilesBlock(
+        "## Test Files (corresponding to changed source files — too large to inline)",
+        "Verify these still correctly cover the changed behavior:",
+        ctx.data.testSections,
+      );
+    }
     const intro = "## Test Files (corresponding to changed source files)\n\nVerify these still correctly cover the changed behavior.";
     return `${intro}\n\n${ctx.data.testSections.join("\n")}`;
   },
 };
+
+// Rendered in place of inlined documentation or test files that do not fit
+// beside the diff (see composeWithinCeiling). The readers open every section
+// with a `### <path>` heading, which is all the reviewer needs to open the file
+// itself.
+function pagedFilesBlock(heading: string, ask: string, sections: readonly string[]): string {
+  return [
+    heading,
+    "",
+    "These files are too large to carry in this prompt beside the diff. You are",
+    "running INSIDE the worktree with a shell, so read them there as the review",
+    "needs them.",
+    "",
+    ask,
+    ...sections.map((section) => `- ${section.split("\n", 1)[0].replace(/^### /, "")}`),
+  ].join("\n");
+}
 
 export const reviewVerdictFormatSection: PromptSection = {
   name: "verdict-format",
