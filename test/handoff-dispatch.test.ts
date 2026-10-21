@@ -36,6 +36,7 @@ import {
 } from "../src/dashboard/handoff-dispatch.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { getWorkers } from "../src/dashboard/registry.js";
+import { log } from "../src/dashboard/log.js";
 import { loadConfig } from "../src/config.js";
 
 const cfg = await import("../src/config.js") as unknown as { SESSIONS_DIR: string };
@@ -212,6 +213,40 @@ describe("processPendingHandoffs", () => {
     expect(fs.existsSync(abandoned)).toBe(false);
     expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")))
       .toMatchObject({ workerName: "bold-ash" });
+  });
+
+  it("retires a claim whose processing throws, and still claims the requests after it", () => {
+    // Left in place, a claim that throws on every pass was replayed ahead of
+    // the inbox on each wake, so no other handoff in the fleet was claimed.
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    vi.mocked(getWorkers).mockImplementationOnce(() => { throw new TypeError("getWorkers(...).find is not a function"); });
+    const poison = submitHandoffRequest({ targetProject: "constructor", seedFile: validSeed });
+    moveToClaim(poison, 999_999_999);
+    fs.writeFileSync(validSeed, "seed content");
+    const legit = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+
+    expect(() => processPendingHandoffs()).not.toThrow();
+
+    expect(fs.readdirSync(claimsDir)).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(resultPath(poison), "utf8")).error).toMatch(/^handoff dispatch failed: TypeError/);
+    expect(vi.mocked(newWorker)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({ projectName: "wolf", handoffRequestId: legit }));
+    expect(JSON.parse(fs.readFileSync(resultPath(legit), "utf8"))).toMatchObject({ workerName: "bold-ash" });
+  });
+
+  it("keeps a receipt written before a later throw rather than rewriting it as a failure", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    // The first info line is the one written after the receipt is persisted.
+    vi.mocked(log.info).mockImplementationOnce(() => { throw new Error("log write failed"); });
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+
+    expect(() => processPendingHandoffs()).not.toThrow();
+
+    const receipt = JSON.parse(fs.readFileSync(resultPath(id), "utf8"));
+    expect(receipt).toMatchObject({ workerName: "bold-ash" });
+    expect(receipt.error).toBeUndefined();
+    // The new worker's seed is still there to deliver.
+    expect(fs.existsSync(path.join(controlDir, "handoff", "seeds", `${id}.txt`))).toBe(true);
   });
 
   it("reconciles an abandoned claim to its existing worker without spawning twice", () => {

@@ -17,6 +17,7 @@ vi.mock("node:fs", () => ({
   default: {
     existsSync: vi.fn(() => false),
     mkdirSync: vi.fn(),
+    readFileSync: vi.fn(() => ""),
   },
 }));
 
@@ -159,6 +160,28 @@ describe("createWorktree", () => {
       return "";
     });
     expect(() => createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak")).not.toThrow();
+  });
+
+  it("installs nothing for a tree whose content skipped review", () => {
+    // resurrect from a worker's own branch or tip runs this unsandboxed, as the
+    // operator. npm lifecycle scripts and a poetry build would run its code,
+    // and --ignore-scripts is not enough: the tree's own .npmrc names programs
+    // npm runs itself, so neither install runs at all.
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync.mockReturnValue("[tool.poetry]");
+    createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak", { useExistingBranch: true, allowScripts: false });
+    expect(mockExec.mock.calls.some(c => c[0] === "npm")).toBe(false);
+    expect(mockExec.mock.calls.some(c => c[0] === "poetry")).toBe(false);
+  });
+
+  it("installs npm and poetry for reviewed content", () => {
+    mockFs.existsSync.mockReturnValue(true);
+    mockFs.readFileSync.mockReturnValue("[tool.poetry]");
+    createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak", { startPoint: "refs/remotes/origin/main" });
+    expect(mockExec).toHaveBeenCalledWith(
+      "npm", ["install"], expect.objectContaining({ cwd: "/tmp/wt/proj/worker" }),
+    );
+    expect(mockExec.mock.calls.some(c => c[0] === "poetry")).toBe(true);
   });
 
   it("checks out an existing branch by name, and starts a new one only from a SHA or full ref", () => {

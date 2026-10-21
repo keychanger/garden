@@ -8,6 +8,43 @@ import { useGitTmpHome } from "./helpers.js";
 // that it reports what git actually said, so a mocked git would test nothing.
 const env = useGitTmpHome();
 
+// What tmux reports, which is the test's choice: no dashboard by default, as on
+// a CI runner, and the live-pane cases set panes explicitly.
+// `panes: null` is a session that did not answer the listing, which is not the
+// same as one with no panes: absence is only evidence when tmux gave it.
+const tmuxView = vi.hoisted(() => ({
+  dashboard: false,
+  panes: [] as { panePath: string; windowName?: string }[] | null,
+}));
+vi.mock("../../src/session.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/session.js")>()),
+  dashboardExists: () => tmuxView.dashboard,
+}));
+// Passes through to the real reap, so the daemon-kill case below still
+// exercises it, while recording whether it was reached at all.
+const reaped = vi.hoisted(() => ({ worktrees: [] as string[] }));
+vi.mock("../../src/dashboard/worker-reap.js", async (orig) => {
+  const actual = await orig<typeof import("../../src/dashboard/worker-reap.js")>();
+  return {
+    ...actual,
+    reapAndLog: (...args: Parameters<typeof actual.reapAndLog>) => {
+      reaped.worktrees.push(args[2]);
+      return actual.reapAndLog(...args);
+    },
+  };
+});
+vi.mock("../../src/dashboard/tmux.js", async (orig) => ({
+  ...(await orig<typeof import("../../src/dashboard/tmux.js")>()),
+  listSessionPanesOrNull: () => tmuxView.panes?.map((pane, i) => ({
+    windowId: `@${i}`,
+    windowName: pane.windowName ?? "main",
+    paneId: `%${i}`,
+    width: 80,
+    height: 24,
+    panePath: pane.panePath,
+  })) ?? null,
+}));
+
 function git(cwd: string, ...args: string[]): string {
   const r = spawnSync("git", args, { cwd, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr}`);
@@ -40,6 +77,9 @@ function branches(repo: string): string[] {
 let wtPath: string;
 
 beforeEach(() => {
+  tmuxView.dashboard = false;
+  tmuxView.panes = [];
+  reaped.worktrees = [];
   // No origin remote: there is no remote branch to delete, so local cleanup
   // succeeds without turning the intentional absence into a retry.
   wtPath = path.join(
@@ -280,6 +320,165 @@ describe("runWorkerCleanup (real git)", () => {
 
     expect(git(env.repoPath, "ls-remote", "origin", "refs/heads/numb-clear-vow")).toBe("");
     expect(git(env.repoPath, "ls-remote", "origin", "refs/tags/numb-clear-vow")).not.toBe("");
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("leaves a worker whose pane is still running alone, whatever the registry says", async () => {
+    // A sandboxed worker can delete a sibling's registry entry, and `garden
+    // workers stop` run from a worker's pane removes the entry without being
+    // able to kill the pane. The pane here is the visible one: no hidden
+    // window carries the worker's name.
+    const { runWorkerCleanup, readWorkerCleanupRequest } = await import("../../src/dashboard/worker-cleanup.js");
+    fs.writeFileSync(path.join(wtPath, "precious.txt"), "uncommitted");
+    const file = await seed();
+    tmuxView.dashboard = true;
+    tmuxView.panes = [{ panePath: path.join(env.home, "repo") }, { panePath: path.join(wtPath, "src") }];
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(path.join(wtPath, "precious.txt"))).toBe(true);
+    expect(branches(env.repoPath)).toContain("numb-clear-vow");
+    // Deferred, not failed: the retry finds it again and no attempt is spent.
+    expect(readWorkerCleanupRequest(file)?.attempts).toBe(0);
+  });
+
+  it.each([
+    ["the worktree root itself", () => wtPath],
+    ["a directory inside it", () => path.join(wtPath, "src")],
+  ])("leaves a worker alone when a pane's cwd is %s", async (_label, paneCwd) => {
+    const { runWorkerCleanup, readWorkerCleanupRequest } = await import("../../src/dashboard/worker-cleanup.js");
+    fs.writeFileSync(path.join(wtPath, "precious.txt"), "uncommitted");
+    const file = await seed();
+    tmuxView.dashboard = true;
+    tmuxView.panes = [{ panePath: paneCwd() }];
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(path.join(wtPath, "precious.txt"))).toBe(true);
+    expect(branches(env.repoPath)).toContain("numb-clear-vow");
+    expect(readWorkerCleanupRequest(file)?.attempts).toBe(0);
+  });
+
+  it("defers a request that names only a branch while the worker's pane runs", async () => {
+    // Validation passes such a request once the registry entry is gone, and
+    // the entry lives where a worker can delete it. `branch -D` is refused for
+    // a checked-out branch, but the origin delete would still run with the
+    // operator's credentials and drop a live worker's pushed branch.
+    const { runWorkerCleanup, readWorkerCleanupRequest } = await import("../../src/dashboard/worker-cleanup.js");
+    const origin = path.join(env.home, "origin.git");
+    spawnSync("git", ["init", "--bare", "-q", "-b", "main", origin], { stdio: "ignore" });
+    git(env.repoPath, "remote", "add", "origin", origin);
+    git(env.repoPath, "push", "-q", "origin", "refs/heads/numb-clear-vow:refs/heads/numb-clear-vow");
+    const file = await seed({ worktreePath: undefined });
+    tmuxView.dashboard = true;
+    tmuxView.panes = [{ panePath: wtPath }];
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(git(env.repoPath, "ls-remote", "origin", "refs/heads/numb-clear-vow")).not.toBe("");
+    expect(readWorkerCleanupRequest(file)?.attempts).toBe(0);
+  });
+
+  it("defers when the dashboard session does not answer the pane listing", async () => {
+    // An empty listing and an unanswered one are different facts. Treating the
+    // second as "no pane" reaps and removes on the strength of a question tmux
+    // never answered.
+    const { runWorkerCleanup, readWorkerCleanupRequest } = await import("../../src/dashboard/worker-cleanup.js");
+    fs.writeFileSync(path.join(wtPath, "precious.txt"), "uncommitted");
+    const file = await seed();
+    tmuxView.dashboard = true;
+    tmuxView.panes = null;
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(path.join(wtPath, "precious.txt"))).toBe(true);
+    expect(branches(env.repoPath)).toContain("numb-clear-vow");
+    expect(readWorkerCleanupRequest(file)?.attempts).toBe(0);
+  });
+
+  it("cleans up despite a poller or watchdog window sitting in the worktree", async () => {
+    // Garden's own long-lived windows inherit the cwd of whichever client
+    // spawned them, so a `garden` command run from inside a worktree parks one
+    // there for the life of the dashboard. None of them is ever a worker, so
+    // none is evidence that one is still alive.
+    const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+    const file = await seed();
+    tmuxView.dashboard = true;
+    tmuxView.panes = [
+      { panePath: wtPath, windowName: "_garden-watchdog" },
+      { panePath: path.join(wtPath, "src"), windowName: "_leadingtone-io-poller" },
+      { panePath: wtPath, windowName: "_garden-logs" },
+      { panePath: wtPath, windowName: "_garden-usage-poller" },
+    ];
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(wtPath)).toBe(false);
+    expect(branches(env.repoPath)).not.toContain("numb-clear-vow");
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("tells the operator once a deferral stops looking temporary", async () => {
+    // While it defers, the request hides the worktree from the orphan sweep
+    // and blocks resurrection, so a deferral nobody hears about is a leak
+    // nothing reports. It still never counts an attempt: the give-up path
+    // deletes the tree, and a live worker may be using it.
+    const mod = await import("../../src/dashboard/worker-cleanup.js");
+    const { readAlerts } = await import("../../src/dashboard/alerts.js");
+    const file = await seed();
+    tmuxView.dashboard = true;
+    tmuxView.panes = [{ panePath: wtPath }];
+
+    mod.runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+    const first = mod.readWorkerCleanupRequest(file);
+    expect(first?.deferredSince).toBeGreaterThan(0);
+    expect(readAlerts().alerts).toHaveLength(0);
+
+    // Backdate the first deferral past the bound, as the next retry finds it.
+    mod.writeWorkerCleanupRequest({
+      ...first!,
+      deferredSince: Date.now() - mod.CLEANUP_DEFER_ALERT_AFTER_MS - 1,
+    });
+    mod.runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    const alerts = readAlerts().alerts;
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].level).toBe("warn");
+    expect(alerts[0].message).toContain("deferred");
+    expect(mod.readWorkerCleanupRequest(file)?.attempts).toBe(0);
+    expect(fs.existsSync(wtPath)).toBe(true);
+
+    // Said once, not on every retry two minutes apart.
+    mod.runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+    expect(readAlerts().alerts).toHaveLength(1);
+  });
+
+  it("never reaps a worktree whose pane is still running", async () => {
+    // The reap SIGKILLs every process whose cwd is inside the worktree, the
+    // live worker's own agent included, so the defer has to come first. A
+    // reorder leaves the tree intact, so every other assertion here still
+    // passes while the sibling is killed.
+    const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+    await seed();
+    tmuxView.dashboard = true;
+    tmuxView.panes = [{ panePath: wtPath }];
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(reaped.worktrees).toEqual([]);
+  });
+
+  it("cleans up once no pane runs in the worktree", async () => {
+    const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+    const file = await seed();
+    tmuxView.dashboard = true;
+    // A sibling whose name extends this one's must not count as this worker.
+    tmuxView.panes = [{ panePath: `${wtPath}-two` }, { panePath: env.repoPath }];
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(wtPath)).toBe(false);
+    expect(branches(env.repoPath)).not.toContain("numb-clear-vow");
     expect(fs.existsSync(file)).toBe(false);
   });
 

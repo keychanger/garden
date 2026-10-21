@@ -99,6 +99,18 @@ describe("dueCleanupRequests", () => {
     expect(dueCleanupRequests(now + 60_000)).toEqual([]);
   });
 
+  it("retires a request whose validation throws, and still returns the others", async () => {
+    // One that threw every time ended the sweep before any request was
+    // returned, on every tick, so no stalled cleanup was retried.
+    fs.appendFileSync(path.join(env.gardenDir, "config.yml"), "  nopath:\n    displayName: no path\n");
+    const { dueCleanupRequests, CLEANUP_RETRY_AFTER_MS } = await importCleanup();
+    const poison = await seed("nopath", "bold-calm-ash", CLEANUP_RETRY_AFTER_MS * 2);
+    await seed("wolf", "brisk-firm-oak", CLEANUP_RETRY_AFTER_MS * 2);
+
+    expect(dueCleanupRequests(now).map(r => r.worker)).toEqual(["brisk-firm-oak"]);
+    expect(fs.existsSync(poison)).toBe(false);
+  });
+
   it("recovers identity from the body, not the filename", async () => {
     // Both project and worker names contain hyphens, so the filename
     // `worker-cleanup-<project>-<worker>` cannot be parsed back apart.

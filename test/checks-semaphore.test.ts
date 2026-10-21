@@ -129,10 +129,34 @@ describe("tryAcquireChecksSlot / releaseChecksSlot", () => {
   it("respects a slot held by a live process it does not own", async () => {
     const mod = await loadModule();
     fs.mkdirSync(path.dirname(mod.checksSlotPath(0)), { recursive: true });
-    // pid 1 (launchd/init) is always alive and owned by root — processAlive
-    // sees EPERM and treats it as live.
-    fs.writeFileSync(mod.checksSlotPath(0), "1\n2026-01-01T00:00:00Z\n");
+    fs.writeFileSync(mod.checksSlotPath(0), `${process.ppid}\n2026-01-01T00:00:00Z\n`);
     expect(mod.tryAcquireChecksSlot(1)).toBe(null);
+  });
+
+  it("respects a slot held by a process it is not allowed to signal", async () => {
+    // EPERM is the one refusal that proves the owner is alive: the pid belongs
+    // to another user. Reading it as dead would steal a running suite's slot.
+    const mod = await loadModule();
+    fs.mkdirSync(path.dirname(mod.checksSlotPath(0)), { recursive: true });
+    fs.writeFileSync(mod.checksSlotPath(0), `4242\n2026-01-01T00:00:00Z\n`);
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    });
+    expect(mod.tryAcquireChecksSlot(1)).toBe(null);
+    expect(fs.readFileSync(mod.checksSlotPath(0), "utf8").split("\n")[0]).toBe("4242");
+  });
+
+  it("takes a slot whose owner pid is 1 or below, which no checks run has", async () => {
+    // The slots sit in the worker-writable sessions dir, and kill(0) answers
+    // for launchd (1), our own process group (0) and every process (-1), so a
+    // slot forged with one of them would otherwise be held forever.
+    const mod = await loadModule();
+    fs.mkdirSync(path.dirname(mod.checksSlotPath(0)), { recursive: true });
+    for (const pid of ["1", "0", "-1"]) {
+      fs.writeFileSync(mod.checksSlotPath(0), `${pid}\n2026-01-01T00:00:00Z\n`);
+      expect(mod.tryAcquireChecksSlot(1), pid).toBe(0);
+      mod.releaseChecksSlot(0);
+    }
   });
 
   it("release removes only a slot this process owns", async () => {
@@ -165,7 +189,7 @@ describe("acquireChecksSlot", () => {
   it("fails open (returns null) when maxWaitMs elapses", async () => {
     const mod = await loadModule();
     fs.mkdirSync(path.dirname(mod.checksSlotPath(0)), { recursive: true });
-    fs.writeFileSync(mod.checksSlotPath(0), "1\n2026-01-01T00:00:00Z\n");
+    fs.writeFileSync(mod.checksSlotPath(0), `${process.ppid}\n2026-01-01T00:00:00Z\n`);
     const slot = await mod.acquireChecksSlot(1, { pollMs: 20, maxWaitMs: 100 });
     expect(slot).toBe(null);
   });

@@ -96,7 +96,8 @@ describe("worker bootstrap (real fs + real git)", () => {
     // each cold-started hook process reuses the bundle's cached bytecode.
     const postCmd = settings.hooks.PostToolUse[0].hooks[0].command;
     expect(postCmd).toContain("NODE_COMPILE_CACHE=");
-    expect(postCmd).toContain(".cache/garden/node-compile");
+    expect(postCmd).toContain(".garden/control/node-compile");
+    expect(postCmd).not.toContain(".cache/garden");
     expect(postCmd).toMatch(/posttooluse$/);
   });
 

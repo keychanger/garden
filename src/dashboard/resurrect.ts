@@ -20,7 +20,7 @@ import { respawnWorkerWindow } from "./create.js";
 import { resolveTranscriptPath } from "./conversation.js";
 import {
   branchExistsOnOrigin, commitExists, createWorktree, fetchOrigin,
-  isAncestor, localBranchExists, resolveBaseBranch, worktreeExists,
+  isAncestor, localBranchExists, resolveBaseBranch, resolveSpawnBase, worktreeExists,
   worktreePath as defaultWorktreePath, workerCleanupMarkerPath,
 } from "./git.js";
 import { branchRef, remoteBranchRef } from "./git-refs.js";
@@ -157,6 +157,11 @@ export interface ResurrectOutcome {
   notes: string[];
 }
 
+// What the operator is told when the start point skipped review: the deps are
+// the worker's own session's to install, inside its sandbox.
+const skippedInstallNote =
+  "dependencies not installed — this start point skipped review; let the worker install them in its own sandbox";
+
 export function resurrectWorker(t: Tombstone): ResurrectOutcome {
   const projectConfig = tryGetProject(t.project);
   if (!projectConfig) {
@@ -185,7 +190,7 @@ export function resurrectWorker(t: Tombstone): ResurrectOutcome {
 
   const startedFrom = worktreeExists(wtPath) || fs.existsSync(wtPath)
     ? recoverExistingWorktree(wtPath, notes)
-    : rebuildWorktree(repoPath, wtPath, branch, t.entry, notes);
+    : rebuildWorktree(repoPath, wtPath, branch, t.entry, resolveSpawnBase(projectConfig), notes);
 
   const rebuilt = rebuildEntry(t);
   // Point the entry at where things actually are now, in case the tombstone
@@ -248,24 +253,34 @@ function rebuildWorktree(
   wtPath: string,
   branch: string,
   entry: WorkerEntry,
+  configuredBase: string,
   notes: string[],
 ): string {
   if (!fetchOrigin(repoPath)) {
     notes.push("git fetch origin failed — rebuilding from local refs");
   }
+  // Only the project's own base on origin is content that went through review.
+  // The worker's own branch or tip is not, nor is a local-only branch under
+  // the base's name, which any worker can create. Neither is a base the
+  // tombstone merely names: it is copied from the registry, which a worker can
+  // write, so a branch it pushed itself would otherwise be read as reviewed.
+  // An unreviewed tree installs nothing — the install runs unsandboxed, as the
+  // operator — so say so where the operator will read it.
   if (localBranchExists(repoPath, branch)) {
-    createWorktree(repoPath, wtPath, branch, { useExistingBranch: true });
+    createWorktree(repoPath, wtPath, branch, { useExistingBranch: true, allowScripts: false });
+    notes.push(skippedInstallNote);
     return `existing local branch ${branch}`;
   }
   const base = entry.baseBranch ?? resolveBaseBranch(repoPath);
   // git gets the full ref; the operator's output names it the usual way.
-  const baseRef = branchExistsOnOrigin(repoPath, base) ? { ref: remoteBranchRef(base), label: `origin/${base}` }
-    : localBranchExists(repoPath, base) ? { ref: branchRef(base), label: base }
+  const baseRef = branchExistsOnOrigin(repoPath, base) ? { ref: remoteBranchRef(base), label: `origin/${base}`, reviewed: base === configuredBase }
+    : localBranchExists(repoPath, base) ? { ref: branchRef(base), label: base, reviewed: false }
     : null;
   const tip = entry.lastSeenSha;
   if (tip && commitExists(repoPath, tip) && (!baseRef || !isAncestor(repoPath, tip, baseRef.ref))) {
-    createWorktree(repoPath, wtPath, branch, { startPoint: tip });
+    createWorktree(repoPath, wtPath, branch, { startPoint: tip, allowScripts: false });
     notes.push(`recovered unmerged work: branch restored at ${tip.slice(0, 9)}`);
+    notes.push(skippedInstallNote);
     return `unmerged tip ${tip.slice(0, 9)}`;
   }
   if (!baseRef) {
@@ -273,6 +288,7 @@ function rebuildWorktree(
       `Base branch '${base}' exists neither on origin nor locally in ${repoPath} — cannot rebuild the worktree.`,
     );
   }
-  createWorktree(repoPath, wtPath, branch, { startPoint: baseRef.ref });
+  createWorktree(repoPath, wtPath, branch, { startPoint: baseRef.ref, allowScripts: baseRef.reviewed });
+  if (!baseRef.reviewed) notes.push(skippedInstallNote);
   return baseRef.label;
 }

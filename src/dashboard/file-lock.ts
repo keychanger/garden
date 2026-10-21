@@ -56,11 +56,20 @@ function readHolderPid(filePath: string): number | null {
 }
 
 function processIsAlive(pid: number): boolean {
+  // No garden process is pid 1, which always answers kill(0); a lock naming it
+  // is forged (these locks sit in the worker-writable sessions dir) and would
+  // otherwise never be reclaimed.
+  if (pid <= 1) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+    // Only EPERM proves the pid exists: it names another user's process. Every
+    // other answer means the OS could not find it — ESRCH for a pid in range,
+    // a type error for one past it, which a forged body used to step around
+    // the rule above by writing a longer number. A parsable holder is never
+    // age-evicted, so reading one of those as alive held the lock forever.
+    return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 

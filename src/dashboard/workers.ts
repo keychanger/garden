@@ -52,7 +52,7 @@ import { writeWorkerCleanupRequest, dispatchWorkerCleanup } from "./worker-clean
 import { captureAncestorPids } from "./worker-reap.js";
 import { addAlert } from "./alerts.js";
 import { showBeads, reopenBead, unassignBead } from "./beads.js";
-import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "./poller.js";
+import { ensureProjectPoller, killCiFixWindow, killReviewWindow, stopProjectPoller } from "./poller.js";
 import {
   clearAwaitingInput, clearDoneSentinel, dispatchDelayedContinue, dispatchDelayedSeed,
   setAwaitingInput,
@@ -1052,6 +1052,10 @@ export function finalizeWorkerRemoval(
   const project = tryGetProject(projectName);
 
   killReviewWindow(projectName, workerName);
+  // The ci-fix agent runs in a window of its own, and the git cleanup now
+  // defers while any pane holds the worktree, so leaving it alive both lets it
+  // keep working for a worker that is gone and stalls the cleanup behind it.
+  killCiFixWindow(projectName, workerName);
   if (entry) {
     recordWorkerRemoved(
       projectName, workerName, entry.createdAt,

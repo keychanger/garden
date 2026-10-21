@@ -30,7 +30,9 @@ import {
   workerCleanupMarkerPath, worktreePath as canonicalWorktreePath,
   gitCleanupStep, gitCleanupOutput,
 } from "./git.js";
-import { shellEscape } from "./tmux.js";
+import { listSessionPanesOrNull, shellEscape, type SessionPane } from "./tmux.js";
+import { isInfrastructureWindow } from "./window-names.js";
+import { dashboardExists } from "../session.js";
 import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
 import { isGeneratedWorkerName } from "./names.js";
@@ -59,6 +61,14 @@ export const CLEANUP_RETRY_AFTER_MS = 2 * 60_000;
 // genuinely stuck repo into an unbounded retry loop.
 export const CLEANUP_MAX_ATTEMPTS = 3;
 
+// How long a pane may hold a removed worker's worktree before the operator is
+// told. A deferral is often legitimate and brief — a shell they left in the
+// tree, a headless agent finishing its turn — so this is well past the point
+// where it reads as finishing on its own. Until it clears, the request masks
+// the worktree from the orphan sweep and blocks resurrection, so a deferral
+// nobody hears about is a leak nothing reports.
+export const CLEANUP_DEFER_ALERT_AFTER_MS = 30 * 60_000;
+
 export interface WorkerCleanupRequest {
   project: string;
   worker: string;
@@ -72,6 +82,12 @@ export interface WorkerCleanupRequest {
   // Completed attempts. Incremented only by a run that actually failed.
   attempts: number;
   lastError?: string;
+  // When a pane holding the worktree first deferred this request, and whether
+  // the operator has been told. A deferral deliberately counts no attempt — it
+  // must never age into the give-up path, which deletes a tree a live worker
+  // may still be using — so this is how an unbounded one gets surfaced.
+  deferredSince?: number;
+  deferAlertedAt?: number;
 }
 
 export function isWorkerCleanupRequest(v: unknown): v is WorkerCleanupRequest {
@@ -86,7 +102,9 @@ export function isWorkerCleanupRequest(v: unknown): v is WorkerCleanupRequest {
       && r.protectedPids.length <= 64
       && r.protectedPids.every((pid) => Number.isSafeInteger(pid) && (pid as number) > 1)))
     && Number.isSafeInteger(r.attempts) && (r.attempts as number) >= 0
-    && (r.lastError === undefined || typeof r.lastError === "string");
+    && (r.lastError === undefined || typeof r.lastError === "string")
+    && (r.deferredSince === undefined || typeof r.deferredSince === "number")
+    && (r.deferAlertedAt === undefined || typeof r.deferAlertedAt === "number");
 }
 
 export function writeWorkerCleanupRequest(req: WorkerCleanupRequest): void {
@@ -184,7 +202,14 @@ export function dueCleanupRequests(nowMs: number): WorkerCleanupRequest[] {
       log.warn("cleanup", "retired unreadable cleanup request", { data: { file } });
       continue;
     }
-    const error = cleanupRequestError(req);
+    let error: string | null;
+    try {
+      error = cleanupRequestError(req);
+    } catch (err) {
+      // Retired like a rejected request. Left on disk it throws again on every
+      // tick, and the throw ends the sweep before any other request is returned.
+      error = `validation failed: ${String(err)}`;
+    }
     if (error) {
       rejectCleanupRequest(file, req, error);
       continue;
@@ -277,10 +302,89 @@ export function runWorkerCleanup(project: string, worker: string): void {
   }
 }
 
+// A dashboard pane whose cwd is inside the worktree, which is how a worker's
+// pane looks wherever it is shown, the right slot included. Asked of tmux
+// rather than the registry: a sandboxed worker can rewrite the registry, and
+// `garden workers stop` run from a worker's pane removes the entry without
+// being able to kill the pane.
+//
+// Three answers, because absence is only evidence when tmux gave it. No
+// session means no dashboard pane can hold the worktree, so a cleanup after
+// `dashboard exit` still runs (a sandboxed caller lands here too, and its git
+// steps fail for the watchdog's unsandboxed retry to redo). A session that
+// cannot be enumerated says nothing either way, so it defers.
+//
+// tmux reports a pane's cwd as the kernel resolved it, while the canonical
+// worktree path is spelled lexically, so both spellings are matched: under a
+// symlinked HOME or ~/.garden the lexical one never matches, and the check
+// would silently never fire. reapWorktreeProcesses resolves for the same
+// reason.
+function paneHoldingWorktree(worktree: string): SessionPane | "unreachable" | null {
+  if (!dashboardExists()) return null;
+  const panes = listSessionPanesOrNull();
+  if (panes === null) return "unreachable";
+  const spellings = new Set([worktree]);
+  try { spellings.add(fs.realpathSync(worktree)); } catch { /* gone: lexical is all there is */ }
+  return panes.find(pane =>
+    !isInfrastructureWindow(pane.windowName)
+    && [...spellings].some(dir => pane.panePath === dir || pane.panePath.startsWith(`${dir}/`)),
+  ) ?? null;
+}
+
+// Keep deferring, never destroy, and tell the operator once the wait stops
+// looking like something finishing on its own. The request's own body carries
+// the clock, since each retry is a fresh process.
+function deferCleanup(req: WorkerCleanupRequest, holder: SessionPane | "unreachable"): void {
+  const { project, worker } = req;
+  const reason = holder === "unreachable"
+    ? "the dashboard session did not answer"
+    : "a pane is still running in the worktree";
+  log.info("cleanup", `deferred: ${reason}`, {
+    worker,
+    data: holder === "unreachable"
+      ? { project }
+      : { project, pane: holder.paneId, window: holder.windowName },
+  });
+
+  const now = Date.now();
+  const since = req.deferredSince ?? now;
+  if (req.deferredSince === undefined) {
+    writeWorkerCleanupRequest({ ...req, deferredSince: now });
+    return;
+  }
+  if (req.deferAlertedAt !== undefined || now - since < CLEANUP_DEFER_ALERT_AFTER_MS) return;
+
+  const held = holder === "unreachable"
+    ? "the dashboard session could not be read, so garden cannot tell whether a pane still holds it"
+    : `pane ${holder.paneId} in window ${holder.windowName} is still running in it`;
+  addAlert({
+    level: "warn",
+    source: "cleanup",
+    project,
+    worker,
+    message:
+      `Git cleanup for '${worker}' has been deferred for ${Math.round((now - since) / 60_000)} minutes: ${held}. `
+      + `Until it clears, the worktree is hidden from the orphaned-worktree sweep and cannot be resurrected. `
+      + `Close what is running there, or remove it manually: `
+      + `git -C ${req.repoPath} worktree remove ${canonicalWorktreePath(project, worker)} --force`,
+    dedupKey: `cleanup-deferred:${project}:${worker}`,
+  });
+  writeWorkerCleanupRequest({ ...req, deferredSince: since, deferAlertedAt: now });
+}
+
 function executeWorkerCleanup(req: WorkerCleanupRequest): void {
   const { project, worker } = req;
   const configured = tryGetProject(project);
   if (!configured) return; // validated immediately before the lock
+
+  // Every removal kills the worker's panes before writing its request, so a
+  // pane still running there means the worker is not gone. The request stays
+  // for the next retry and the attempt is not counted.
+  const holder = paneHoldingWorktree(canonicalWorktreePath(project, worker));
+  if (holder !== null) {
+    deferCleanup(req, holder);
+    return;
+  }
 
   const failures: string[] = [];
   const repoPath = configured.path;

@@ -127,6 +127,44 @@ describe("withFileLock", () => {
     expect(fs.existsSync(lockPath)).toBe(true);
   });
 
+  it("reclaims a lock that names pid 1, which no garden holder ever is", async () => {
+    // These locks sit in the worker-writable sessions dir, and pid 1 always
+    // answers kill(0), so a forged body naming it read as a live holder forever.
+    const { withFileLock } = await importHelper();
+    for (const body of ["1", "1:deadbeef-dead-beef-dead-beefdeadbeef"]) {
+      const lockPath = path.join(env.sessionsDir, "forged.lock");
+      fs.writeFileSync(lockPath, body);
+      expect(withFileLock(lockPath, () => "ran", { deadlineMs: 300 }), body).toBe("ran");
+    }
+  });
+
+  it("reclaims a lock naming a pid the OS cannot name", async () => {
+    // kill(0) answers a pid past the OS range with a type error rather than
+    // ESRCH, so reading every non-ESRCH answer as "alive" let a forged body
+    // step around the pid-1 rule by writing a longer number, and a parsable
+    // holder is never age-evicted.
+    const { withFileLock } = await importHelper();
+    for (const body of ["2147483648", "4294967296:deadbeef-dead-beef-dead-beefdeadbeef"]) {
+      const lockPath = path.join(env.sessionsDir, "oversized.lock");
+      fs.writeFileSync(lockPath, body);
+      expect(withFileLock(lockPath, () => "ran", { deadlineMs: 300 }), body).toBe("ran");
+    }
+  });
+
+  it("waits for a holder the process is not allowed to signal", async () => {
+    // EPERM is the one non-ESRCH answer that proves the pid exists: it belongs
+    // to another user. Reading it as dead would steal a live holder's lock.
+    const { withFileLock } = await importHelper();
+    const lockPath = path.join(env.sessionsDir, "foreign.lock");
+    const body = "4242:deadbeef-dead-beef-dead-beefdeadbeef";
+    fs.writeFileSync(lockPath, body);
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+    });
+    expect(() => withFileLock(lockPath, () => "ran", { deadlineMs: 100 })).toThrow(/Could not acquire/);
+    expect(fs.readFileSync(lockPath, "utf-8")).toBe(body);
+  });
+
   it("does not remove a replacement lock when releasing", async () => {
     const { withFileLock } = await importHelper();
     const lockPath = path.join(env.sessionsDir, "replaced.lock");

@@ -151,18 +151,20 @@ describe("hookCompileCachePrefix", () => {
   const savedHome = process.env.HOME;
   afterAll(() => { process.env.HOME = savedHome; });
 
-  it("emits a NODE_COMPILE_CACHE assignment under ~/.cache", () => {
+  it("emits a NODE_COMPILE_CACHE assignment in the control tree, which no sandbox can write", () => {
+    // The hook that loads this cache runs unsandboxed, and ~/.cache is in every
+    // worker's write grant.
     process.env.HOME = "/Users/joshua";
     const prefix = hookCompileCachePrefix();
     // A shell-safe path needs no quoting; the assignment is still valid.
-    expect(prefix).toBe("NODE_COMPILE_CACHE=/Users/joshua/.cache/garden/node-compile ");
+    expect(prefix).toBe("NODE_COMPILE_CACHE=/Users/joshua/.garden/control/node-compile ");
     // Trailing space so it prepends cleanly onto the runner command.
     expect(prefix.endsWith(" ")).toBe(true);
   });
 
   it("shell-escapes a HOME containing spaces so the assignment stays one token", () => {
     process.env.HOME = "/Users/jo shua";
-    expect(hookCompileCachePrefix()).toBe("NODE_COMPILE_CACHE='/Users/jo shua/.cache/garden/node-compile' ");
+    expect(hookCompileCachePrefix()).toBe("NODE_COMPILE_CACHE='/Users/jo shua/.garden/control/node-compile' ");
   });
 
   it("returns empty when HOME is unset (never bakes a bogus path)", () => {

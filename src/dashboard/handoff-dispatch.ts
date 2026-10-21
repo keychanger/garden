@@ -305,12 +305,17 @@ function findExistingWorker(request: HandoffRequest): string | null {
     .find(entry => entry.handoffRequestId === request.id)?.name ?? null;
 }
 
+// The claim owner's pid comes from a filename garden wrote in the control
+// tree, so none of the forged values reach here today. Kept the same shape as
+// the lock and slot probes so it stays safe if one ever does: only EPERM
+// proves the pid exists, and pid 1 or below is no garden process.
 function processIsAlive(pid: number): boolean {
+  if (pid <= 1) return false;
   try {
     process.kill(pid, 0);
     return true;
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code !== "ESRCH";
+    return (err as NodeJS.ErrnoException).code === "EPERM";
   }
 }
 
@@ -472,6 +477,21 @@ function processClaim(claimFile: string, filenameId: string): void {
   deliverClaimResult(claimFile, filenameId, response, request);
 }
 
+// A claim whose processing throws is retired with an error receipt instead of
+// being left in the claims directory. Left there, it is replayed on every poll
+// once its owner exits, ahead of claimPendingRequests, so one request that
+// throws every time would keep any later handoff from being claimed. A receipt
+// persisted before the throw is replayed rather than overwritten.
+function processClaimIsolated(claimFile: string, id: string): void {
+  try {
+    processClaim(claimFile, id);
+  } catch (err) {
+    const receipt = readReceipt(id);
+    if (receipt) deliverClaimResult(claimFile, id, receipt);
+    else rejectClaim(claimFile, id, `handoff dispatch failed: ${String(err)}`);
+  }
+}
+
 function recoverAbandonedClaims(): void {
   let files: string[];
   try {
@@ -491,7 +511,7 @@ function recoverAbandonedClaims(): void {
     } catch {
       continue;
     }
-    processClaim(recovered, match[1]);
+    processClaimIsolated(recovered, match[1]);
   }
 }
 
@@ -549,7 +569,7 @@ function claimPendingRequests(): void {
     } catch {
       continue;
     }
-    processClaim(claimFile, match[1]);
+    processClaimIsolated(claimFile, match[1]);
   }
 }
 

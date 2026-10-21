@@ -138,11 +138,15 @@ describe("launchHeadlessAgent", () => {
     expect(cmd).toContain("> /tmp/sessions/myproject-bold-ash-review-result.txt 2>&1");
   });
 
-  it("pokes the signal FIFO with a [-p] guard so a missing FIFO is a no-op", () => {
+  it("pokes the signal FIFO only when it is a FIFO and not a link, without blocking", () => {
+    // The window's shell runs unsandboxed, and the path is in the
+    // worker-writable sessions dir: `-p` refuses a plain file there, `! -L` a
+    // symlink, the opened descriptor is checked again before the write, and
+    // the read-write open cannot hang on a FIFO nobody reads.
     launchHeadlessAgent(baseOpts());
     const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
-    expect(cmd).toContain("[ -p /tmp/sessions/myproject-poll-signal ]");
-    expect(cmd).toContain("(echo > /tmp/sessions/myproject-poll-signal) 2>/dev/null");
+    const fifo = "/tmp/sessions/myproject-poll-signal";
+    expect(cmd).toContain(`[ -p ${fifo} ] && [ ! -L ${fifo} ] && (exec 3<>${fifo} && [ -p /dev/fd/3 ] && printf '\\n' >&3) 2>/dev/null`);
   });
 
   it("calls onLaunched exactly once after launch", () => {

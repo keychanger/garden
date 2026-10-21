@@ -23,17 +23,31 @@ export function pollerSpawnLockPath(project: string): string {
 }
 
 // Poke the project's poller without blocking. The poller blocks on `read` from
-// the FIFO; any byte wakes it for one cycle.
+// the FIFO; any byte wakes it for one cycle. The path is in the worker-writable
+// sessions dir and this runs unsandboxed, so it writes only into a FIFO: never
+// through a symlink planted there (O_NOFOLLOW), nor into a plain file.
 export function triggerProjectPoll(projectName: string): void {
   const fifo = signalFifoPath(projectName);
+  let fd: number | undefined;
   try {
-    const fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK);
+    fd = fs.openSync(fifo, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK | fs.constants.O_NOFOLLOW);
+    if (!fs.fstatSync(fd).isFIFO()) return;
     fs.writeSync(fd, "\n");
-    fs.closeSync(fd);
     log.debug("poller", "triggered poll", { data: { project: projectName } });
   } catch {
     // FIFO not ready or poller not running
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
   }
+}
+
+// triggerProjectPoll's checks for a poke from a shell garden runs unsandboxed.
+// A shell cannot open without following a link, so after checking the path it
+// checks the descriptor it opened: a FIFO swapped for a link or a file in
+// between takes no write. Read-write, so the open cannot block on a FIFO
+// nobody reads. fifoRef is shell-escaped, or a quoted variable.
+export function fifoPokeShell(fifoRef: string): string {
+  return `[ -p ${fifoRef} ] && [ ! -L ${fifoRef} ] && (exec 3<>${fifoRef} && [ -p /dev/fd/3 ] && printf '\\n' >&3) 2>/dev/null`;
 }
 
 // Detached subprocess that sleeps then writes one byte to the project's poll
@@ -47,14 +61,16 @@ export function triggerProjectPoll(projectName: string): void {
 // fires, etc. Empirically: `node -e "setTimeout(fn, 0).unref()"` exits
 // without running fn.
 //
-// Why `1<>${fifo}` rather than the old `echo > ${fifo}`: `echo > FIFO` opens
-// O_WRONLY which blocks at open(2) when no reader exists — when the poller
-// window died (test cleanup, dashboard crash) the bash sat orphaned forever,
-// accumulating 200+ such orphans over weeks. The `<>` redirect opens R+W,
-// which never blocks on FIFOs (the kernel allows the open even with no other
-// party); the byte is buffered, the bash exits cleanly. If no reader ever
-// arrives, the FIFO is eventually unlinked and the buffer reclaimed — no
-// orphan accumulation.
+// Why the poke goes through fifoPokeShell rather than the old
+// `echo > ${fifo}`: `echo > FIFO` opens O_WRONLY, which blocks at open(2) when
+// no reader exists — when the poller window died (test cleanup, dashboard
+// crash) the bash sat orphaned forever, accumulating 200+ such orphans over
+// weeks. fifoPokeShell opens read-write, which never blocks on a FIFO (the
+// kernel allows the open even with no other party); the byte is buffered and
+// the bash exits cleanly. If no reader ever arrives, the FIFO is eventually
+// unlinked and the buffer reclaimed — no orphan accumulation. It also refuses
+// a link or a plain file planted at the path, which this timer needs as much
+// as any other poker: it runs detached and unsandboxed.
 //
 // Why the sleep is chunked with a FIFO-existence check rather than one
 // `sleep ${delaySec}`: the review-timeout poke schedules two hours out, and a
@@ -76,7 +92,7 @@ export function scheduleDelayedPoke(projectName: string, delayMs: number): void 
     `s=30; [ "$t" -lt 30 ] && s="$t"; ` +
     `sleep "$s"; t=$((t - s)); ` +
     `done; ` +
-    `[ -p "$f" ] && printf '\\n' 1<>"$f"`;
+    fifoPokeShell(`"$f"`);
   try {
     const child = spawn("bash", ["-c", script], { detached: true, stdio: "ignore" });
     child.unref();
@@ -110,10 +126,18 @@ export function isWorkerClaudeWorking(projectName: string, workerName: string): 
 // exists", surfacing as a spurious error alert ("failed to restart project
 // poller" / "tick failed"); now the loser quietly defers to the winner.
 export function ensureSignalFifo(fifoPath: string): boolean {
+  // lstat: a symlink planted at the path (even a dangling one) is removed
+  // rather than followed. A directory is removed too — unlink refuses one, and
+  // mkfifo then fails EEXIST on a path that is not a FIFO, which this function
+  // reports by throwing: a worker could mkdir the path and stall its project's
+  // poller, and so its whole review and merge pipeline, for good. The sessions
+  // dir holds nothing but garden's own IPC, so anything at this path that is
+  // not a FIFO is squatting it.
   try {
-    const stat = fs.statSync(fifoPath);
+    const stat = fs.lstatSync(fifoPath);
     if (stat.isFIFO()) return true;
-    fs.unlinkSync(fifoPath);
+    if (stat.isDirectory()) fs.rmSync(fifoPath, { recursive: true, force: true });
+    else fs.unlinkSync(fifoPath);
   } catch { /* doesn't exist */ }
   fs.mkdirSync(path.dirname(fifoPath), { recursive: true });
   // mkfifo is the syscall; node has no direct binding, so shell out.
@@ -126,7 +150,7 @@ export function ensureSignalFifo(fifoPath: string): boolean {
     // and we are the loser — defer. Any other failure (mkfifo missing, no
     // permission, a non-FIFO squatting the path) is real: rethrow.
     try {
-      if (fs.statSync(fifoPath).isFIFO()) return false;
+      if (fs.lstatSync(fifoPath).isFIFO()) return false;
     } catch { /* still absent — not an EEXIST race */ }
     throw err;
   }

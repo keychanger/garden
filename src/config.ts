@@ -920,9 +920,26 @@ export function projectDisplayName(config: GardenConfig, name: string): string {
   return config.projects[name]?.displayName || name;
 }
 
+// config.projects is a plain object parsed from YAML, so indexing it also
+// answers for the names Object.prototype carries ("constructor", "toString",
+// "__proto__"), handing back a project with no path. Project names reach these
+// lookups from worker-writable request files, so only an own key is a project.
+function configuredProject(config: GardenConfig, name: string): ProjectConfig | undefined {
+  return Object.hasOwn(config.projects, name) ? config.projects[name] : undefined;
+}
+
+// Same rule for the plot buckets. The active plot name is read from
+// dashboard state, which a worker sandbox can write, and `plots["constructor"]`
+// resolves up the prototype chain to a truthy value whose `.projects` is
+// undefined — which threw inside the status-pane bake and left the pane frozen
+// on its last content, while the plot hotkeys silently did nothing.
+function configuredPlot(plots: Record<string, PlotConfig>, name: string): PlotConfig | undefined {
+  return Object.hasOwn(plots, name) ? plots[name] : undefined;
+}
+
 export function getProject(name: string): ProjectConfig & { name: string } {
   const config = loadConfig();
-  const project = config.projects[name];
+  const project = configuredProject(config, name);
   if (!project) {
     throw new Error(
       `Unknown project: ${name}. Run 'garden list' to see projects.`
@@ -934,7 +951,7 @@ export function getProject(name: string): ProjectConfig & { name: string } {
 export function tryGetProject(name: string): (ProjectConfig & { name: string }) | null {
   try {
     const config = loadConfig();
-    const project = config.projects[name];
+    const project = configuredProject(config, name);
     return project ? { ...project, name } : null;
   } catch {
     return null;
@@ -993,12 +1010,13 @@ export function getFocusedProjectNames(
   const cfg = config ?? loadConfig();
   const plots = cfg.plots ?? {};
   const plotName =
-    (activePlot && plots[activePlot] ? activePlot : null) ??
+    (activePlot && configuredPlot(plots, activePlot) ? activePlot : null) ??
     firstFocusedPlotName(cfg) ??
-    (plots[DEFAULT_PLOT] ? DEFAULT_PLOT : null);
+    (configuredPlot(plots, DEFAULT_PLOT) ? DEFAULT_PLOT : null);
   if (!plotName) return [];
-  const plot = plots[plotName];
-  return plot.projects.filter(n => n in cfg.projects);
+  const plot = configuredPlot(plots, plotName);
+  if (!plot) return [];
+  return plot.projects.filter(n => Object.hasOwn(cfg.projects, n));
 }
 
 /**
@@ -1016,7 +1034,7 @@ export function allPlotProjectNames(config?: GardenConfig): string[] {
     for (const name of plot.projects) {
       if (seen.has(name)) continue;
       seen.add(name);
-      if (name in cfg.projects) names.push(name);
+      if (Object.hasOwn(cfg.projects, name)) names.push(name);
     }
   }
   return names;
@@ -1065,7 +1083,7 @@ export function getPlot(config: GardenConfig, name: string): PlotConfig {
 }
 
 export function tryGetPlot(config: GardenConfig, name: string): PlotConfig | null {
-  return plotsMap(config)[name] ?? null;
+  return configuredPlot(plotsMap(config), name) ?? null;
 }
 
 export function isPlotFocused(plot: PlotConfig): boolean {

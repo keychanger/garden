@@ -30,6 +30,7 @@ export function useTmpHome() {
     originalHome = process.env.HOME;
     process.env.HOME = tmpHome;
     fs.mkdirSync(path.join(tmpHome, ".garden", "sessions"), { recursive: true });
+    fs.mkdirSync(path.join(tmpHome, ".garden", "control"), { recursive: true });
   });
 
   afterEach(() => {
@@ -42,5 +43,6 @@ export function useTmpHome() {
     get home() { return tmpHome; },
     get gardenDir() { return path.join(tmpHome, ".garden"); },
     get sessionsDir() { return path.join(tmpHome, ".garden", "sessions"); },
+    get controlDir() { return path.join(tmpHome, ".garden", "control"); },
   };
 }

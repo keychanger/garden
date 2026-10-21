@@ -188,7 +188,7 @@ describe("refreshUsage — force bypasses the auth backoff but not the rate limi
   });
 
   function seedSnapshot(snap: unknown): void {
-    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(snap));
+    fs.writeFileSync(path.join(env.controlDir, "claude-usage.json"), JSON.stringify(snap));
   }
 
   it("force re-attempts a 'login expired' snapshot still inside the auth backoff", async () => {
@@ -255,7 +255,7 @@ describe("refreshUsage — the claim honors the caller's cadence class", () => {
   });
 
   function seedSnapshot(snap: unknown): void {
-    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(snap));
+    fs.writeFileSync(path.join(env.controlDir, "claude-usage.json"), JSON.stringify(snap));
   }
 
   it("hook path fetches a snapshot the poller leaves alone", async () => {
@@ -294,7 +294,7 @@ describe("refreshUsage — transition-graded logging collapses repeated failures
   });
 
   function seedSnapshot(snap: unknown): void {
-    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(snap));
+    fs.writeFileSync(path.join(env.controlDir, "claude-usage.json"), JSON.stringify(snap));
   }
 
   // The operator-visible surface: usage lines that reach the default info-level

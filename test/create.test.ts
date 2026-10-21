@@ -579,6 +579,19 @@ describe("respawnWorkerWindow capability gate", () => {
 });
 
 describe("buildWorktreeWorkerCommand", () => {
+  // The pane shell outlives the agent and runs unsandboxed, so its poke is
+  // held to the same form as every other: it refuses a link or a plain file
+  // planted at the FIFO path, and a read-write open so it cannot block on a
+  // FIFO nobody reads (`echo > fifo` hung the pane there).
+  it("pokes the poller through the hardened form, in the fresh and resumed panes", async () => {
+    const { fifoPokeShell } = await import("../src/dashboard/poller-fifo.js");
+    const poke = fifoPokeShell(shellEscape("/tmp/fake-sessions/myproject-poll-signal"));
+    expect(buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "s1"))
+      .toContain(`${poke}; exec $SHELL`);
+    expect(buildWorktreeResumeCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "s1"))
+      .toContain(`${poke}; exec $SHELL`);
+  });
+
   it("includes session-id and context file", () => {
     const cmd = buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "session-123");
     expect(cmd).toContain("--session-id session-123");

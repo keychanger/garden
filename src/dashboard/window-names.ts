@@ -86,4 +86,18 @@ export function isParkingWindow(name: string): boolean {
   return /^_.+-active$/.test(name);
 }
 
+// Garden's own long-lived infrastructure: the per-project pollers, the usage
+// poller, the watchdog and the `_garden-*` views. None of them ever holds a
+// worker, so a worktree one of them happens to sit in is not evidence that a
+// worker is still alive there. They are created without an explicit start
+// directory, so they inherit the cwd of whichever client spawned them — a
+// `garden` command run from inside a worktree leaves one parked there for the
+// life of the dashboard.
+export function isInfrastructureWindow(name: string): boolean {
+  return isGardenWindow(name)
+    || name === usagePollerWindowName()
+    || name === watchdogWindowName()
+    || /^_.+-poller$/.test(name);
+}
+
 export { GARDEN_VIEWS };

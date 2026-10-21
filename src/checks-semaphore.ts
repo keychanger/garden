@@ -28,6 +28,9 @@ export function checksSlotPath(slot: number): string {
 }
 
 function processAlive(pid: number): boolean {
+  // A slot naming pid 1 or below was forged: kill(0) answers for launchd, for
+  // our own process group (0) and for every process (-1).
+  if (pid <= 1) return false;
   try {
     process.kill(pid, 0);
     return true;

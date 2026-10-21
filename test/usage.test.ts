@@ -724,7 +724,7 @@ describe("renderUsagePane", () => {
   const env = useTmpHome();
   const now = Date.parse("2026-04-15T20:00:00Z");
 
-  // usage.ts reads SESSIONS_DIR at module load — reset the cache inside each
+  // usage.ts resolves its control paths at module load — reset the cache inside each
   // test so the dynamic import below picks up the tmp HOME set by useTmpHome.
   beforeEach(() => { vi.resetModules(); });
 
@@ -734,7 +734,7 @@ describe("renderUsagePane", () => {
   }
 
   function writeSnapshot(snap: unknown) {
-    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(snap));
+    fs.writeFileSync(path.join(env.controlDir, "claude-usage.json"), JSON.stringify(snap));
   }
 
   it("renders a loading line when no snapshot exists", async () => {
@@ -1665,7 +1665,7 @@ describe("refreshUsage — file-lock claim", () => {
         fiveHour: { pct: 42, resetsAt: new Date(now + 60 * 60_000).toISOString() },
       },
     };
-    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(prior));
+    fs.writeFileSync(path.join(env.controlDir, "claude-usage.json"), JSON.stringify(prior));
 
     // No GARDEN_CLAUDE_SESSION_KEY, no .credentials.json in tmp home — refreshUsage
     // takes the no-creds error path. The fix preserves prior data.
@@ -1691,7 +1691,7 @@ describe("refreshUsage — file-lock claim", () => {
         fiveHour: { pct: 7, resetsAt: new Date(now + 60 * 60_000).toISOString() },
       },
     };
-    fs.writeFileSync(path.join(env.sessionsDir, "claude-usage.json"), JSON.stringify(fresh));
+    fs.writeFileSync(path.join(env.controlDir, "claude-usage.json"), JSON.stringify(fresh));
 
     // Even with no credentials, refreshUsage should bail before the no-creds
     // error path because the claim slot was already taken (snapshot is fresh).

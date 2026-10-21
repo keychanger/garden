@@ -1191,7 +1191,7 @@ export function updateWorkerFieldsIf<T>(
 ): T | undefined {
   return withRegistryLock(() => {
     const registry = readRegistry();
-    const entry = registry.workers[project]?.find(candidate => candidate.name === workerName);
+    const entry = projectEntries(registry, project)?.find(candidate => candidate.name === workerName);
     if (!entry) return undefined;
     const decision = decide(entry);
     if (decision.fields !== null) {
@@ -1227,7 +1227,15 @@ export function findWorkerByName(
 }
 
 export function getWorkers(project: string): WorkerEntry[] {
-  return readRegistry().workers[project] ?? [];
+  return projectEntries(readRegistry(), project) ?? [];
+}
+
+// registry.workers is a plain object parsed from JSON, so indexing it also
+// answers for Object.prototype's names with something that is not an entry
+// list. Lookups keyed by a name from a worker-writable request read own keys
+// only.
+function projectEntries(registry: WorkerRegistry, project: string): WorkerEntry[] | undefined {
+  return Object.hasOwn(registry.workers, project) ? registry.workers[project] : undefined;
 }
 
 export function getAllWorkerNames(): string[] {

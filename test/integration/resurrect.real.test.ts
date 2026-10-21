@@ -5,7 +5,7 @@
 // removed. The dashboard is treated as not running (tmux mocked out), so the
 // session-respawn leg defers to the next attach — that leg is the shared
 // respawnWorkerWindow attach path, exercised by the dashboard itself.
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -126,6 +126,119 @@ describe("resurrectWorker (real fs/git)", () => {
 
     expect(outcome.startedFrom).toBe("local-only");
     expect(git(worktreePath, "rev-parse", "HEAD")).toBe(localSha);
+  });
+
+  // The dependency install runs unsandboxed, as the operator. A start point
+  // that skipped review gets none: npm reads the tree's own .npmrc, whose keys
+  // name programs npm runs itself, so --ignore-scripts does not confine it.
+  // `node_modules` is the observable: npm creates it for a tree with a
+  // dependency, so its absence means npm never ran rather than that this
+  // particular script happened not to fire.
+  describe("dependency installs", () => {
+    const sentinel = () => path.join(env.home, "ran-as-operator");
+
+    function commitPackageWithScripts() {
+      fs.writeFileSync(path.join(projectPath, "package.json"), JSON.stringify({
+        name: "victim",
+        version: "1.0.0",
+        scripts: { postinstall: "node mark.js" },
+        dependencies: { "the-dep": `file:${path.join(env.home, "the-dep")}` },
+      }));
+      fs.writeFileSync(path.join(projectPath, "mark.js"), `require("fs").writeFileSync(${JSON.stringify(sentinel())}, "x");\n`);
+      git(projectPath, "add", "package.json", "mark.js");
+      git(projectPath, "commit", "-q", "-m", "scripts");
+    }
+
+    beforeEach(() => {
+      vi.stubEnv("npm_config_offline", "true");
+      vi.stubEnv("npm_config_audit", "false");
+      vi.stubEnv("npm_config_fund", "false");
+      vi.stubEnv("npm_config_update_notifier", "false");
+      const dep = path.join(env.home, "the-dep");
+      fs.mkdirSync(dep, { recursive: true });
+      fs.writeFileSync(path.join(dep, "package.json"), JSON.stringify({ name: "the-dep", version: "1.0.0" }));
+    });
+
+    afterEach(() => { vi.unstubAllEnvs(); });
+
+    it("skips the install when restoring an unmerged tip", async () => {
+      git(projectPath, "checkout", "-q", "-b", "scratch");
+      commitPackageWithScripts();
+      const tipSha = git(projectPath, "rev-parse", "HEAD");
+      git(projectPath, "checkout", "-q", "main");
+      git(projectPath, "branch", "-D", "scratch");
+      const t = await tombstoneFor({ lastSeenSha: tipSha });
+
+      const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+      const outcome = resurrectWorker(t);
+
+      expect(git(worktreePath, "rev-parse", "HEAD")).toBe(tipSha);
+      expect(fs.existsSync(path.join(worktreePath, "node_modules"))).toBe(false);
+      expect(fs.existsSync(sentinel())).toBe(false);
+      expect(outcome.notes.some(n => n.includes("skipped review"))).toBe(true);
+    });
+
+    it("skips the install when adopting the worker's own leftover branch", async () => {
+      git(projectPath, "checkout", "-q", "-b", WORKER);
+      commitPackageWithScripts();
+      git(projectPath, "checkout", "-q", "main");
+      const t = await tombstoneFor({});
+
+      const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+      const outcome = resurrectWorker(t);
+
+      expect(outcome.startedFrom).toBe(`existing local branch ${WORKER}`);
+      expect(fs.existsSync(path.join(worktreePath, "node_modules"))).toBe(false);
+      expect(fs.existsSync(sentinel())).toBe(false);
+    });
+
+    it("skips the install for a base that exists only as a local branch", async () => {
+      git(projectPath, "checkout", "-q", "-b", "local-only");
+      commitPackageWithScripts();
+      const localSha = git(projectPath, "rev-parse", "HEAD");
+      git(projectPath, "checkout", "-q", "main");
+      const t = await tombstoneFor({ baseBranch: "local-only", lastSeenSha: localSha });
+
+      const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+      const outcome = resurrectWorker(t);
+
+      expect(outcome.startedFrom).toBe("local-only");
+      expect(fs.existsSync(path.join(worktreePath, "node_modules"))).toBe(false);
+      expect(fs.existsSync(sentinel())).toBe(false);
+    });
+
+    it("skips the install for a base on origin the tombstone merely names", async () => {
+      // baseBranch is copied from the registry, which a worker can write, so a
+      // branch it pushed itself is not the project's reviewed base.
+      git(projectPath, "checkout", "-q", "-b", "worker-pushed");
+      commitPackageWithScripts();
+      git(projectPath, "push", "-q", "origin", "worker-pushed");
+      const pushedSha = git(projectPath, "rev-parse", "HEAD");
+      git(projectPath, "checkout", "-q", "main");
+      const t = await tombstoneFor({ baseBranch: "worker-pushed", lastSeenSha: pushedSha });
+
+      const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+      const outcome = resurrectWorker(t);
+
+      expect(outcome.startedFrom).toBe("origin/worker-pushed");
+      expect(fs.existsSync(path.join(worktreePath, "node_modules"))).toBe(false);
+      expect(fs.existsSync(sentinel())).toBe(false);
+    });
+
+    it("installs normally from the project's own base on origin", async () => {
+      // The reviewed case: scripts run, as they must for native builds.
+      commitPackageWithScripts();
+      git(projectPath, "push", "-q", "origin", "main");
+      const t = await tombstoneFor({ lastSeenSha: git(projectPath, "rev-parse", "origin/main") });
+
+      const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+      const outcome = resurrectWorker(t);
+
+      expect(outcome.startedFrom).toBe("origin/main");
+      expect(fs.existsSync(path.join(worktreePath, "node_modules"))).toBe(true);
+      expect(fs.existsSync(sentinel())).toBe(true);
+      expect(outcome.notes.some(n => n.includes("skipped review"))).toBe(false);
+    });
   });
 
   it("restores unmerged work from the object store when the branch was deleted", async () => {

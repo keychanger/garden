@@ -1,6 +1,6 @@
 // Claude usage meter: fetches the authenticated user's 5-hour, weekly, and
 // model-scoped weekly quota using the OAuth token that Claude Code writes to
-// the macOS Keychain. Persists a snapshot to SESSIONS_DIR and renders the
+// the macOS Keychain. Persists a snapshot to the control tree and renders the
 // header meters for the dashboard status pane.
 //
 // Two sources, split by cadence (this is what Claude Code itself does):
@@ -27,7 +27,8 @@ import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { SESSIONS_DIR, anyAnthropicMeteredProject } from "../config.js";
+import { anyAnthropicMeteredProject } from "../config.js";
+import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { readCodexUsage, type CodexUsageData } from "./codex-usage.js";
 import {
@@ -42,8 +43,14 @@ import { log } from "./log.js";
 import { readRegistry, type WorkerEntry } from "./registry.js";
 import { readLatestTranscriptModel, resolveTranscriptPath } from "./conversation.js";
 
-export const USAGE_FILE = path.join(SESSIONS_DIR, "claude-usage.json");
-const USAGE_LOCK = path.join(SESSIONS_DIR, "claude-usage.lock");
+// Control tree, not SESSIONS_DIR: every writer (usage poller, the Stop hook's
+// `_usage-refresh`, `garden usage refresh`, `garden login`) runs unsandboxed,
+// while a worker sandbox can write the sessions tree. There a worker could
+// forge a reading that pauses auto-continue fleet-wide, freeze the meter, or
+// plant a FIFO that blocks every reader. Sandboxed readers (a worker-run
+// command's repaint) can still read the control tree.
+export const USAGE_FILE = path.join(CONTROL_DIR, "claude-usage.json");
+export const USAGE_LOCK = path.join(CONTROL_DIR, "claude-usage.lock");
 
 export interface UsageMeter {
   pct: number;
@@ -454,10 +461,18 @@ function headerMeter(
   const util = headerValue(headers, `anthropic-ratelimit-unified-${window}-utilization`);
   const reset = headerValue(headers, `anthropic-ratelimit-unified-${window}-reset`);
   if (util === undefined || reset === undefined) return undefined;
-  const pct = Number(util);
-  const resetSec = Number(reset);
-  if (!Number.isFinite(pct) || !Number.isFinite(resetSec)) return undefined;
-  return { pct: pct * 100, resetsAt: new Date(resetSec * 1000).toISOString() };
+  const pct = Number(util) * 100;
+  const resetMs = Number(reset) * 1000;
+  // Scale before the finiteness check, not after: a header near the float
+  // ceiling is finite until multiplied, and JSON.stringify writes the overflow
+  // back as null, which the snapshot guard rightly refuses — so the refresh
+  // would write a snapshot its own reader reports as absent, and every Stop
+  // hook would fetch again. A reset beyond the Date range stays finite but
+  // makes toISOString throw, so it is dropped here too.
+  if (!Number.isFinite(pct) || !Number.isFinite(resetMs)) return undefined;
+  const resetsAt = new Date(resetMs);
+  if (Number.isNaN(resetsAt.getTime())) return undefined;
+  return { pct, resetsAt: resetsAt.toISOString() };
 }
 
 // Node lowercases response header names and collapses duplicates to the first;
@@ -513,11 +528,11 @@ function pickScopedMeters(limits: unknown): ScopedMeter[] {
     const label = model && typeof model === "object"
       ? (model as Record<string, unknown>)["display_name"]
       : undefined;
-    if (typeof pct !== "number" || typeof label !== "string" || !label) continue;
+    if (!Number.isFinite(pct) || typeof label !== "string" || !label) continue;
     if (typeof reset === "string") {
-      out.push({ pct, resetsAt: reset, label });
+      out.push({ pct: pct as number, resetsAt: reset, label });
     } else if (reset === null && pct === 0 && active === false) {
-      out.push({ pct, label });
+      out.push({ pct: pct as number, label });
     }
   }
   return out;
@@ -536,9 +551,9 @@ function pickExtraUsage(bucket: unknown): ExtraUsage | undefined {
   const b = bucket as Record<string, unknown>;
   if (b["is_enabled"] !== true) return undefined;
   const out: ExtraUsage = { enabled: true };
-  if (typeof b["monthly_limit"] === "number") out.monthlyLimit = b["monthly_limit"];
-  if (typeof b["used_credits"] === "number") out.usedCredits = b["used_credits"];
-  if (typeof b["utilization"] === "number") out.utilization = b["utilization"];
+  if (Number.isFinite(b["monthly_limit"])) out.monthlyLimit = b["monthly_limit"] as number;
+  if (Number.isFinite(b["used_credits"])) out.usedCredits = b["used_credits"] as number;
+  if (Number.isFinite(b["utilization"])) out.utilization = b["utilization"] as number;
   return out;
 }
 
@@ -592,10 +607,50 @@ function pickMeter(bucket: unknown): UsageMeter | undefined {
 export function readUsageSnapshot(): UsageSnapshot | null {
   try {
     if (!fs.existsSync(USAGE_FILE)) return null;
-    return JSON.parse(fs.readFileSync(USAGE_FILE, "utf8"));
+    const raw: unknown = JSON.parse(fs.readFileSync(USAGE_FILE, "utf8"));
+    return isUsageSnapshot(raw) ? raw : null;
   } catch {
     return null;
   }
+}
+
+// Shape guard for a persisted snapshot. A malformed one reads as absent: the
+// next refresh rewrites it, the pane shows "loading", and the auto-continue
+// gate sees no meter. Checks only the fields garden writes; unknown keys left
+// by older builds (sonnet, scopedProjection) pass. A string resetsAt that does
+// not parse is kept: consumers already handle it (checkUsageThreshold pauses
+// on it by design). Every value garden writes satisfies this, so a refresh
+// never produces a snapshot its own reader rejects.
+const isFiniteNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const isString = (v: unknown): v is string => typeof v === "string";
+const isRecord = (v: unknown): v is Record<string, unknown> =>
+  typeof v === "object" && v !== null && !Array.isArray(v);
+const optional = (v: unknown, check: (x: unknown) => boolean): boolean => v === undefined || check(v);
+
+function isUsageMeter(v: unknown): boolean {
+  return isRecord(v) && isFiniteNumber(v.pct) && isString(v.resetsAt);
+}
+
+function isScopedMeter(v: unknown): boolean {
+  return isRecord(v) && isString(v.label) && v.label !== "" && isFiniteNumber(v.pct)
+    && optional(v.resetsAt, isString);
+}
+
+function isExtraUsage(v: unknown): boolean {
+  return isRecord(v) && typeof v.enabled === "boolean" && optional(v.monthlyLimit, isFiniteNumber)
+    && optional(v.usedCredits, isFiniteNumber) && optional(v.utilization, isFiniteNumber);
+}
+
+function isUsageData(v: unknown): boolean {
+  return isRecord(v) && optional(v.fiveHour, isUsageMeter) && optional(v.weekly, isUsageMeter)
+    && optional(v.scoped, (s) => Array.isArray(s) && s.every(isScopedMeter))
+    && optional(v.extraUsage, isExtraUsage);
+}
+
+export function isUsageSnapshot(v: unknown): v is UsageSnapshot {
+  return isRecord(v) && isString(v.fetchedAt) && optional(v.data, isUsageData)
+    && [v.dataAt, v.error, v.scopedAt, v.scopedAttemptedAt, v.scopedError].every((f) => optional(f, isString))
+    && [v.retryAfterMs, v.rateLimitStreak, v.weeklyPctAtScoped].every((f) => optional(f, isFiniteNumber));
 }
 
 export function writeUsageSnapshot(snap: UsageSnapshot): void {
@@ -908,7 +963,7 @@ export function mergeUsageData(
   const weekly = primary?.weekly ?? prior?.weekly;
   if (weekly) out.weekly = weekly;
   const scopedMeters = scoped ? scoped.scoped : prior?.scoped;
-  if (scopedMeters && scopedMeters.length) out.scoped = scopedMeters;
+  if (Array.isArray(scopedMeters) && scopedMeters.length) out.scoped = scopedMeters;
   const extra = scoped ? scoped.extraUsage : prior?.extraUsage;
   if (extra) out.extraUsage = extra;
   return out;

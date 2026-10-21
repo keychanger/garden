@@ -596,6 +596,13 @@ export interface SessionPane {
 // picks an arbitrary duplicate. panePath is last in the format because a path
 // may itself contain the separator.
 export function listSessionPanes(): SessionPane[] {
+  return listSessionPanesOrNull() ?? [];
+}
+
+// The same listing, keeping "tmux did not answer" distinguishable from "tmux
+// answered: no panes". A caller that treats absence as evidence — pane
+// existence is what the registry cannot forge — needs the difference.
+export function listSessionPanesOrNull(): SessionPane[] | null {
   try {
     const out = tmuxOutput(
       "list-panes", "-s", "-t", DASHBOARD_SESSION,
@@ -620,7 +627,7 @@ export function listSessionPanes(): SessionPane[] {
     }
     return result;
   } catch {
-    return [];
+    return null;
   }
 }
 

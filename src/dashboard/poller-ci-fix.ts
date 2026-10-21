@@ -528,6 +528,18 @@ function readCiFixResult(
   }
 }
 
+// The ci-fix analogue of killReviewWindow, for the worker-removal tail. The
+// ci-fix agent runs in its own window, so killing the review window leaves it
+// running on a worker that no longer exists: its 2h timeout is enforced
+// through the registry entry removal just deleted, and it can still push to
+// the branch. Its pane also holds the worktree, which now defers the cleanup
+// that used to reap it.
+export function killCiFixWindow(projectName: string, workerName: string): void {
+  const cfWindow = ciFixWindowName(projectName, workerName);
+  if (windowExists(cfWindow)) killWindowSafe(cfWindow);
+  cleanCiFixFiles(projectName, workerName);
+}
+
 export function cleanCiFixFiles(projectName: string, workerName: string): void {
   const resultFile = ciFixResultPath(projectName, workerName);
   try { fs.unlinkSync(resultFile); } catch { /* ignore */ }

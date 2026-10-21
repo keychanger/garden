@@ -144,12 +144,15 @@ export function resolveHookRunner(): string {
 // Node's on-disk V8 compile cache (Node >= 22.1), as a ready-to-prepend shell
 // prefix for the per-tool-call hook command. That hook cold-starts a fresh node
 // process on every fire by every agent; caching the compiled bytecode of the
-// ~120KB hook.js bundle shaves a measured ~8% off each cold start. The dir sits
-// under ~/.cache — a sandbox-writable root for workers (sandbox.ts
-// DEFAULT_ALLOW_WRITE) — and is shared across every worker and project, so the
-// first fire compiles and all later fires across the whole fleet reuse it. Node
-// namespaces the dir by engine version+arch and keys entries by source-content
-// hash, so a node upgrade or a hook.js rebuild self-invalidates; an unwritable
+// ~120KB hook.js bundle shaves a measured ~8% off each cold start. The dir is
+// shared across every worker and project, so the first fire compiles and all
+// later fires across the whole fleet reuse it. It lives in the control tree,
+// not the sandbox-writable ~/.cache: the hook runs unsandboxed, and Node checks
+// an entry only against a keyless CRC32, so a worker able to write the dir
+// could hand that process bytecode of its choosing (a substituted entry was
+// shown to crash it in V8). Node namespaces the dir by engine version+arch and
+// keys entries by source-content hash, so a node upgrade or a hook.js rebuild
+// self-invalidates; an unwritable
 // or unsupported dir is silently ignored (best-effort), so this can never fail a
 // hook. Returned already shell-escaped with a trailing space; empty when HOME is
 // unknown. Applied only on the claude-code path (buildSettingsJson), whose hook
@@ -159,7 +162,7 @@ export function resolveHookRunner(): string {
 export function hookCompileCachePrefix(): string {
   const home = process.env.HOME;
   if (!home) return "";
-  const dir = path.join(home, ".cache", "garden", "node-compile");
+  const dir = path.join(home, ".garden", "control", "node-compile");
   return `NODE_COMPILE_CACHE=${shellEscape(dir)} `;
 }
 

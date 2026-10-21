@@ -223,6 +223,7 @@ vi.mock("../src/dashboard/beads.js", () => ({
 vi.mock("../src/dashboard/poller.js", () => ({
   ensureProjectPoller: vi.fn(),
   killReviewWindow: vi.fn(),
+  killCiFixWindow: vi.fn(),
   stopProjectPoller: vi.fn(),
 }));
 
@@ -276,7 +277,7 @@ import {
 import { addAlert } from "../src/dashboard/alerts.js";
 import { writeWorkerCleanupRequest, dispatchWorkerCleanup } from "../src/dashboard/worker-cleanup.js";
 import { recordWorkerCreated, recordWorkerRemoved } from "../src/dashboard/telemetry.js";
-import { ensureProjectPoller, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
+import { ensureProjectPoller, killCiFixWindow, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
 import { getProject, tryGetProject, tryResolveProvider, loadConfig } from "../src/config.js";
 import { spawn } from "node:child_process";
@@ -2021,6 +2022,10 @@ describe("killPane", () => {
     killPane();
 
     expect(vi.mocked(killReviewWindow)).toHaveBeenCalledWith("myproject", "swift-oak");
+    // The ci-fix agent has its own window. Left alive it keeps working for a
+    // worker that is gone, and its pane holds the worktree, which defers the
+    // git cleanup behind it indefinitely.
+    expect(vi.mocked(killCiFixWindow)).toHaveBeenCalledWith("myproject", "swift-oak");
   });
 
   it("stops project poller when last worker is removed", () => {
@@ -2330,7 +2335,7 @@ describe("stopWorkerByName", () => {
     expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
   });
 
-  it("removes a parked worker end-to-end: window, review window, tombstone, entry, git cleanup", () => {
+  it("removes a parked worker end-to-end: windows, tombstone, entry, git cleanup", () => {
     vi.mocked(readDashState).mockReturnValue(parkedState());
     const entry = {
       name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
@@ -2342,6 +2347,7 @@ describe("stopWorkerByName", () => {
 
     expect(vi.mocked(killWindowSafe)).toHaveBeenCalledWith("_myproject-worker-swift-oak");
     expect(vi.mocked(killReviewWindow)).toHaveBeenCalledWith("myproject", "swift-oak");
+    expect(vi.mocked(killCiFixWindow)).toHaveBeenCalledWith("myproject", "swift-oak");
     expect(vi.mocked(recordWorkerRemoved)).toHaveBeenCalledWith(
       "myproject", "swift-oak", 42, "default", { ...entry },
     );

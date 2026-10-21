@@ -238,6 +238,21 @@ describe("mutateRegistry", () => {
 });
 
 describe("addWorker / getWorkers", () => {
+  it("finds no workers under a name Object.prototype carries", async () => {
+    // The name comes from a worker-written request; `.find` on what a plain
+    // object answers for it threw, every time, out of the poller's queue.
+    const { addWorker, getWorkers, findWorkerByName, updateWorkerFieldsIf } = await importRegistry();
+    addWorker("proj", { name: "bold-ash", sessionId: "abc", task: "" });
+    const decide = vi.fn(() => ({ fields: null, result: true }));
+    for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty"]) {
+      expect(getWorkers(name), name).toEqual([]);
+      expect(findWorkerByName(name, "bold-ash"), name).toBeUndefined();
+      expect(updateWorkerFieldsIf(name, "bold-ash", decide), name).toBeUndefined();
+    }
+    expect(decide).not.toHaveBeenCalled();
+    expect(findWorkerByName("proj", "bold-ash")?.name).toBe("bold-ash");
+  });
+
   it("persists and retrieves a worker", async () => {
     const { addWorker, getWorkers } = await importRegistry();
     addWorker("proj", { name: "bold-ash", sessionId: "abc", task: "fixing bugs" });

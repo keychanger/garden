@@ -202,7 +202,7 @@ export function createWorktree(
   repoPath: string,
   wtPath: string,
   branchName: string,
-  opts: { startPoint?: string; useExistingBranch?: boolean } = {},
+  opts: { startPoint?: string; useExistingBranch?: boolean; allowScripts?: boolean } = {},
 ): void {
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
   assertBranchName(branchName);
@@ -214,7 +214,7 @@ export function createWorktree(
     operatorGit(repoPath, "worktree", "add", "-b", branchName, "--end-of-options", wtPath);
   }
   log.info("git", "created worktree", { data: { branchName } });
-  installDeps(wtPath);
+  installDeps(wtPath, opts.allowScripts ?? true);
 }
 
 export function localBranchExists(repoPath: string, branchName: string): boolean {
@@ -1171,22 +1171,43 @@ export function scopeHooksPathToWorktree(wtPath: string, hooksDir: string): void
   git(wtPath, "config", "--worktree", "core.hooksPath", hooksDir);
 }
 
-function installDeps(wtPath: string): void {
+// Unsandboxed, as the operator. allowScripts is false for a tree whose content
+// skipped review (resurrect from a worker's own branch or tip): npm runs every
+// package's lifecycle scripts and poetry builds the project and its sdists, so
+// the worker's code would run with the operator's rights. Neither install runs
+// on such a tree; both are left to the worker's own sandboxed session.
+//
+// npm is skipped outright rather than run with --ignore-scripts, because that
+// flag covers lifecycle scripts only. The tree carries its own .npmrc, and
+// keys there name programs npm executes itself — `git` for a git dependency is
+// the one measured: with it set, `npm install --ignore-scripts` ran a script
+// from the tree three times, as the operator, while correctly suppressing the
+// package's own preinstall. Pinning that key on the command line would close
+// only the keys we thought of.
+function installDeps(wtPath: string, allowScripts: boolean): void {
   if (fs.existsSync(path.join(wtPath, "package.json"))) {
-    try {
-      execFileSync("npm", ["install"], {
-        cwd: wtPath,
-        stdio: ["ignore", "pipe", "pipe"],
-        timeout: 120_000,
-      });
-      log.info("git", "installed npm dependencies");
-    } catch (err) {
-      log.warn("git", "failed to install npm dependencies", {
-        data: { error: String(err) },
-      });
+    if (!allowScripts) {
+      log.info("git", "skipped npm install of unreviewed content");
+    } else {
+      try {
+        execFileSync("npm", ["install"], {
+          cwd: wtPath,
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 120_000,
+        });
+        log.info("git", "installed npm dependencies");
+      } catch (err) {
+        log.warn("git", "failed to install npm dependencies", {
+          data: { error: String(err) },
+        });
+      }
     }
   }
   if (fs.existsSync(path.join(wtPath, "pyproject.toml"))) {
+    if (!allowScripts) {
+      log.info("git", "skipped poetry install of unreviewed content");
+      return;
+    }
     try {
       const contents = fs.readFileSync(
         path.join(wtPath, "pyproject.toml"),

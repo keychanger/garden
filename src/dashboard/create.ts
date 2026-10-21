@@ -25,6 +25,7 @@ import { readRegistry, updateWorkerFields, resolveResumeAgentStatus, type Worker
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./poller.js";
+import { fifoPokeShell } from "./poller-fifo.js";
 import { startUsagePoller } from "./usage-poller.js";
 import { startWatchdog } from "./watchdog.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost, getGitCommonDir, getWorktreeAdminDir, worktreePath } from "./git.js";
@@ -824,8 +825,7 @@ export function buildWorktreeBootstrapScript(
     { grow: opts?.grow, designer: opts?.designer, planner: opts?.planner },
   );
 
-  const fifoLit = shellEscape(signalFifoPath(projectName));
-  const pollSignal = `[ -p ${fifoLit} ] && (echo > ${fifoLit}) 2>/dev/null;`;
+  const pollSignal = pollSignalSnippet(projectName);
 
   const projectPathLit = shellEscape(projectPath);
   const wtPathLit = shellEscape(wtPath);
@@ -1303,8 +1303,7 @@ export function beadsEnvExports(projectName: string, workerName: string): string
 }
 
 function pollSignalSnippet(projectName: string): string {
-  const fifoLit = shellEscape(signalFifoPath(projectName));
-  return `[ -p ${fifoLit} ] && (echo > ${fifoLit}) 2>/dev/null;`;
+  return `${fifoPokeShell(shellEscape(signalFifoPath(projectName)))};`;
 }
 
 function writeContextFile(projectName: string, projectPath: string): string {

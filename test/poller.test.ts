@@ -288,7 +288,7 @@ vi.mock("../src/dashboard/continue.js", () => ({
   workerInputBlocker: vi.fn(() => null),
 }));
 
-// Stub scheduleDelayedPoke (detached `bash -c "sleep N; printf … 1<>FIFO"`)
+// Stub scheduleDelayedPoke (a detached `bash -c` that sleeps, then pokes the FIFO)
 // and triggerProjectPoll (non-blocking FIFO write) so tests can assert "the
 // poller scheduled a re-poke" without spawning real subprocesses. Other
 // exports are kept real because callers (e.g. isWorkerClaudeWorking in

@@ -10,6 +10,7 @@ describe("codex usage meter", () => {
   let origHome: string | undefined;
   let origCodexHome: string | undefined;
   let sessions: string;
+  let control: string;
 
   beforeEach(() => {
     vi.resetModules();
@@ -22,6 +23,8 @@ describe("codex usage meter", () => {
     delete process.env.CODEX_HOME;
     sessions = path.join(home, ".garden", "sessions");
     fs.mkdirSync(sessions, { recursive: true });
+    control = path.join(home, ".garden", "control");
+    fs.mkdirSync(control, { recursive: true });
   });
   afterEach(() => {
     if (origHome === undefined) delete process.env.HOME;
@@ -69,7 +72,7 @@ describe("codex usage meter", () => {
   it("renders the Codex meter as a second column beside Claude", async () => {
     const now = Date.now();
     const iso = (msFromNow: number) => new Date(now + msFromNow).toISOString();
-    fs.writeFileSync(path.join(sessions, "claude-usage.json"), JSON.stringify({
+    fs.writeFileSync(path.join(control, "claude-usage.json"), JSON.stringify({
       fetchedAt: iso(0), dataAt: iso(0),
       data: {
         fiveHour: { pct: 28, resetsAt: iso(4 * 3600e3) },
@@ -77,7 +80,7 @@ describe("codex usage meter", () => {
         sonnet: null,
       },
     }));
-    fs.writeFileSync(path.join(sessions, "codex-usage.json"), JSON.stringify({
+    fs.writeFileSync(path.join(control, "codex-usage.json"), JSON.stringify({
       capturedAt: now,
       data: { windows: [{ windowMinutes: 43200, usedPercent: 17, resetsAt: Math.floor(now / 1000) + 1_000_000 }] },
     }));
@@ -103,7 +106,7 @@ describe("codex usage meter", () => {
   it("stays single-column (no header) when no Codex data exists", async () => {
     const now = Date.now();
     const iso = (m: number) => new Date(now + m).toISOString();
-    fs.writeFileSync(path.join(sessions, "claude-usage.json"), JSON.stringify({
+    fs.writeFileSync(path.join(control, "claude-usage.json"), JSON.stringify({
       fetchedAt: iso(0), dataAt: iso(0),
       data: { fiveHour: { pct: 28, resetsAt: iso(4 * 3600e3) }, weekly: { pct: 20, resetsAt: iso(34 * 3600e3) }, sonnet: null },
     }));
@@ -116,11 +119,11 @@ describe("codex usage meter", () => {
   it("keeps both labeled columns when the Codex snapshot has no windows", async () => {
     const now = Date.now();
     const iso = (m: number) => new Date(now + m).toISOString();
-    fs.writeFileSync(path.join(sessions, "claude-usage.json"), JSON.stringify({
+    fs.writeFileSync(path.join(control, "claude-usage.json"), JSON.stringify({
       fetchedAt: iso(0), dataAt: iso(0),
       data: { fiveHour: { pct: 28, resetsAt: iso(4 * 3600e3) }, weekly: { pct: 20, resetsAt: iso(34 * 3600e3) }, sonnet: null },
     }));
-    fs.writeFileSync(path.join(sessions, "codex-usage.json"), JSON.stringify({
+    fs.writeFileSync(path.join(control, "codex-usage.json"), JSON.stringify({
       capturedAt: now, data: { windows: [], creditBalance: 0, creditsUnlimited: false },
     }));
     const { renderUsagePane } = await import("../src/dashboard/usage.js");
@@ -136,13 +139,13 @@ describe("codex usage meter", () => {
   // whatever Codex data the test needs.
   function seedClaude(now: number) {
     const iso = (m: number) => new Date(now + m).toISOString();
-    fs.writeFileSync(path.join(sessions, "claude-usage.json"), JSON.stringify({
+    fs.writeFileSync(path.join(control, "claude-usage.json"), JSON.stringify({
       fetchedAt: iso(0), dataAt: iso(0),
       data: { fiveHour: { pct: 28, resetsAt: iso(4 * 3600e3) }, weekly: { pct: 20, resetsAt: iso(34 * 3600e3) }, sonnet: null },
     }));
   }
   function seedCodex(data: unknown, now: number) {
-    fs.writeFileSync(path.join(sessions, "codex-usage.json"), JSON.stringify({ capturedAt: now, data }));
+    fs.writeFileSync(path.join(control, "codex-usage.json"), JSON.stringify({ capturedAt: now, data }));
   }
 
   it("renders both windows smaller-first (5h above 30d) with the shorter-window bar", async () => {
@@ -371,7 +374,7 @@ describe("codex usage meter", () => {
     it("keeps provider columns and all bars equal while resizing with an aged scoped reading", async () => {
       const now = Date.now();
       seedBoth(now);
-      const snapshotPath = path.join(sessions, "claude-usage.json");
+      const snapshotPath = path.join(control, "claude-usage.json");
       const snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8"));
       snapshot.scopedAt = new Date(now - 4 * 60 * 60_000).toISOString();
       snapshot.data.scoped = [{ label: "Fable", pct: 29, resetsAt: new Date(now + 400_000_000).toISOString() }];
@@ -395,7 +398,7 @@ describe("codex usage meter", () => {
     it.each(["loading", "error", "stale"])("keeps Codex in its column with Claude %s text", async (state) => {
       const now = Date.now();
       seedBoth(now);
-      const snapshotPath = path.join(sessions, "claude-usage.json");
+      const snapshotPath = path.join(control, "claude-usage.json");
       if (state === "loading") {
         fs.unlinkSync(snapshotPath);
       } else {
@@ -725,7 +728,7 @@ process.exit(${exitCode});
         type: "event_msg",
         payload: { rate_limits: { primary: { used_percent: 91, window_minutes: 10080, resets_at: 9_999_999_999 } } },
       }) + "\n");
-      const file = path.join(sessions, "codex-usage.json");
+      const file = path.join(control, "codex-usage.json");
       fs.writeFileSync(file, JSON.stringify({
         capturedAt: 1_000,
         data: { windows: [{ windowMinutes: 10080, usedPercent: 91, resetsAt: 9_999_999_999 }] },

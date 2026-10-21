@@ -101,6 +101,35 @@ reads or runs.
   without following links, from the control tree, and from the sessions dir only for a
   seed an older build left there. `garden handoff` runs inside the sandbox, so its seed
   starts in the sessions dir and is copied into the control tree before use (below).
+  The V8 compile cache Node loads for the per-tool-call hook lives there too
+  (`control/node-compile`). The hook runs unsandboxed, and Node checks a cache entry only
+  against a keyless CRC32, so a worker able to write the cache, as it could under
+  `~/.cache`, fed that process bytecode of its choosing: a substituted entry with a
+  recomputed checksum passed Node's check and aborted the process inside V8.
+  **This one needs a rollout step.** The cache path is baked into each worker's hook
+  commands when its settings file is written — at spawn, bounce, loop respawn, or a
+  dashboard attach — and a merge-driven deploy rewrites none of those. Every
+  claude-code worker alive at deploy time therefore keeps pointing its unsandboxed hook
+  at the old `~/.cache` directory until it is bounced or the dashboard is re-attached.
+  Nothing breaks either way (Node creates the new directory on first use), but the
+  protection does not apply to those workers until then.
+- **Dependency installs from unreviewed content.** Resurrect rebuilds a worker's
+  worktree and installs its dependencies as the operator, outside any sandbox. It does
+  that only for a tree started from the project's own base on origin. A tree restored
+  from the worker's own branch or tip, from a local-only branch under the base's name,
+  or from any other branch the tombstone names — `baseBranch` is copied from the
+  worker-writable registry — installs nothing at all: neither npm nor poetry runs
+  (`installDeps` in `src/dashboard/git.ts`), and the operator is told so in the
+  resurrect output, because those dependencies are the worker's own sandboxed session's
+  to install.
+  `npm install --ignore-scripts` was tried first and is not sufficient: it suppresses
+  lifecycle scripts, but npm also reads the tree's own `.npmrc`, and keys there name
+  programs npm executes itself. With `git` set, a measured `npm install
+  --ignore-scripts` ran a script from the tree three times as the operator while
+  correctly skipping the package's `preinstall`. Pinning that key on the command line
+  would close only the keys we thought of, so the install is skipped outright.
+  Content from the project's base on origin is only as trustworthy as that ref
+  (see residuals).
 - **Review-channel integrity.** Reviewer, resolver, and CI-fix prompts, results, and
   harness sidecars live under `~/.garden/control/headless`, outside the worker's
   `~/.garden/sessions` write grant. Durable holistic shadow reports live under
@@ -116,7 +145,9 @@ reads or runs.
   from a no-follow, containment-checked stable file descriptor. Claims, delayed seed
   copies, and durable results remain outside the worker write grant. Dead-owner claims
   are replayed from the protected tree, while a request ID on the registry entry and a
-  durable receipt prevent replay from spawning the same handoff twice.
+  durable receipt prevent replay from spawning the same handoff twice. Until a poller
+  claims it, a request and its seed are as writable by a sibling as by their author (see
+  residuals).
 - **Registry forgery guard (partial).** The worker registry lives in the
   sandbox-writable `~/.garden/sessions`. Its read guard (`isWorkerRegistry` in
   `src/dashboard/registry.ts`) type-checks the trusted fields (`prState`, `agentStatus`,
@@ -176,39 +207,94 @@ reads or runs.
   trust decision about the repo content under review, not only about review quality.
   Confining it is pending the same `writable_roots` validation as the worker case, plus
   confirming `codex exec` can complete a review under a non-bypass sandbox.
-- **The registry is writable by workers.** Moving review exchange files closes verdict
-  replacement, but it does not make `~/.garden/sessions` a trusted control store. The
-  registry type guard is defense-in-depth; a worker with a valid-looking forged entry
-  can still manipulate fleet state: retarget its own merge base, or set a `branchName`
-  that names another branch, which garden then force-pushes the worker's HEAD to and
-  deletes after merge. A worker's branch always carries its name, but nothing yet
-  enforces that on a forged entry. The principled
-  fix — moving the registry out of the worker-writable set and routing worker-initiated
-  mutations (`garden workers grow`) through a validated request file the poller applies
-  — remains required.
-- **Workers can still move git state they cannot execute through.** The shared refs
-  (including `refs/remotes/origin/*` and `packed-refs`), a sibling's `HEAD` and index, and
-  new `info/attributes`, `shallow` and `objects/info/alternates` files in the shared git
-  dir are all writable. None of them makes git run a program — attributes can only select
-  drivers, and the files that define drivers are denied — but they can point garden at a
-  different commit or a truncated history. Garden names origin's branch in full and reads
-  branch names back from full refs, so a tag or branch merely named `origin/<base>` no
-  longer stands in for it and a tag named `main` no longer renames the checked-out branch,
-  but a worker can rewrite `refs/remotes/origin/<base>` itself between a fetch and the
-  read that follows.
-  Review sees the resulting diff, and a worker already holds push credentials, so this is
-  an integrity gap rather than an escape.
+- **The registry is writable by workers, and it gates review.** Moving review exchange
+  files closes verdict replacement, but it does not make `~/.garden/sessions` a trusted
+  control store. The registry type guard is defense-in-depth; a worker with a
+  valid-looking forged entry can still direct the unsandboxed poller:
+  - **Skip review.** The merge queue acts on `prState` and `mergeReadySha` as recorded,
+    so an entry set to `merge-pending`, with `mergeReadySha` absent or naming the current
+    HEAD, merges that HEAD without a reviewer having seen it. Unreviewed commits on the
+    base then reach the operator's context: the next worker's bootstrap installs the
+    base's dependencies with package scripts, and `postMerge` runs in the operator's
+    checkout. Registry forgery is therefore a route to running code as the operator, not
+    only to manipulating fleet state.
+  - **Push to another branch.** Garden force-pushes the worker's HEAD to the entry's
+    `branchName` and deletes that branch after merge. A worker's branch always carries
+    its name, but nothing yet enforces that on a forged entry.
+  - **Retarget its merge base** through `baseBranch`.
+  - **Type into a sibling's agent.** Any entry's `pendingHandoffCallbacks` is pasted
+    verbatim into that worker's pane at its next turn end (`deliverHandoffCallbacks` in
+    `src/dashboard/continue.ts`).
+  - **Have a stopped sibling's work removed** with a forged cleanup request (below).
+
+  The handoff inbox and `sessions/seeds` are shared the same way: any worker can rewrite
+  or delete a sibling's pending request or seed before a poller claims it, so
+  handoff-channel integrity holds only against the requesting worker. The principled
+  fix — moving the registry out of the worker-writable set and routing the mutations
+  sandboxed commands make (`garden workers grow`, `garden blocked`, `garden reply`)
+  through validated request files the poller applies — remains required.
+- **Resurrecting unreviewed content still resumes an agent in that tree.** Skipping the
+  dependency install keeps the operator from running the tree's build scripts, but
+  `resurrectWorker` then resumes the session in the rebuilt worktree, and a repo's own
+  committed `.claude/settings.json` merges with garden's `--settings` file, with its
+  hooks still applying and running unsandboxed. The trust assumption stated above — that
+  this file is the repo owner's committed config — does not hold for a tree restored from
+  a worker's own branch or tip, which no review saw. Not yet verified: whether a worker
+  can get a modified settings file committed despite the sandbox's write-deny on that
+  path (the shared git dir and indexes are writable, which is why this is open rather
+  than dismissed). Until it is, resurrecting an unreviewed start point is an operator
+  decision about that branch's content, not a confined operation.
+- **Workers can still move the git state garden acts on.** The shared refs (including
+  `refs/remotes/origin/*` and `packed-refs`), a sibling's `HEAD` and index, and new
+  `info/attributes`, `shallow` and `objects/info/alternates` files in the shared git dir
+  are all writable. None of them makes git itself run a program (attributes can only
+  select drivers, and the files that define drivers are denied), but they can point garden
+  at a different commit or a truncated history. Garden names origin's branch in full and
+  reads branch names back from full refs, so a tag or branch merely named `origin/<base>`
+  no longer stands in for it and a tag named `main` no longer renames the checked-out
+  branch. A worker can still rewrite `refs/remotes/origin/<base>` itself between a fetch
+  and the read that follows, and that read decides more than which diff review sees. The
+  merge queue takes both its rebase target and the commit it pushes to the base from
+  shared remote-tracking refs, the worker's own branch included (`rebaseBranch`,
+  `mergeToBase`), so a worker that rewrites them chooses what lands on the base,
+  unreviewed. The new-worker bootstrap branches each fresh worktree from the base ref and
+  installs dependencies there as the operator, package scripts included; resurrect does
+  the same for a tree rebuilt from the base; and `postMerge` runs in the operator's
+  checkout after a fast-forward to it. A worker that keeps the ref pointed at a commit of
+  its own can therefore run code unsandboxed without holding push credentials. The open
+  fix is to resolve origin's tips from the remote, not from the shared refs, wherever
+  unsandboxed code acts on them.
 - **Other state in the sessions dir is still trusted.** Besides the registry, garden
   keeps files there that sandboxed `garden` commands write: the dashboard state file,
-  alerts, the pre-rendered pane files the status, usage, history and alerts panes
-  replay, the Claude and Codex usage snapshots, worker-cleanup requests, and each
-  project's poll FIFO. A worker can repaint the operator's left column with them, or
-  point the state file's active pane at a pane garden will paste into, and a forged
-  usage snapshot is read without validation: with the usage auto-close armed, a reading
-  at 100% pauses auto-continue fleet-wide until its reset time. A cleanup request is checked against the registry
-  before the watchdog acts on it, which a worker can also forge; and the unsandboxed
-  pokers open the FIFO path without refusing a symlink planted there, so they write a
-  newline into whatever file it names.
+  alerts, the pre-rendered pane files the status, usage, history and alerts panes replay,
+  handoff and worker-cleanup requests, lock files, and each project's poll FIFO. A worker
+  can repaint the operator's left column with them, or point the state file's active pane
+  at a pane garden will paste into. A cleanup request is checked against the registry,
+  which a worker can also forge, so a worker that deletes a sibling's entry and forges a
+  request can still have the watchdog remove that sibling's worktree and branches once its
+  pane has exited. A sibling is spared while a pane's cwd is inside the target, which is
+  what a running worker looks like: the executor defers on that, and tmux, not the
+  registry, reports it. The check is the foreground process's cwd, so a sibling whose
+  shell has moved out of its worktree, or whose cwd tmux will not report, is not
+  detected; garden's own infrastructure windows are excluded, since they never hold a
+  worker. A session that cannot be enumerated defers rather than proceeding.
+  Garden refuses what it can recognize without trusting a file's contents. The pokers
+  never block on the poll FIFO and write it only after confirming the descriptor they
+  opened is a FIFO, so a link or file planted there takes no write (a shell cannot open
+  without following a link, so a link swapped in after a shell poke's path checks can still
+  make that open create an empty file where it points);
+  a directory planted at that path is removed rather than stalling the project's poller;
+  a lock is reclaimed unless its pid actually answers — only `EPERM` proves a holder
+  exists, so pid 1 or below, a pid past the OS range (which answers with a type error,
+  the way a forged body stepped around the pid-1 rule by writing a longer number), and
+  any other unnameable pid all read as dead; a cleanup
+  request or handoff claim whose processing throws is retired rather than blocking every
+  one behind it; and a project or plot name such as `constructor` or `__proto__` resolves
+  to nothing rather than to an inherited property — a forged active plot threw inside the
+  status-pane bake, freezing the pane and silently disabling the plot hotkeys. A FIFO planted where an unsandboxed reader
+  expects a regular file, such as the registry, the state file or a lock, still blocks that
+  reader. The Claude and Codex usage snapshots, through which a forged 100% reading paused
+  auto-continue fleet-wide, now live in the control tree.
 - **`postMerge`/`checks` commands are trusted.** They come from `~/.garden/config.yml`,
   which is not in any sandbox write grant, so a worker cannot set them. Do not move
   `config.yml` into a writable location.

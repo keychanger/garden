@@ -29,14 +29,14 @@ describe("garden usage", () => {
 
   function writeClaude(): void {
     const resetsAt = new Date(Date.now() + 3 * DAY_MS).toISOString();
-    fs.writeFileSync(path.join(tmp.sessionsDir, "claude-usage.json"), JSON.stringify({
+    fs.writeFileSync(path.join(tmp.controlDir, "claude-usage.json"), JSON.stringify({
       fetchedAt: new Date().toISOString(),
       data: { weekly: { pct: 27, resetsAt } },
     }));
   }
 
   function writeCodex(windows: Array<{ windowMinutes: number; usedPercent: number; resetsAt: number }>): void {
-    fs.writeFileSync(path.join(tmp.sessionsDir, "codex-usage.json"), JSON.stringify({
+    fs.writeFileSync(path.join(tmp.controlDir, "codex-usage.json"), JSON.stringify({
       capturedAt: Date.now() - 5 * 60_000,
       data: { windows, creditBalance: 0, creditsUnlimited: false },
     }));
@@ -109,7 +109,7 @@ describe("garden usage", () => {
     { creditBalance: 0, creditsUnlimited: false, expected: null },
   ])("renders the credit footer for $creditBalance / unlimited=$creditsUnlimited", async ({ expected, ...credits }) => {
     writeCodex([]);
-    const file = path.join(tmp.sessionsDir, "codex-usage.json");
+    const file = path.join(tmp.controlDir, "codex-usage.json");
     const snap = JSON.parse(fs.readFileSync(file, "utf8"));
     Object.assign(snap.data, credits);
     fs.writeFileSync(file, JSON.stringify(snap));

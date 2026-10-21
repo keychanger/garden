@@ -12,6 +12,7 @@ import fs from "node:fs";
 import type { ProjectConfig } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { newDashboardWindow, windowExists, killWindowSafe, shellEscape } from "./tmux.js";
+import { fifoPokeShell } from "./poller-fifo.js";
 import { getHarnessCore } from "./harness/core.js";
 import { installHeadlessSettings } from "./harness/claude-code.js";
 import type { HeadlessLaunchPlan } from "./harness/types.js";
@@ -79,7 +80,7 @@ export function launchHeadlessAgent(
     inlineEnv,
     settingsFile,
   });
-  const cmd = `${agentCmd}; [ -p ${escapedFifo} ] && (echo > ${escapedFifo}) 2>/dev/null`;
+  const cmd = `${agentCmd}; ${fifoPokeShell(escapedFifo)}`;
 
   newDashboardWindow(opts.windowName, "-c", opts.cwd, "bash", "-c", cmd);
 

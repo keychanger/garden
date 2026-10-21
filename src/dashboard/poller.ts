@@ -40,6 +40,7 @@ import { runBeadIntake } from "./poller-intake.js";
 export { triggerProjectPoll, signalFifoPath } from "./poller-fifo.js";
 export { autoContinueGateReason, checkUsageThreshold } from "./poller-merge.js";
 export { killReviewWindow } from "./poller-review.js";
+export { killCiFixWindow } from "./poller-ci-fix.js";
 
 // Main poll entry point — called by `garden dashboard _poll <project>`
 export function poll(projectName: string): boolean {

@@ -31,13 +31,17 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SESSIONS_DIR, loadConfig } from "../config.js";
+import { loadConfig } from "../config.js";
+import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { withFileLock } from "./file-lock.js";
 import { readRegistry } from "./registry.js";
 import { resolveProjectCrew } from "./crew.js";
 
-const CODEX_USAGE_FILE = path.join(SESSIONS_DIR, "codex-usage.json");
+// Control tree, for the reasons USAGE_FILE gives (usage.ts): only the
+// unsandboxed watchdog, the Stop hook's `_usage-refresh` and `garden usage
+// refresh` write it.
+export const CODEX_USAGE_FILE = path.join(CONTROL_DIR, "codex-usage.json");
 // rate_limits rides recent response events; the tail is plenty and keeps each
 // watchdog-tick read cheap even as a rollout grows.
 const TAIL_BYTES = 256 * 1024;
@@ -70,10 +74,10 @@ interface RawWindow {
 function toWindow(w: unknown): CodexUsageWindow | null {
   if (!w || typeof w !== "object") return null;
   const r = w as RawWindow;
-  if (typeof r.used_percent !== "number" || typeof r.window_minutes !== "number" || typeof r.resets_at !== "number") {
+  if (!Number.isFinite(r.used_percent) || !Number.isFinite(r.window_minutes) || !Number.isFinite(r.resets_at)) {
     return null;
   }
-  return { windowMinutes: r.window_minutes, usedPercent: r.used_percent, resetsAt: r.resets_at };
+  return { windowMinutes: r.window_minutes as number, usedPercent: r.used_percent as number, resetsAt: r.resets_at as number };
 }
 
 // Parse the LAST rate_limits object from a rollout's tail into CodexUsageData.
@@ -164,14 +168,32 @@ function toBalance(raw: unknown): number | null {
 
 export function readCodexUsage(): CodexUsageSnapshot | null {
   try {
-    const snap = JSON.parse(fs.readFileSync(CODEX_USAGE_FILE, "utf-8"));
-    if (snap && typeof snap.capturedAt === "number" && snap.data && Array.isArray(snap.data.windows)) {
-      return snap as CodexUsageSnapshot;
-    }
+    const snap: unknown = JSON.parse(fs.readFileSync(CODEX_USAGE_FILE, "utf-8"));
+    if (isCodexUsageSnapshot(snap)) return snap;
   } catch {
     /* absent or corrupt */
   }
   return null;
+}
+
+// A malformed snapshot reads as absent (no Codex column; the next capture
+// rewrites it) rather than crashing the pane renderer or `garden usage`.
+const isFiniteNum = (v: unknown): boolean => typeof v === "number" && Number.isFinite(v);
+
+function isCodexWindow(v: unknown): boolean {
+  if (typeof v !== "object" || v === null) return false;
+  const w = v as Record<string, unknown>;
+  return isFiniteNum(w.windowMinutes) && isFiniteNum(w.usedPercent) && isFiniteNum(w.resetsAt);
+}
+
+export function isCodexUsageSnapshot(v: unknown): v is CodexUsageSnapshot {
+  if (typeof v !== "object" || v === null) return false;
+  const s = v as Record<string, unknown>;
+  const d = s.data as Record<string, unknown> | null | undefined;
+  return isFiniteNum(s.capturedAt) && typeof d === "object" && d !== null
+    && Array.isArray(d.windows) && d.windows.every(isCodexWindow)
+    && (d.creditBalance === undefined || d.creditBalance === null || isFiniteNum(d.creditBalance))
+    && (d.creditsUnlimited === undefined || typeof d.creditsUnlimited === "boolean");
 }
 
 export function writeCodexUsage(data: CodexUsageData): void {
@@ -348,7 +370,10 @@ export function probeCodexUsageIfStale(nowMs: number = Date.now()): boolean {
   return probeCodexUsage();
 }
 
-const CODEX_PROBE_ATTEMPT_FILE = path.join(SESSIONS_DIR, "codex-probe-attempt");
+export const CODEX_PROBE_ATTEMPT_FILE = path.join(CONTROL_DIR, "codex-probe-attempt");
+// Named rather than derived inline, so the trust-boundary test can assert
+// where it lives: a lock a worker can plant holds off every ambient probe.
+export const CODEX_PROBE_LOCK = `${CODEX_PROBE_ATTEMPT_FILE}.lock`;
 
 // At most one probe attempt per interval across every process, whatever its
 // outcome. A probe that confirms nothing (offline, out of quota, no populated
@@ -358,7 +383,7 @@ const CODEX_PROBE_ATTEMPT_FILE = path.join(SESSIONS_DIR, "codex-probe-attempt");
 // makes concurrent refreshes probe once.
 function claimProbeAttempt(nowMs: number): boolean {
   try {
-    return withFileLock(`${CODEX_PROBE_ATTEMPT_FILE}.lock`, () => {
+    return withFileLock(CODEX_PROBE_LOCK, () => {
       let lastAttemptMs = Number.NaN;
       try { lastAttemptMs = Number(fs.readFileSync(CODEX_PROBE_ATTEMPT_FILE, "utf-8")); } catch { /* never attempted */ }
       if (nowMs - lastAttemptMs < CODEX_PROBE_INTERVAL_MS) return false;

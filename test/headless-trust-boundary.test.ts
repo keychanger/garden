@@ -13,6 +13,9 @@ import {
   STATUS_LINE_SCRIPT_PATH,
 } from "../src/dashboard/headless-paths.js";
 import { STATUS_DIAG_DIR } from "../src/dashboard/header.js";
+import { USAGE_FILE, USAGE_LOCK } from "../src/dashboard/usage.js";
+import { CODEX_PROBE_ATTEMPT_FILE, CODEX_PROBE_LOCK, CODEX_USAGE_FILE } from "../src/dashboard/codex-usage.js";
+import { hookCompileCachePrefix } from "../src/dashboard/runner.js";
 import {
   CONTROL_DIR,
   CONTROL_REPORTS_DIR,
@@ -64,6 +67,16 @@ describe("headless-agent trust boundary", () => {
       contextFilePath("/tmp/garden-worker"),
       path.join(CONTROL_SEEDS_DIR, "grow-1.txt"),
       path.join(STATUS_DIAG_DIR, "diag-snap-1-1.txt"),
+      // What the unsandboxed poller and the auto-continue gate read as quota.
+      USAGE_FILE,
+      CODEX_USAGE_FILE,
+      CODEX_PROBE_ATTEMPT_FILE,
+      // Their locks too: file-lock waits out any lock naming a live pid, so
+      // one planted in a worker-writable dir freezes the meter and the probe.
+      USAGE_LOCK,
+      CODEX_PROBE_LOCK,
+      // Bytecode the unsandboxed hook loads.
+      hookCompileCachePrefix().replace(/^NODE_COMPILE_CACHE=/, "").trim(),
     ];
     for (const file of files) {
       expect(isWithin(SESSIONS_DIR, file), file).toBe(false);

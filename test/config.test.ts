@@ -106,6 +106,52 @@ describe("tryGetProject", () => {
     saveConfig({ projects: {} });
     expect(tryGetProject("nope")).toBeNull();
   });
+
+  it("finds no project under a name Object.prototype carries", async () => {
+    // Project names reach these lookups from worker-written request files; a
+    // path-less "constructor" project jammed the handoff and cleanup queues.
+    const { tryGetProject, getProject, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: { wolf: { path: "/tmp/wolf" } } });
+    for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+      expect(tryGetProject(name), name).toBeNull();
+      expect(() => getProject(name), name).toThrow(`Unknown project: ${name}`);
+    }
+    expect(tryGetProject("wolf")?.path).toBe("/tmp/wolf");
+  });
+
+  it("finds no plot under a name Object.prototype carries", async () => {
+    // The active plot name is read from dashboard state, which a worker
+    // sandbox can write. `plots["constructor"]` resolved to a truthy
+    // prototype member whose `.projects` is undefined, so the status-pane bake
+    // threw and the pane froze, while the plot hotkeys silently did nothing.
+    const { getFocusedProjectNames, tryGetPlot, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    const config = {
+      projects: { wolf: { path: "/tmp/wolf" } },
+      plots: { all: { projects: ["wolf"] } },
+    };
+    saveConfig(config);
+    for (const name of ["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"]) {
+      expect(tryGetPlot(config, name), name).toBeNull();
+      expect(getFocusedProjectNames(config, name), name).toEqual(["wolf"]);
+    }
+    expect(getFocusedProjectNames(config, "all")).toEqual(["wolf"]);
+  });
+
+  it("keeps a project out of a plot's membership under a prototype name", async () => {
+    // The same rule on the other side of the lookup: a plot listing
+    // "constructor" must not report it as a registered project.
+    const { getFocusedProjectNames, allPlotProjectNames, saveConfig, GARDEN_DIR } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    const config = {
+      projects: { wolf: { path: "/tmp/wolf" } },
+      plots: { all: { projects: ["constructor", "wolf", "__proto__"] } },
+    };
+    saveConfig(config);
+    expect(getFocusedProjectNames(config, "all")).toEqual(["wolf"]);
+    expect(allPlotProjectNames(config)).toEqual(["wolf"]);
+  });
 });
 
 describe("resolveProject", () => {
