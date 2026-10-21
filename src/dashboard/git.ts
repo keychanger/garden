@@ -9,7 +9,7 @@ import { atomicWriteFile } from "./atomic-write.js";
 import { isGeneratedWorkerName } from "./names.js";
 import { log } from "./log.js";
 import { runGit, runGitBytes } from "./git-exec.js";
-import { assertBranchName, assertRevision, branchRef, isValidBranchName, remoteBranchRef } from "./git-refs.js";
+import { assertBranchName, assertRevision, branchRef, isCommitSha, isValidBranchName, remoteBranchRef } from "./git-refs.js";
 
 const WORKTREE_BASE = path.join(
   process.env.HOME ?? "",
@@ -548,6 +548,33 @@ export function forcePushBranch(worktreePath: string, branch: string): void {
   git(worktreePath, "push", "--force-with-lease", "--end-of-options", "origin", `HEAD:${branchRef(branch)}`);
 }
 
+// Origin's tip for a branch, asked of origin rather than read from the local
+// remote-tracking ref. Those refs live in the shared git dir, which is inside
+// every worker sandbox's write grant, so a worker can rewrite one in the window
+// between garden's fetch and the read that follows — and the reads this
+// replaces decide which commit the merge queue pushes to the base branch and
+// which commit the operator's checkout is advanced to, both of which are then
+// built and installed as the operator. The remote URL comes from the shared
+// `.git/config`, which no sandbox grants, so origin is who we think it is.
+//
+// Null when origin does not carry the branch. Only used by callers that
+// already contact origin themselves, so it adds a round-trip, not a new
+// dependency on the network.
+export function remoteTipSha(repoPath: string, branch: string): string | null {
+  const wanted = branchRef(assertBranchName(branch));
+  let out: string;
+  try {
+    out = git(repoPath, "ls-remote", "--end-of-options", "origin", wanted);
+  } catch {
+    return null;
+  }
+  for (const line of out.split("\n")) {
+    const [sha, ref] = line.split("\t");
+    if (ref?.trim() === wanted && isCommitSha(sha)) return sha;
+  }
+  return null;
+}
+
 export function mergeToBase(
   repoPath: string,
   branchName: string,
@@ -555,10 +582,17 @@ export function mergeToBase(
   ctx?: { project?: string; worker?: string },
 ): void {
   operatorGit(repoPath, "fetch", "origin");
-  // Resolve to concrete SHAs so we can verify fast-forward and push without
-  // needing a clean working tree or switching branches in the project checkout.
-  const branchSha = git(repoPath, "rev-parse", "--verify", "--end-of-options", remoteBranchRef(branchName));
-  const baseSha = git(repoPath, "rev-parse", "--verify", "--end-of-options", remoteBranchRef(baseBranch));
+  // Concrete SHAs, so the fast-forward check and the push need neither a clean
+  // working tree nor a branch switch in the project checkout. Read from origin
+  // and not from the tracking refs the fetch just wrote: a worker can rewrite
+  // those, and this is the commit that becomes the base branch.
+  const branchSha = remoteTipSha(repoPath, branchName);
+  const baseSha = remoteTipSha(repoPath, baseBranch);
+  if (!branchSha || !baseSha) {
+    throw new Error(
+      `Cannot merge: origin has no ${!branchSha ? branchRef(branchName) : branchRef(baseBranch)}`,
+    );
+  }
   // Verify fast-forward: branch must be a descendant of current base
   try {
     git(repoPath, "merge-base", "--is-ancestor", "--end-of-options", baseSha, branchSha);
@@ -623,8 +657,17 @@ export function fastForwardBase(
     } catch (err) {
       return { ok: false, reason: "stuck", error: gitErrText(err) };
     }
+    // Advance to the SHA origin reports, not to the tracking ref the fetch just
+    // wrote: a worker can rewrite that ref in between, and this is the commit
+    // the checkout becomes and a configured postMerge then builds. The off-base
+    // path below needs no such care — it fetches straight into the local branch,
+    // so no intermediate ref carries the decision.
+    const originTip = remoteTipSha(repoPath, baseBranch);
+    if (!originTip) {
+      return { ok: false, reason: "stuck", error: `origin has no ${branchRef(baseBranch)}` };
+    }
     try {
-      operatorGit(repoPath, "merge", "--ff-only", "--end-of-options", remoteBranchRef(baseBranch));
+      operatorGit(repoPath, "merge", "--ff-only", "--end-of-options", originTip);
       log.info("git", "fast-forwarded local base checkout", { worker, data: baseData });
       return { ok: true, advanced: "worktree" };
     } catch (err) {
@@ -634,7 +677,7 @@ export function fastForwardBase(
       // merge correctness (the work already landed on origin; only the local
       // rebuild lags). Classify into three sub-cases instead of one `stuck`.
       const dirty = isWorktreeDirty(repoPath);
-      if (dirty === false && treeMatchesOrigin(repoPath, baseBranch)) {
+      if (dirty === false && treeMatchesOrigin(repoPath, originTip)) {
         // Clean tree whose committed content already equals origin/<base>: the
         // local-only commit(s) carry no unique content (e.g. an operator heal
         // commit whose change also merged the normal way). Reset onto origin —
@@ -644,7 +687,7 @@ export function fastForwardBase(
         try {
           // No --end-of-options, as in syncWorktreeToRemote: reset rejects it
           // before git 2.44.
-          operatorGit(repoPath, "reset", "--hard", remoteBranchRef(baseBranch), "--");
+          operatorGit(repoPath, "reset", "--hard", originTip, "--");
           log.info("git", "auto-healed redundant local base divergence onto origin", {
             worker,
             data: baseData,
@@ -717,14 +760,15 @@ function gitErrText(err: unknown): string {
   return (stderr ? String(stderr) : String(err)).trim();
 }
 
-// True when the checkout's committed tree (HEAD) is byte-identical to
-// origin/<base> — i.e. its local-only commits introduce no content origin
+// True when the checkout's committed tree (HEAD) is byte-identical to the
+// given origin tip — i.e. its local-only commits introduce no content origin
 // lacks. `git diff --quiet` exits 0 on an identical tree (no throw) and
 // non-zero otherwise (throw); any error is treated as "not identical" so the
-// caller never resets onto origin under uncertainty.
-function treeMatchesOrigin(repoPath: string, baseBranch: string): boolean {
+// caller never resets onto origin under uncertainty. Takes the SHA its caller
+// read from origin, since this answer decides whether a reset --hard runs.
+function treeMatchesOrigin(repoPath: string, originTip: string): boolean {
   try {
-    git(repoPath, "diff", "--quiet", ...DIFF_SAFETY_ARGS, "--end-of-options", "HEAD", remoteBranchRef(baseBranch));
+    git(repoPath, "diff", "--quiet", ...DIFF_SAFETY_ARGS, "--end-of-options", "HEAD", assertRevision(originTip));
     return true;
   } catch {
     return false;

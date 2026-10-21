@@ -332,41 +332,76 @@ describe("getDiffAgainstBase", () => {
 });
 
 describe("mergeToBase", () => {
-  it("fetches, resolves SHAs, verifies fast-forward, and pushes", () => {
-    // fetch returns empty, rev-parse returns SHAs, merge-base succeeds, push succeeds
+  // The tips come from origin itself, not from the tracking refs the fetch
+  // just wrote: those live in the shared git dir, which every worker sandbox
+  // can write, and this is the commit that becomes the base branch.
+  const lsRemote = (sha: string, branch: string) => `${sha}\trefs/heads/${branch}\n`;
+
+  it("fetches, asks origin for both tips, verifies fast-forward, and pushes", () => {
     mockExec
-      .mockReturnValueOnce("")           // fetch
-      .mockReturnValueOnce("abc123")     // rev-parse origin/swift-oak
-      .mockReturnValueOnce("def456")     // rev-parse origin/main
-      .mockReturnValueOnce("")           // merge-base --is-ancestor
-      .mockReturnValueOnce("");          // push
+      .mockReturnValueOnce("")                            // fetch
+      .mockReturnValueOnce(lsRemote("abc1230", "swift-oak"))
+      .mockReturnValueOnce(lsRemote("def4560", "main"))
+      .mockReturnValueOnce("")                            // merge-base --is-ancestor
+      .mockReturnValueOnce("");                           // push
     mergeToBase("/repo", "swift-oak", "main");
     const calls = mockExec.mock.calls;
     expect(calls[0]).toEqual(["git", ["fetch", "origin"], expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[1]).toEqual(["git", safe("rev-parse", "--verify", "--end-of-options", "refs/remotes/origin/swift-oak"), expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[2]).toEqual(["git", safe("rev-parse", "--verify", "--end-of-options", "refs/remotes/origin/main"), expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[3]).toEqual(["git", safe("merge-base", "--is-ancestor", "--end-of-options", "def456", "abc123"), expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "--end-of-options", "origin", "abc123:refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[1]).toEqual(["git", safe("ls-remote", "--end-of-options", "origin", "refs/heads/swift-oak"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", safe("ls-remote", "--end-of-options", "origin", "refs/heads/main"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[3]).toEqual(["git", safe("merge-base", "--is-ancestor", "--end-of-options", "def4560", "abc1230"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "--end-of-options", "origin", "abc1230:refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
+  });
+
+  it("reads no tip from a tracking ref", () => {
+    mockExec
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce(lsRemote("abc1230", "swift-oak"))
+      .mockReturnValueOnce(lsRemote("def4560", "main"))
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce("");
+    mergeToBase("/repo", "swift-oak", "main");
+    const read = mockExec.mock.calls.flatMap(c => (c[1] as string[]));
+    expect(read.some(arg => arg.startsWith("refs/remotes/"))).toBe(false);
   });
 
   it("uses the specified base branch", () => {
     mockExec
-      .mockReturnValueOnce("")           // fetch
-      .mockReturnValueOnce("abc123")     // rev-parse origin/swift-oak
-      .mockReturnValueOnce("def456")     // rev-parse origin/develop
-      .mockReturnValueOnce("")           // merge-base --is-ancestor
-      .mockReturnValueOnce("");          // push
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce(lsRemote("abc1230", "swift-oak"))
+      .mockReturnValueOnce(lsRemote("def4560", "develop"))
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce("");
     mergeToBase("/repo", "swift-oak", "develop");
     const calls = mockExec.mock.calls;
-    expect(calls[2]).toEqual(["git", safe("rev-parse", "--verify", "--end-of-options", "refs/remotes/origin/develop"), expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "--end-of-options", "origin", "abc123:refs/heads/develop"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", safe("ls-remote", "--end-of-options", "origin", "refs/heads/develop"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[4]).toEqual(["git", ["push", "--no-verify", "--end-of-options", "origin", "abc1230:refs/heads/develop"], expect.objectContaining({ cwd: "/repo" })]);
+  });
+
+  it("refuses to merge a branch origin does not carry", () => {
+    // An empty listing is the honest answer, and pushing anything on the
+    // strength of it would be pushing a commit nobody named.
+    mockExec
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce(lsRemote("def4560", "main"));
+    expect(() => mergeToBase("/repo", "swift-oak", "main")).toThrow(/origin has no refs\/heads\/swift-oak/);
+    expect(mockExec.mock.calls.some(c => (c[1] as string[])[0] === "push")).toBe(false);
+  });
+
+  it("refuses a listing whose sha is not a sha", () => {
+    mockExec
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce("--output=/tmp/pwned\trefs/heads/swift-oak\n")
+      .mockReturnValueOnce(lsRemote("def4560", "main"));
+    expect(() => mergeToBase("/repo", "swift-oak", "main")).toThrow(/origin has no/);
   });
 
   it("throws when not a fast-forward", () => {
     mockExec
-      .mockReturnValueOnce("")           // fetch
-      .mockReturnValueOnce("abc123")     // rev-parse origin/swift-oak
-      .mockReturnValueOnce("def456")     // rev-parse origin/main
+      .mockReturnValueOnce("")
+      .mockReturnValueOnce(lsRemote("abc1230", "swift-oak"))
+      .mockReturnValueOnce(lsRemote("def4560", "main"))
       .mockImplementationOnce(() => { throw new Error("not ancestor"); }); // merge-base fails
     expect(() => mergeToBase("/repo", "swift-oak", "main")).toThrow("Cannot fast-forward");
   });
@@ -839,15 +874,29 @@ describe("fetchBaseBranch", () => {
 });
 
 describe("fastForwardBase", () => {
-  it("advances the working tree after a clean fetch + ff-only merge on the base branch", () => {
+  it("advances the working tree to the tip origin reports, not to the tracking ref", () => {
+    // The tracking ref is in the shared git dir, which every worker sandbox
+    // can write, and this commit is what the checkout becomes and a configured
+    // postMerge then builds.
     mockExec
       .mockReturnValueOnce("refs/heads/main\n")  // symbolic-ref HEAD (currentBranch)
       .mockReturnValueOnce("")        // fetch origin main
-      .mockReturnValueOnce("");       // merge --ff-only origin/main
+      .mockReturnValueOnce("aaaaaaa\trefs/heads/main\n")   // ls-remote origin refs/heads/main
+      .mockReturnValueOnce("");       // merge --ff-only <sha>
     expect(fastForwardBase("/repo", "main")).toEqual({ ok: true, advanced: "worktree" });
     const calls = mockExec.mock.calls;
     expect(calls[1]).toEqual(["git", ["fetch", "--end-of-options", "origin", "refs/heads/main"], expect.objectContaining({ cwd: "/repo" })]);
-    expect(calls[2]).toEqual(["git", ["merge", "--ff-only", "--end-of-options", "refs/remotes/origin/main"], expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[2]).toEqual(["git", safe("ls-remote", "--end-of-options", "origin", "refs/heads/main"), expect.objectContaining({ cwd: "/repo" })]);
+    expect(calls[3]).toEqual(["git", ["merge", "--ff-only", "--end-of-options", "aaaaaaa"], expect.objectContaining({ cwd: "/repo" })]);
+  });
+
+  it("leaves the checkout alone when origin reports no tip", () => {
+    mockExec
+      .mockReturnValueOnce("refs/heads/main\n")
+      .mockReturnValueOnce("")        // fetch
+      .mockReturnValueOnce("");       // ls-remote: nothing
+    expect(fastForwardBase("/repo", "main")).toMatchObject({ ok: false, reason: "stuck" });
+    expect(mockExec.mock.calls.some(c => (c[1] as string[])[0] === "merge")).toBe(false);
   });
 
   it("advances the ref alone (advanced: ref) when the checkout is parked off-base", () => {
@@ -895,6 +944,7 @@ describe("fastForwardBase", () => {
     mockExec
       .mockReturnValueOnce("refs/heads/main\n") // currentBranch
       .mockReturnValueOnce("")       // fetch origin main
+      .mockReturnValueOnce("aaaaaaa\trefs/heads/main\n")  // ls-remote origin refs/heads/main
       .mockImplementationOnce(() => { throw new Error("Your local changes to the following files would be overwritten by merge: rules.md"); }) // merge --ff-only
       .mockReturnValueOnce(" M rules.md\n"); // status --porcelain (isWorktreeDirty -> dirty)
     const result = fastForwardBase("/repo", "main");
@@ -907,25 +957,27 @@ describe("fastForwardBase", () => {
     mockExec
       .mockReturnValueOnce("refs/heads/main\n") // currentBranch
       .mockReturnValueOnce("")       // fetch origin main
+      .mockReturnValueOnce("aaaaaaa\trefs/heads/main\n")  // ls-remote origin refs/heads/main
       .mockImplementationOnce(() => { throw new Error("fatal: Not possible to fast-forward, aborting."); }) // merge --ff-only (diverged)
       .mockReturnValueOnce("")       // status --porcelain (clean)
-      .mockReturnValueOnce("")       // diff --quiet HEAD origin/main (exit 0 = identical -> no throw)
-      .mockReturnValueOnce("");      // reset --hard origin/main
+      .mockReturnValueOnce("")       // diff --quiet HEAD <sha> (exit 0 = identical -> no throw)
+      .mockReturnValueOnce("");      // reset --hard <sha>
     expect(fastForwardBase("/repo", "main")).toEqual({ ok: true, advanced: "worktree" });
     const argvs = mockExec.mock.calls.map(c => (c[1] as string[]).join(" "));
-    // The tree comparison that licenses the reset names origin's branch in
-    // full, so a same-named tag or branch in the shared refs store cannot pass it.
+    // The tree comparison that licenses the reset, and the reset itself, both
+    // name the SHA origin reported — not a ref a worker can rewrite.
     expect(argvs).toContain(
-      safe("diff", "--quiet", "--no-ext-diff", "--no-textconv", "--end-of-options", "HEAD", "refs/remotes/origin/main").join(" "),
+      safe("diff", "--quiet", "--no-ext-diff", "--no-textconv", "--end-of-options", "HEAD", "aaaaaaa").join(" "),
     );
     // No --end-of-options on reset: it rejects the flag before git 2.44.
-    expect(argvs).toContain("reset --hard refs/remotes/origin/main --");
+    expect(argvs).toContain("reset --hard aaaaaaa --");
   });
 
   it("returns diverged (clean tree, real local commits) when the content differs from origin", () => {
     mockExec
       .mockReturnValueOnce("refs/heads/main\n") // currentBranch
       .mockReturnValueOnce("")       // fetch origin main
+      .mockReturnValueOnce("aaaaaaa\trefs/heads/main\n")  // ls-remote origin refs/heads/main
       .mockImplementationOnce(() => { throw new Error("fatal: Not possible to fast-forward, aborting."); }) // merge --ff-only
       .mockReturnValueOnce("")       // status --porcelain (clean)
       .mockImplementationOnce(() => { throw new Error("differences"); }) // diff --quiet (exit 1 = differs -> throw)

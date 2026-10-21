@@ -252,18 +252,25 @@ reads or runs.
   at a different commit or a truncated history. Garden names origin's branch in full and
   reads branch names back from full refs, so a tag or branch merely named `origin/<base>`
   no longer stands in for it and a tag named `main` no longer renames the checked-out
-  branch. A worker can still rewrite `refs/remotes/origin/<base>` itself between a fetch
-  and the read that follows, and that read decides more than which diff review sees. The
-  merge queue takes both its rebase target and the commit it pushes to the base from
-  shared remote-tracking refs, the worker's own branch included (`rebaseBranch`,
-  `mergeToBase`), so a worker that rewrites them chooses what lands on the base,
-  unreviewed. The new-worker bootstrap branches each fresh worktree from the base ref and
-  installs dependencies there as the operator, package scripts included; resurrect does
-  the same for a tree rebuilt from the base; and `postMerge` runs in the operator's
-  checkout after a fast-forward to it. A worker that keeps the ref pointed at a commit of
-  its own can therefore run code unsandboxed without holding push credentials. The open
-  fix is to resolve origin's tips from the remote, not from the shared refs, wherever
-  unsandboxed code acts on them.
+  branch. A worker can still rewrite `refs/remotes/origin/<base>` itself in the window
+  between a fetch and the read that follows, and that read decides more than which diff
+  review sees.
+  The two reads that put unreviewed code in front of the operator are closed. The merge
+  queue now asks origin for both tips (`remoteTipSha`, over `git ls-remote`) rather than
+  reading the refs its own fetch just wrote, so the commit pushed to the base branch is
+  the one origin actually carries; and the fast-forward that advances the operator's
+  checkout — what a configured `postMerge` then builds and installs — advances to that
+  same reading. Both functions already contact origin for their own fetch, so this costs
+  a round-trip rather than a new dependency, and the remote URL comes from the shared
+  `.git/config`, which no sandbox grants.
+  Still open, and the reason this stays a residual: the new-worker bootstrap branches
+  each fresh worktree from the base **ref** and installs dependencies there as the
+  operator with package scripts on, resurrect does the same for a tree rebuilt from the
+  base, and `rebaseBranch` takes its rebase target from the ref. A worker that keeps the
+  ref pointed at a commit of its own can still get that commit installed. The remaining
+  fix is the same shape: resolve origin's tip from the remote at those three sites too.
+  The reads that only decide what review *sees* (diffs, commit counts, prompt text) are
+  lower-stakes and unchanged.
 - **Other state in the sessions dir is still trusted.** Besides the registry, garden
   keeps files there that sandboxed `garden` commands write: the dashboard state file,
   alerts, the pre-rendered pane files the status, usage, history and alerts panes replay,

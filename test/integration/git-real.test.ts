@@ -609,6 +609,35 @@ describe("postMerge churn revert (real git)", () => {
     expect(result).toMatchObject({ ok: false, reason: "dirty", behind: 3 });
   });
 
+  it("advances the checkout to what origin carries, not to a rewritten tracking ref", async () => {
+    // The checkout is what a configured postMerge builds and installs, so the
+    // commit it advances to runs as the operator. The tracking ref that used to
+    // name that commit is in the shared git dir every worker sandbox can write.
+    // Refspec narrowing stands in for the post-fetch race, as above.
+    const { fastForwardBase } = await import("../../src/dashboard/git.js");
+    const other = path.join(env.home, "ff-clone");
+    git(env.home, "clone", originPath, other);
+    fs.writeFileSync(path.join(other, "upstream.txt"), "what origin has\n");
+    git(other, "add", "-A");
+    git(other, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "upstream");
+    git(other, "push", "origin", "main");
+    const onOrigin = git(other, "rev-parse", "HEAD");
+
+    git(env.repoPath, "checkout", "-b", "smuggle");
+    fs.writeFileSync(path.join(env.repoPath, "smuggled.txt"), "never reviewed\n");
+    git(env.repoPath, "add", "smuggled.txt");
+    git(env.repoPath, "commit", "-m", "smuggled");
+    const smuggled = git(env.repoPath, "rev-parse", "HEAD");
+    git(env.repoPath, "checkout", "main");
+    git(env.repoPath, "config", "remote.origin.fetch", "+refs/heads/nothing:refs/remotes/origin/nothing");
+    git(env.repoPath, "update-ref", "refs/remotes/origin/main", smuggled);
+
+    expect(fastForwardBase(env.repoPath, "main")).toEqual({ ok: true, advanced: "worktree" });
+
+    expect(git(env.repoPath, "rev-parse", "HEAD")).toBe(onOrigin);
+    expect(fs.existsSync(path.join(env.repoPath, "smuggled.txt"))).toBe(false);
+  });
+
   it("reports behind: 0 for a dirty checkout that is level with origin", async () => {
     const { fastForwardBase } = await import("../../src/dashboard/git.js");
     // No upstream movement: ff-only is a no-op, so the checkout advances even
@@ -680,5 +709,44 @@ describe("mergeToBase (real git)", () => {
     const sha = git(env.repoPath, "rev-parse", "origin/feature");
     mergeToBase(env.repoPath, "feature", "main");
     expect(git(originPath, "rev-parse", "main")).toBe(sha);
+  });
+
+  it("merges what origin carries, not what the tracking ref was rewritten to", async () => {
+    // refs/remotes/origin/* lives in the shared git dir, which is inside every
+    // worker sandbox's write grant, so a worker can rewrite its own tracking
+    // ref in the window between garden's fetch and the read that follows. That
+    // read decides which commit becomes the base branch — and unreviewed code
+    // on the base runs as the operator through the next bootstrap's install
+    // and postMerge.
+    const { mergeToBase } = await import("../../src/dashboard/git.js");
+    git(env.repoPath, "checkout", "-b", "feature");
+    fs.writeFileSync(path.join(env.repoPath, "reviewed.txt"), "what review saw\n");
+    git(env.repoPath, "add", "reviewed.txt");
+    git(env.repoPath, "commit", "-m", "reviewed work");
+    git(env.repoPath, "push", "origin", "feature");
+    const reviewed = git(env.repoPath, "rev-parse", "HEAD");
+
+    // A commit origin never received, which the worker points its own tracking
+    // ref at.
+    fs.writeFileSync(path.join(env.repoPath, "smuggled.txt"), "never reviewed\n");
+    git(env.repoPath, "add", "smuggled.txt");
+    git(env.repoPath, "commit", "-m", "smuggled");
+    const smuggled = git(env.repoPath, "rev-parse", "HEAD");
+    git(env.repoPath, "checkout", "main");
+
+    // In the live attack the rewrite lands in the window between mergeToBase's
+    // own `fetch origin` and the read after it — a race a loop can win, but not
+    // one a test can schedule. Narrowing the remote's fetch refspec to main
+    // reproduces the same end state deterministically: the fetch no longer
+    // refreshes origin/feature, so the tracking ref keeps saying whatever the
+    // worker last wrote there.
+    git(env.repoPath, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+    git(env.repoPath, "update-ref", "refs/remotes/origin/feature", smuggled);
+    expect(git(env.repoPath, "rev-parse", "refs/remotes/origin/feature")).toBe(smuggled);
+
+    mergeToBase(env.repoPath, "feature", "main");
+
+    expect(git(originPath, "rev-parse", "main")).toBe(reviewed);
+    expect(git(originPath, "rev-parse", "main")).not.toBe(smuggled);
   });
 });
