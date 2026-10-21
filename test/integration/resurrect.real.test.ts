@@ -303,6 +303,30 @@ describe("resurrectWorker (real fs/git)", () => {
     expect(outcome.notes.some(n => n.includes("skipped review"))).toBe(true);
   });
 
+  it("falls back to the local ref when origin names a commit the object store lacks", async () => {
+    const localMain = git(projectPath, "rev-parse", "refs/heads/main");
+    const other = path.join(env.home, "other-clone");
+    spawnSync("git", ["clone", "-q", originPath, other], { stdio: "ignore" });
+    git(other, "config", "user.email", "test@garden.local");
+    git(other, "config", "user.name", "garden-test");
+    fs.writeFileSync(path.join(other, "later.txt"), "later\n");
+    git(other, "add", "later.txt");
+    git(other, "commit", "-q", "-m", "later");
+    git(other, "push", "-q", "origin", "main");
+    // The fetch succeeds but brings nothing in, so ls-remote names a commit
+    // this checkout has never seen.
+    git(projectPath, "config", "remote.origin.fetch", "+refs/heads/nothing:refs/remotes/origin/nothing");
+
+    const t = await tombstoneFor({ lastSeenSha: localMain });
+    const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+    const outcome = resurrectWorker(t);
+
+    expect(outcome.startedFrom).toBe("main");
+    expect(git(worktreePath, "rev-parse", "HEAD")).toBe(localMain);
+    expect(outcome.notes.some(n => n.includes("not in the local object store"))).toBe(true);
+    expect(outcome.notes.some(n => n.includes("skipped review"))).toBe(true);
+  });
+
   it("rebuilds from origin's own base ref, not a decoy that glob-matches it", async () => {
     // `git ls-remote origin refs/heads/main` tail-matches on component
     // boundaries, so a branch named `a/refs/heads/main` is also listed — and

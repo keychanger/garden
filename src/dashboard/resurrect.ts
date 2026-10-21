@@ -294,6 +294,12 @@ function rebuildWorktree(
       notes.push(`could not ask origin for ${base}; rebuilding from the local ref`);
     }
   }
+  // The fetch above can fail, or fetch nothing, while ls-remote still answers;
+  // a tip the object store lacks cannot be started from, so fall back too.
+  if (originTip && !commitExists(repoPath, originTip)) {
+    notes.push(`origin's ${base} (${originTip.slice(0, 9)}) is not in the local object store; rebuilding from the local ref`);
+    originTip = null;
+  }
   const baseRef = originTip ? { ref: originTip, label: `origin/${base}`, reviewed: base === configuredBase, track: base }
     : localBranchExists(repoPath, base) ? { ref: branchRef(base), label: base, reviewed: false, track: undefined }
     : null;
