@@ -557,17 +557,14 @@ export function forcePushBranch(worktreePath: string, branch: string): void {
 // built and installed as the operator. The remote URL comes from the shared
 // `.git/config`, which no sandbox grants, so origin is who we think it is.
 //
-// Null when origin does not carry the branch. Only used by callers that
-// already contact origin themselves, so it adds a round-trip, not a new
-// dependency on the network.
+// Null when origin does not carry the branch; throws, with git's own error,
+// when origin cannot be asked. Callers ask before their fetch, so the fetch
+// brings in the commit origin named. Only used by callers that already contact
+// origin themselves, so it adds a round-trip, not a new dependency on the
+// network.
 export function remoteTipSha(repoPath: string, branch: string): string | null {
   const wanted = branchRef(assertBranchName(branch));
-  let out: string;
-  try {
-    out = git(repoPath, "ls-remote", "--end-of-options", "origin", wanted);
-  } catch {
-    return null;
-  }
+  const out = git(repoPath, "ls-remote", "--end-of-options", "origin", wanted);
   for (const line of out.split("\n")) {
     const [sha, ref] = line.split("\t");
     if (ref?.trim() === wanted && isCommitSha(sha)) return sha;
@@ -581,11 +578,11 @@ export function mergeToBase(
   baseBranch: string,
   ctx?: { project?: string; worker?: string },
 ): void {
-  operatorGit(repoPath, "fetch", "origin");
   // Concrete SHAs, so the fast-forward check and the push need neither a clean
   // working tree nor a branch switch in the project checkout. Read from origin
-  // and not from the tracking refs the fetch just wrote: a worker can rewrite
-  // those, and this is the commit that becomes the base branch.
+  // and not from the tracking refs a fetch writes: a worker can rewrite those,
+  // and this is the commit that becomes the base branch. Asked before the
+  // fetch, so the fetch brings in both commits even if origin moves meanwhile.
   const branchSha = remoteTipSha(repoPath, branchName);
   const baseSha = remoteTipSha(repoPath, baseBranch);
   if (!branchSha || !baseSha) {
@@ -593,6 +590,7 @@ export function mergeToBase(
       `Cannot merge: origin has no ${!branchSha ? branchRef(branchName) : branchRef(baseBranch)}`,
     );
   }
+  operatorGit(repoPath, "fetch", "origin");
   // Verify fast-forward: branch must be a descendant of current base
   try {
     git(repoPath, "merge-base", "--is-ancestor", "--end-of-options", baseSha, branchSha);
@@ -652,19 +650,25 @@ export function fastForwardBase(
   const baseData = { baseBranch, ...(ctx?.project ? { project: ctx.project } : {}) };
   const current = currentBranch(repoPath);
   if (current === baseBranch) {
+    // Advance to the SHA origin reports, not to the tracking ref a fetch
+    // writes: a worker can rewrite that ref, and this is the commit the
+    // checkout becomes and a configured postMerge then builds. Asked before the
+    // fetch, so the fetch brings that commit in even if origin moves meanwhile.
+    // The off-base path below needs no such care — it fetches straight into
+    // the local branch, so no intermediate ref carries the decision.
+    let originTip: string | null;
+    try {
+      originTip = remoteTipSha(repoPath, baseBranch);
+    } catch (err) {
+      return { ok: false, reason: "stuck", error: gitErrText(err) };
+    }
+    if (!originTip) {
+      return { ok: false, reason: "stuck", error: `origin has no ${branchRef(baseBranch)}` };
+    }
     try {
       operatorGit(repoPath, "fetch", "--end-of-options", "origin", branchRef(baseBranch));
     } catch (err) {
       return { ok: false, reason: "stuck", error: gitErrText(err) };
-    }
-    // Advance to the SHA origin reports, not to the tracking ref the fetch just
-    // wrote: a worker can rewrite that ref in between, and this is the commit
-    // the checkout becomes and a configured postMerge then builds. The off-base
-    // path below needs no such care — it fetches straight into the local branch,
-    // so no intermediate ref carries the decision.
-    const originTip = remoteTipSha(repoPath, baseBranch);
-    if (!originTip) {
-      return { ok: false, reason: "stuck", error: `origin has no ${branchRef(baseBranch)}` };
     }
     try {
       operatorGit(repoPath, "merge", "--ff-only", "--end-of-options", originTip);
