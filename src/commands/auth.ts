@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { loadConfig, expandHome } from "../config.js";
 import {
   readPersonalCredential, readProfileCredential, readClaudeAccount,
@@ -117,7 +118,7 @@ function printPersonal(slot: CredentialSlot | null, account: ClaudeAccount | nul
     console.log(`  ${pad("(none)")}  ⚠ no credentials found — run 'garden login'`);
     return;
   }
-  console.log(`  ${pad(slot.source)}  ✓ present  ${expiryLine(slot.oauth)}  token: ${tokenPrefix(slot.oauth)}`);
+  console.log(`  ${pad(slot.source)}  ✓ present  ${expiryLine(slot.oauth)}  token: ${tokenFingerprint(slot.oauth)}`);
   console.log(`  ${pad("account")}  ${accountLine(account)}`);
 }
 
@@ -129,7 +130,7 @@ function printProfile(p: ProfileState): void {
     console.log(`  ${pad("(none)")}  ⚠ no credentials found — run 'garden login ${p.name}'`);
     return;
   }
-  console.log(`  ${pad(p.slot.source)}  ✓ present  ${expiryLine(p.slot.oauth)}  token: ${tokenPrefix(p.slot.oauth)}`);
+  console.log(`  ${pad(p.slot.source)}  ✓ present  ${expiryLine(p.slot.oauth)}  token: ${tokenFingerprint(p.slot.oauth)}`);
   const marker = p.sameAccountAsPersonal ? "  ⚠ same account as personal" : "";
   console.log(`  ${pad("account")}  ${accountLine(p.account)}${marker}`);
 }
@@ -149,8 +150,14 @@ function pad(s: string): string {
   return s.padEnd(10);
 }
 
-function tokenPrefix(o: ClaudeOAuth): string {
-  return o.accessToken.slice(0, 32) + "…";
+// A fingerprint, not the token's own first characters. The point of the column
+// is "is this the same credential as that one" — which slot a profile is on,
+// whether two profiles share a token — and a digest answers that without
+// printing secret material into a terminal, a scrollback or a piped log. The
+// 32-character prefix this replaced carried about 19 secret characters past
+// the known `sk-ant-oat01-` preamble.
+function tokenFingerprint(o: ClaudeOAuth): string {
+  return createHash("sha256").update(o.accessToken).digest("hex").slice(0, 12);
 }
 
 function expiryLine(o: ClaudeOAuth): string {
@@ -177,6 +184,6 @@ function serializeSlot(slot: CredentialSlot | null): Record<string, unknown> {
     source: slot.source,
     expiresAt: slot.oauth.expiresAt,
     subscriptionType: slot.oauth.subscriptionType,
-    tokenPrefix: tokenPrefix(slot.oauth),
+    tokenFingerprint: tokenFingerprint(slot.oauth),
   };
 }

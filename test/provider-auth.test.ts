@@ -166,6 +166,50 @@ describe("garden auth status profile rows", () => {
   });
 });
 
+describe("garden auth status token column", () => {
+  // The column answers "is this the same credential as that one" — which slot
+  // a profile sits on, whether two profiles share a token. A digest answers
+  // that; the 32-character prefix it replaced carried roughly 19 secret
+  // characters past the known `sk-ant-oat01-` preamble, into the terminal, the
+  // scrollback and any piped log.
+  const SECRET = "sk-ant-oat01-ZZZZSECRETTOKENMATERIALZZZZ";
+
+  async function statusOutput(): Promise<string> {
+    const config = await setup();
+    config.saveConfig({ projects: { garden: { path: "/tmp/garden" } } });
+    const credentials = await import("../src/dashboard/credentials.js");
+    vi.mocked(credentials.readPersonalCredential).mockReturnValue({
+      source: "keychain",
+      oauth: { accessToken: SECRET, refreshToken: "rt-SECRET", expiresAt: Date.now() + 3_600_000 },
+    } as never);
+    const { auth } = await import("../src/commands/auth.js");
+    const lines: string[] = [];
+    const logSpy = vi.spyOn(console, "log").mockImplementation((l) => { lines.push(String(l)); });
+    await auth(["status"]);
+    logSpy.mockRestore();
+    return lines.join("\n");
+  }
+
+  it("prints no part of the token itself", async () => {
+    const out = await statusOutput();
+    expect(out).not.toContain(SECRET);
+    expect(out).not.toContain("rt-SECRET");
+    // Nor a prefix of it: any run of the token long enough to matter.
+    for (let len = 8; len <= SECRET.length; len++) {
+      expect(out, `prefix of length ${len}`).not.toContain(SECRET.slice(0, len));
+    }
+  });
+
+  it("still identifies the credential, stably", async () => {
+    const first = await statusOutput();
+    vi.resetModules();
+    const second = await statusOutput();
+    const fingerprint = /tokenFingerprint"?:?\s*"?([0-9a-f]{12})/.exec(first)?.[1];
+    expect(fingerprint, first).toBeTruthy();
+    expect(second).toContain(fingerprint!);
+  });
+});
+
 describe("provider token sync", () => {
   it("builds blank new-session overrides so the first dashboard pane inherits no provider token", async () => {
     const config = await setup();
