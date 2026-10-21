@@ -327,8 +327,18 @@ function paneHoldingWorktree(worktree: string): SessionPane | "unreachable" | nu
   try { spellings.add(fs.realpathSync(worktree)); } catch { /* gone: lexical is all there is */ }
   return panes.find(pane =>
     !isInfrastructureWindow(pane.windowName)
+    && !isDashboardLeftColumn(pane)
     && [...spellings].some(dir => pane.panePath === dir || pane.panePath.startsWith(`${dir}/`)),
   ) ?? null;
+}
+
+// The visible window's left column (title, status, growhouse slot) is the same
+// kind of pane as the `_garden-*` views: it never holds a worker, and it
+// inherits the cwd `garden dashboard` was launched from, so a dashboard started
+// inside a worktree would otherwise defer that worker's cleanup for its whole
+// life. Judged from tmux geometry, not the worker-writable state file's pane ids.
+function isDashboardLeftColumn(pane: SessionPane): boolean {
+  return pane.windowName === "main" && pane.atLeft === true;
 }
 
 // Keep deferring, never destroy, and tell the operator once the wait stops

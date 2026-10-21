@@ -582,6 +582,10 @@ export interface SessionPane {
   paneId: string;
   width: number;
   height: number;
+  // Whether the pane touches its window's left edge. In `main` that is the
+  // left column (title, status, growhouse slot); a worker is only ever shown in
+  // the right slot.
+  atLeft?: boolean;
   panePath: string;
 }
 
@@ -606,13 +610,13 @@ export function listSessionPanesOrNull(): SessionPane[] | null {
   try {
     const out = tmuxOutput(
       "list-panes", "-s", "-t", DASHBOARD_SESSION,
-      "-F", "#{window_id}\t#{window_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_current_path}",
+      "-F", "#{window_id}\t#{window_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_at_left}\t#{pane_current_path}",
     );
     const result: SessionPane[] = [];
     for (const line of out.split("\n")) {
       if (!line) continue;
       const parts = line.split("\t");
-      if (parts.length < 6) continue;
+      if (parts.length < 7) continue;
       const width = parseInt(parts[3], 10);
       const height = parseInt(parts[4], 10);
       if (!Number.isFinite(width) || !Number.isFinite(height)) continue;
@@ -622,7 +626,8 @@ export function listSessionPanesOrNull(): SessionPane[] | null {
         paneId: parts[2],
         width,
         height,
-        panePath: parts.slice(5).join("\t"),
+        atLeft: parts[5] === "1",
+        panePath: parts.slice(6).join("\t"),
       });
     }
     return result;

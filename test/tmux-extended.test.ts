@@ -60,6 +60,7 @@ import {
   killWindowSafe,
   killWindowById,
   listSessionPanes,
+  listSessionPanesOrNull,
   getPanePid,
   paneRunningOnlyShell,
   paneRunningEditor,
@@ -742,8 +743,8 @@ describe("window-id mutations", () => {
 describe("listSessionPanes", () => {
   it("parses window ids and preserves tabs in the trailing pane path", () => {
     mockExecFileSync.mockReturnValue(
-      "@5\t_garden-worker-bold-ash\t%20\t129\t58\t/worktree/with\ttab\n" +
-      "@6\tbad\t%21\tnan\t58\t/tmp\n",
+      "@5\t_garden-worker-bold-ash\t%20\t129\t58\t1\t/worktree/with\ttab\n" +
+      "@6\tbad\t%21\tnan\t58\t0\t/tmp\n",
     );
 
     expect(listSessionPanes()).toEqual([{
@@ -752,13 +753,14 @@ describe("listSessionPanes", () => {
       paneId: "%20",
       width: 129,
       height: 58,
+      atLeft: true,
       panePath: "/worktree/with\ttab",
     }]);
     expect(mockExecFileSync).toHaveBeenCalledWith(
       "tmux",
       [
         "list-panes", "-s", "-t", "garden-dashboard", "-F",
-        "#{window_id}\t#{window_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_current_path}",
+        "#{window_id}\t#{window_name}\t#{pane_id}\t#{pane_width}\t#{pane_height}\t#{pane_at_left}\t#{pane_current_path}",
       ],
       { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
     );
@@ -767,6 +769,14 @@ describe("listSessionPanes", () => {
   it("returns an empty snapshot when tmux cannot enumerate the session", () => {
     mockExecFileSync.mockImplementation(() => { throw new Error("no server"); });
     expect(listSessionPanes()).toEqual([]);
+  });
+
+  it("keeps an unanswered listing distinct from an empty one", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("no server"); });
+    expect(listSessionPanesOrNull()).toBeNull();
+    mockExecFileSync.mockReset();
+    mockExecFileSync.mockReturnValue("");
+    expect(listSessionPanesOrNull()).toEqual([]);
   });
 });
 

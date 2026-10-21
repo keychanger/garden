@@ -14,7 +14,7 @@ const env = useGitTmpHome();
 // same as one with no panes: absence is only evidence when tmux gave it.
 const tmuxView = vi.hoisted(() => ({
   dashboard: false,
-  panes: [] as { panePath: string; windowName?: string }[] | null,
+  panes: [] as { panePath: string; windowName?: string; atLeft?: boolean }[] | null,
 }));
 vi.mock("../../src/session.js", async (orig) => ({
   ...(await orig<typeof import("../../src/session.js")>()),
@@ -41,6 +41,7 @@ vi.mock("../../src/dashboard/tmux.js", async (orig) => ({
     paneId: `%${i}`,
     width: 80,
     height: 24,
+    atLeft: pane.atLeft ?? false,
     panePath: pane.panePath,
   })) ?? null,
 }));
@@ -415,6 +416,29 @@ describe("runWorkerCleanup (real git)", () => {
 
     expect(fs.existsSync(wtPath)).toBe(false);
     expect(branches(env.repoPath)).not.toContain("numb-clear-vow");
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("cleans up despite the visible window's left column sitting in the worktree", async () => {
+    // The title, status and growhouse panes inherit the cwd `garden dashboard`
+    // was launched from; none of them is ever a worker. The right slot of the
+    // same window is, so it still defers.
+    const { runWorkerCleanup, readWorkerCleanupRequest } = await import("../../src/dashboard/worker-cleanup.js");
+    const file = await seed();
+    tmuxView.dashboard = true;
+    tmuxView.panes = [{ panePath: wtPath, windowName: "main", atLeft: false }];
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+    expect(fs.existsSync(wtPath)).toBe(true);
+    expect(readWorkerCleanupRequest(file)?.attempts).toBe(0);
+
+    tmuxView.panes = [
+      { panePath: wtPath, windowName: "main", atLeft: true },
+      { panePath: path.join(wtPath, "src"), windowName: "main", atLeft: true },
+    ];
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(wtPath)).toBe(false);
     expect(fs.existsSync(file)).toBe(false);
   });
 
