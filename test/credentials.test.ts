@@ -12,6 +12,28 @@ import {
   type ClaudeOAuth,
 } from "../src/dashboard/credentials.js";
 
+// Stands in for `security` so the keychain access tests below can inspect each
+// invocation without touching a real keychain.
+const exec = vi.hoisted(() => ({
+  calls: [] as Array<{ args: string[]; opts: Record<string, unknown> }>,
+  failWrites: false,
+}));
+vi.mock("node:child_process", async (orig) => {
+  const actual = await orig<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    execFileSync: (file: string, args: string[], opts: Record<string, unknown>) => {
+      exec.calls.push({ args, opts });
+      // The prior entry persistCredential merges into.
+      if (args.includes("find-generic-password")) {
+        return JSON.stringify({ claudeAiOauth: { accessToken: "old", refreshToken: "old", expiresAt: 0 }, other: 1 });
+      }
+      if (exec.failWrites) throw new Error("denied");
+      return "";
+    },
+  };
+});
+
 let tmpDir: string;
 
 beforeEach(() => {
@@ -224,74 +246,45 @@ describe("refreshOAuthToken", () => {
 
 });
 
-// The keychain entry claude CLI itself reads. Both directions matter: a write
-// that puts the credential in argv exposes it to anything that can list this
-// user's processes, and a read with no bound stalls the usage poller whenever
-// the keychain is locked, since nothing there can answer an unlock prompt.
+// The keychain entry claude CLI itself reads. The write must hand security
+// the whole credential as the `-w` value: its prompted form reads through
+// getpass(), which takes /dev/tty when one exists and truncates to 128
+// characters, storing a corrupt credential while exiting 0. The read must be
+// bounded, since a locked keychain otherwise stalls the usage poller on an
+// unlock prompt nothing there can answer.
 describe("keychain access", () => {
-  const exec = vi.hoisted(() => {
-    const state = {
-      calls: [] as Array<{ args: string[]; opts: Record<string, unknown> }>,
-      fail: 0,
-      writeCalls: () => state.calls.filter(c => c.args.includes("add-generic-password")).length,
-    };
-    return state;
-  });
-  vi.mock("node:child_process", async (orig) => {
-    const actual = await orig<typeof import("node:child_process")>();
-    return {
-      ...actual,
-      execFileSync: (file: string, args: string[], opts: Record<string, unknown>) => {
-        // The prior entry persistCredential merges into. Reads are not the
-        // subject here, so they always answer; writes are what the tests drive.
-        if (args.includes("find-generic-password")) {
-          exec.calls.push({ args, opts });
-          return JSON.stringify({ claudeAiOauth: { accessToken: "old", refreshToken: "old", expiresAt: 0 } });
-        }
-        exec.calls.push({ args, opts });
-        if (exec.writeCalls() <= exec.fail) throw new Error("denied");
-        return "";
-      },
-    };
-  });
+  const oauth: ClaudeOAuth = {
+    accessToken: `sk-ant-oat01-${"A".repeat(100)}`,
+    refreshToken: `sk-ant-ort01-${"R".repeat(100)}`,
+    expiresAt: 1,
+  };
+  const writes = () => exec.calls.filter(c => c.args.includes("add-generic-password"));
 
-  const oauth: ClaudeOAuth = { accessToken: "sk-ant-oat01-SECRETVALUE", refreshToken: "rt-SECRET", expiresAt: 1 };
+  beforeEach(() => { exec.calls = []; exec.failWrites = false; });
 
-  beforeEach(() => { exec.calls = []; exec.fail = 0; });
-
-  it("sends the credential on stdin, never in argv", async () => {
+  it("writes the full merged credential as the -w value, never through a prompt", async () => {
     if (process.platform !== "darwin") return;
     const { persistCredential } = await import("../src/dashboard/credentials.js");
     expect(persistCredential("keychain", oauth)).toBe(true);
-    const writes = exec.calls.filter(c => c.args.includes("add-generic-password"));
-    expect(writes).toHaveLength(1);
-    const { args, opts } = writes[0];
-    // `-w` is last and valueless: security then reads the password from input.
-    expect(args[args.length - 1]).toBe("-w");
-    expect(args.join(" ")).not.toContain("SECRET");
-    // Sent twice, because security asks to retype it.
-    expect(String(opts.input)).toBe(`${String(opts.input).split("\n")[0]}\n${String(opts.input).split("\n")[0]}\n`);
-    expect(String(opts.input)).toContain("sk-ant-oat01-SECRETVALUE");
+    expect(writes()).toHaveLength(1);
+    const { args, opts } = writes()[0];
+    const value = args[args.indexOf("-w") + 1];
+    expect(value).toBeDefined();
+    expect(value.length).toBeGreaterThan(128);
+    const stored = JSON.parse(value);
+    expect(stored.claudeAiOauth.accessToken).toBe(oauth.accessToken);
+    expect(stored.claudeAiOauth.refreshToken).toBe(oauth.refreshToken);
+    expect(stored.other).toBe(1);
+    expect(opts.input).toBeUndefined();
     expect(opts.timeout).toBeGreaterThan(0);
   });
 
-  it("falls back to argv rather than leaving a rotation unpersisted", async () => {
-    // claude CLI reads this entry; a writeback that silently stops working
-    // revokes its cached refresh token and forces the operator to re-login.
+  it("reports failure when the write fails", async () => {
     if (process.platform !== "darwin") return;
-    exec.fail = 1;
-    const { persistCredential } = await import("../src/dashboard/credentials.js");
-    expect(persistCredential("keychain", oauth)).toBe(true);
-    const writes = exec.calls.filter(c => c.args.includes("add-generic-password"));
-    expect(writes).toHaveLength(2);
-    expect(writes[1].args.join(" ")).toContain("sk-ant-oat01-SECRETVALUE");
-  });
-
-  it("reports failure when neither form writes", async () => {
-    if (process.platform !== "darwin") return;
-    exec.fail = 2;
+    exec.failWrites = true;
     const { persistCredential } = await import("../src/dashboard/credentials.js");
     expect(persistCredential("keychain", oauth)).toBe(false);
+    expect(writes()).toHaveLength(1);
   });
 
   it("bounds the read so a locked keychain cannot stall the poller", async () => {

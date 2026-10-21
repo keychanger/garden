@@ -235,39 +235,23 @@ export function persistCredential(source: "keychain" | "file", oauth: ClaudeOAut
   if (source === "keychain") {
     if (process.platform !== "darwin") return false;
     const user = os.userInfo().username;
-    const args = ["add-generic-password", "-U", "-a", user, "-s", KEYCHAIN_SERVICE];
-    // `-w` with no value makes security read the password from its input
-    // instead of taking it from argv, where the whole credential would be
-    // readable by anything that can list this user's processes for the length
-    // of the write. It asks twice (the retype prompt), so the payload is sent
-    // twice; an update that asks once simply leaves the second copy unread.
+    // The credential goes in argv because security's prompted form (`-w` with
+    // no value) is not a safe channel for it: the prompt is libc getpass(),
+    // which reads /dev/tty whenever the process has a controlling terminal
+    // (the usage poller's pane, an operator's `garden usage`) and silently
+    // truncates its input to 128 characters. This payload is several hundred
+    // characters of JSON, so the prompted write exits 0 having stored a
+    // truncated, unparseable credential in the entry claude CLI reads.
     try {
-      execFileSync("security", [...args, "-w"], {
-        input: `${merged}\n${merged}\n`,
-        stdio: ["pipe", "ignore", "pipe"],
-        timeout: KEYCHAIN_TIMEOUT_MS,
-      });
+      execFileSync(
+        "security",
+        ["add-generic-password", "-U", "-a", user, "-s", KEYCHAIN_SERVICE, "-w", merged],
+        { stdio: ["ignore", "ignore", "pipe"], timeout: KEYCHAIN_TIMEOUT_MS },
+      );
       return true;
     } catch (err) {
-      // Fall back to the argv form rather than leave the rotation unpersisted:
-      // claude CLI reads this entry, and a writeback that silently stops
-      // working revokes its cached refresh token and forces a re-login. The
-      // exposure is back for this one write, so it is said out loud.
-      log.info("usage", "keychain writeback via stdin failed, retrying via argv", {
-        data: { error: (err as Error).message.slice(0, 120) },
-      });
-      try {
-        execFileSync("security", [...args, "-w", merged], {
-          stdio: ["ignore", "ignore", "pipe"],
-          timeout: KEYCHAIN_TIMEOUT_MS,
-        });
-        return true;
-      } catch (fallbackErr) {
-        log.warn("usage", "keychain writeback failed", {
-          data: { error: (fallbackErr as Error).message.slice(0, 120) },
-        });
-        return false;
-      }
+      log.warn("usage", "keychain writeback failed", { data: { error: (err as Error).message.slice(0, 120) } });
+      return false;
     }
   }
   const file = path.join(os.homedir(), ".claude", ".credentials.json");
