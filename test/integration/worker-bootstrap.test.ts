@@ -38,6 +38,88 @@ beforeEach(() => {
 });
 
 describe("worker bootstrap (real fs + real git)", () => {
+  // The commit the worktree is created from, and the one the main checkout is
+  // advanced to, must come from origin itself: refs/remotes/origin/<base> is
+  // in the shared git dir every worker sandbox can write, and this worktree's
+  // dependencies are installed with their package scripts, as the operator.
+  // The step runs under #!/bin/sh, like the bootstrap script that carries it.
+  describe("base-commit resolution", () => {
+    async function resolve(base: string): Promise<{ status: number | null; sha: string }> {
+      const { baseShaStep } = await import("../../src/dashboard/create.js");
+      const { shellEscape } = await import("../../src/dashboard/tmux.js");
+      const script = `BASE=${base}\n${baseShaStep(shellEscape(projectPath))}\nprintf '%s' "$BASE_SHA"`;
+      const r = spawnSync("sh", ["-c", script], { encoding: "utf8" });
+      return { status: r.status, sha: (r.stdout ?? "").trim() };
+    }
+
+    it("reports the commit origin carries", async () => {
+      const onOrigin = git(projectPath, "rev-parse", "refs/heads/main");
+      expect(await resolve("main")).toEqual({ status: 0, sha: onOrigin });
+    });
+
+    it("ignores a rewritten tracking ref", async () => {
+      const onOrigin = git(projectPath, "rev-parse", "refs/heads/main");
+      fs.writeFileSync(path.join(projectPath, "smuggled.txt"), "never reviewed\n");
+      git(projectPath, "add", "smuggled.txt");
+      git(projectPath, "commit", "-m", "smuggled");
+      const smuggled = git(projectPath, "rev-parse", "HEAD");
+      git(projectPath, "update-ref", "refs/remotes/origin/main", smuggled);
+      expect(git(projectPath, "rev-parse", "refs/remotes/origin/main")).toBe(smuggled);
+
+      const got = await resolve("main");
+      expect(got.sha).toBe(onOrigin);
+      expect(got.sha).not.toBe(smuggled);
+    });
+
+    it("reports origin's own ref, not a decoy branch that glob-matches it", async () => {
+      // `ls-remote origin refs/heads/main` tail-matches on component
+      // boundaries, so a branch named `a/refs/heads/main` is listed too — and
+      // listed FIRST, since refs sort lexicographically. Workers push branches
+      // routinely, so taking the first line would hand every later spawn a
+      // commit of the worker's choosing, with its package scripts.
+      const onOrigin = git(projectPath, "rev-parse", "refs/heads/main");
+      fs.writeFileSync(path.join(projectPath, "smuggled.txt"), "never reviewed\n");
+      git(projectPath, "add", "smuggled.txt");
+      git(projectPath, "commit", "-m", "smuggled");
+      const decoy = git(projectPath, "rev-parse", "HEAD");
+      git(projectPath, "push", "origin", `${decoy}:refs/heads/a/refs/heads/main`);
+
+      const got = await resolve("main");
+      expect(got.sha).toBe(onOrigin);
+      expect(got.sha).not.toBe(decoy);
+    });
+
+    it("reports nothing when the listing's object name is not one", async () => {
+      // Defense in depth: BASE_SHA is handed to `worktree add` and
+      // `merge --ff-only`, so a reading that is a ref NAME rather than an
+      // object id would resolve back through the sandbox-writable ref
+      // namespace this whole step exists to stop trusting. Real git always
+      // answers with an oid, so the bad reading is injected with a git shim.
+      const { baseShaStep } = await import("../../src/dashboard/create.js");
+      const { shellEscape } = await import("../../src/dashboard/tmux.js");
+      const bin = path.join(env.home, "shim-bin");
+      fs.mkdirSync(bin, { recursive: true });
+      fs.writeFileSync(
+        path.join(bin, "git"),
+        `#!/bin/sh\nprintf 'refs/remotes/origin/main\\trefs/heads/main\\n'\n`,
+        { mode: 0o755 },
+      );
+      const script = `BASE=main\n${baseShaStep(shellEscape(projectPath))}\nprintf '%s' "$BASE_SHA"`;
+      const r = spawnSync("sh", ["-c", script], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      });
+      expect((r.stdout ?? "").trim()).toBe("");
+    });
+
+    it("reports nothing for a branch origin does not carry, rather than guessing", async () => {
+      // The bootstrap aborts on an empty reading; it must never fall back to a
+      // local ref, which is the thing being distrusted.
+      git(projectPath, "update-ref", "refs/remotes/origin/invented", git(projectPath, "rev-parse", "HEAD"));
+      expect(await resolve("invented")).toEqual({ status: 0, sha: "" });
+    });
+  });
+
   it("createWorktree produces a worktree with the requested branch", async () => {
     const { createWorktree, worktreeExists, currentBranch } =
       await import("../../src/dashboard/git.js");

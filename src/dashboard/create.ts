@@ -786,6 +786,27 @@ function resolveProjectForHooks(projectName: string, projectPath: string): Proje
   return registered ?? { path: projectPath };
 }
 
+// Resolves `BASE_SHA`: the commit the new worktree is created from, and the
+// one the main checkout is fast-forwarded to. Asked of origin rather than read
+// from `refs/remotes/origin/$BASE`, because that ref lives in the shared git
+// dir which is inside every worker sandbox's write grant — and this worktree's
+// dependencies are then installed with their package scripts, unsandboxed, as
+// the operator. A worker that rewrote the base ref would choose the code that
+// install runs.
+//
+// Left empty rather than guessed when origin cannot be read or names no such
+// branch; the caller aborts the bootstrap on that. Asked before the fetch that
+// follows it, so the fetch brings the named commit in even if origin moved
+// since — the ordering `fastForwardBase` needs for the same reason.
+export function baseShaStep(projectPathLit: string): string {
+  return `BASE_SHA=$(git -C ${projectPathLit} ls-remote --end-of-options origin "refs/heads/$BASE" 2>/dev/null \\
+  | awk -F '\\t' -v want="refs/heads/$BASE" '$2 == want { print $1; exit }')
+case "$BASE_SHA" in
+  *[!0-9a-f]*) BASE_SHA="" ;;
+esac
+if [ "\${#BASE_SHA}" -lt 7 ]; then BASE_SHA=""; fi`;
+}
+
 // The bootstrap's dependency install. `npm install` rewrites a committed
 // package-lock.json that disagrees with package.json, so a project whose base
 // carries a stale lockfile births every worker with a dirty tree — and the
@@ -1017,9 +1038,35 @@ if [ "$FETCH_RC" -ne 0 ]; then
   fi
 fi
 
+${baseShaStep(projectPathLit)}
+# Same pane-preservation rationale as the aborts above: exit 1 would close the
+# pane and strand state.activePaneId.
+abort_base() {
+  printf '  ERROR: %s\\n' "$1" >&2
+  ${gardenRunnerLit} dashboard _bootstrap-fail ${projectNameLit} ${workerLit} "$1" 2>/dev/null || true
+  printf '\\n  Press ⌥x to close this pane.\\n' >&2
+  exec $SHELL
+}
+if [ -z "$BASE_SHA" ]; then
+  abort_base "could not read refs/heads/$BASE from origin to create the worktree. Retry the spawn once origin is reachable"
+fi
+# Bring in the commit origin just named, in case it is newer than the fetch above.
+git -C ${projectPathLit} cat-file -e "$BASE_SHA^{commit}" 2>/dev/null \\
+  || git -C ${projectPathLit} fetch --end-of-options origin "refs/heads/$BASE" >/dev/null 2>&1 \\
+  || true
+# Refuse to act on a commit the object store does not have. The old code fell
+# back to whatever refs/remotes/origin/$BASE said, which is the value being
+# distrusted; failing the spawn with a reason beats installing a commit nobody
+# named as the operator. Reached when the fetch is broken AND origin has moved
+# since this checkout last fetched — without this the bare git failures below
+# land in the generic ERR trap, which names no cause.
+if ! git -C ${projectPathLit} cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+  abort_base "origin reports $BASE_SHA for refs/heads/$BASE, but that commit is not in $(basename ${projectPathLit})'s object store after fetching. Retry the spawn once origin is reachable"
+fi
+
 printf '  Fast-forwarding main checkout...\\n'
 MERGE_RC=0
-MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only --end-of-options "refs/remotes/origin/$BASE" 2>&1) || MERGE_RC=$?
+MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only --end-of-options "$BASE_SHA" 2>&1) || MERGE_RC=$?
 [ -n "$MERGE_OUT" ] && printf '%s\\n' "$MERGE_OUT"
 if [ "$MERGE_RC" -ne 0 ]; then
   BOOTSTRAP_FAIL="\${BOOTSTRAP_FAIL:+$BOOTSTRAP_FAIL; }ff-merge failed: $MERGE_OUT"
@@ -1030,11 +1077,21 @@ if [ -n "$BOOTSTRAP_FAIL" ]; then
   ${gardenRunnerLit} dashboard _bootstrap-alert ${projectNameLit} "$BASE" ${projectPathLit} "$BOOTSTRAP_FAIL" 2>/dev/null || true
 fi
 
-# Create worktree. Branch explicitly off origin/$BASE so worker freshness
-# does not depend on the main checkout being clean or up to date.
+# Create worktree. Branch explicitly off the base commit origin reported, so
+# worker freshness does not depend on the main checkout being clean or up to
+# date, and so a rewritten refs/remotes/origin/$BASE cannot choose the code
+# whose package scripts the install below runs as the operator.
 printf '  Creating worktree...\\n'
 mkdir -p "$(dirname ${wtPathLit})"
-git -C ${projectPathLit} worktree add -b ${branchLit} --end-of-options ${wtPathLit} "refs/remotes/origin/$BASE"
+git -C ${projectPathLit} worktree add -b ${branchLit} --end-of-options ${wtPathLit} "$BASE_SHA"
+# A SHA start point leaves the branch with no upstream, and the worker rules
+# have every worker check \`git log @{u}..HEAD\` before ending a turn. Never
+# fatal — tracking is a convenience and the worktree is already correct — but
+# said out loud, because a worker whose \`@{u}\` errors reads that as pending
+# work. It needs refs/remotes/origin/$BASE to exist and to be reverse-mappable
+# through remote.origin.fetch, which a single-branch clone may not satisfy.
+git -C ${projectPathLit} branch --set-upstream-to="refs/remotes/origin/$BASE" ${branchLit} >/dev/null 2>&1 \\
+  || printf '  WARNING: could not set %s to track origin/%s; git log @{u}..HEAD will not work in this worktree.\\n' ${branchLit} "$BASE" >&2
 
 # Neutralize .garden-done if a past reviewer accidentally committed it to the
 # base branch. Without this, the first Stop hook with no commits ahead sees

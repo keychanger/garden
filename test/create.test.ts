@@ -785,12 +785,48 @@ describe("buildWorktreeBootstrapScript", () => {
     );
     expect(call).toBeDefined();
     const script = call![1] as string;
-    // Must branch off the remote ref so stale main checkout never infects
-    // workers. The "origin/$BASE" at the end of the worktree-add command is
-    // the load-bearing piece — $BASE is initialized to the requested base
-    // and may be rewritten by the missing-base fallback path.
+    // Must branch off what origin reports rather than the main checkout, so a
+    // stale checkout never infects workers — and off the resolved SHA rather
+    // than refs/remotes/origin/$BASE, which a worker sandbox can rewrite to
+    // choose the code whose package scripts the install then runs.
     expect(script).toContain("BASE=main");
-    expect(script).toMatch(/worktree add -b bold-ash --end-of-options \/wt\/myproject\/bold-ash "refs\/remotes\/origin\/\$BASE"/);
+    expect(script).toMatch(/worktree add -b bold-ash --end-of-options \/wt\/myproject\/bold-ash "\$BASE_SHA"/);
+    expect(script).not.toMatch(/worktree add .*"refs\/remotes\/origin/);
+    // A SHA start point carries no upstream, which the worker rules rely on.
+    expect(script).toContain('branch --set-upstream-to="refs/remotes/origin/$BASE" bold-ash');
+  });
+
+  it("refuses to build from a base commit it does not have, before either consumer", () => {
+    // Two readings must abort rather than continue: origin not answering (empty
+    // BASE_SHA), and a commit origin named that the object store lacks. Without
+    // the abort the bare git failures land in the generic ERR trap, which names
+    // no cause — and the pre-change code silently fell back to whatever
+    // refs/remotes/origin/$BASE said, the value being distrusted. The contract
+    // is positional: both checks sit between the read and both consumers.
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const script = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    )![1] as string;
+
+    const read = script.indexOf("BASE_SHA=$(git");
+    const emptyAbort = script.indexOf('if [ -z "$BASE_SHA" ]');
+    const missingAbort = script.indexOf('if ! git -C /repo/myproject cat-file -e "$BASE_SHA^{commit}"');
+    const ffMerge = script.indexOf('merge --ff-only --end-of-options "$BASE_SHA"');
+    const worktreeAdd = script.indexOf('worktree add -b bold-ash');
+    for (const [label, at] of Object.entries({ read, emptyAbort, missingAbort, ffMerge, worktreeAdd })) {
+      expect(at, label).toBeGreaterThan(-1);
+    }
+    expect(emptyAbort).toBeGreaterThan(read);
+    expect(missingAbort).toBeGreaterThan(emptyAbort);
+    expect(ffMerge).toBeGreaterThan(missingAbort);
+    expect(worktreeAdd).toBeGreaterThan(missingAbort);
+    // The operator gets a reason, not just a dead pane.
+    expect(script).toContain("abort_base()");
+    expect(script).toContain("dashboard _bootstrap-fail myproject bold-ash");
   });
 
   it("names every base ref in full, after --end-of-options", () => {
@@ -807,11 +843,13 @@ describe("buildWorktreeBootstrapScript", () => {
       c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
     )![1] as string;
     const fetches = script.split("\n").filter(line => /git -C \S+ fetch /.test(line));
-    expect(fetches).toHaveLength(2);
+    expect(fetches).toHaveLength(3); // the two base fetches, plus the catch-up for a tip origin named
     for (const line of fetches) expect(line).toContain('fetch --end-of-options origin "refs/heads/$BASE"');
     expect(script).toContain('ls-remote --exit-code --heads --end-of-options origin "refs/heads/$BASE"');
     expect(script).toContain('ls-remote --exit-code --heads --end-of-options origin "refs/heads/$DEFAULT_BRANCH"');
-    expect(script).toContain('merge --ff-only --end-of-options "refs/remotes/origin/$BASE"');
+    expect(script).toContain('ls-remote --end-of-options origin "refs/heads/$BASE"');
+    // The checkout is advanced to the commit origin reported, like the worktree.
+    expect(script).toContain('merge --ff-only --end-of-options "$BASE_SHA"');
   });
 
   it("defaults to branching off origin/main when baseBranch is omitted", () => {
@@ -826,7 +864,7 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(call).toBeDefined();
     const script = call![1] as string;
     expect(script).toContain("BASE=main");
-    expect(script).toMatch(/worktree add .* "refs\/remotes\/origin\/\$BASE"/);
+    expect(script).toMatch(/worktree add .* "\$BASE_SHA"/);
   });
 
   it("calls _bootstrap-alert and does not swallow fetch/merge errors", () => {
@@ -993,10 +1031,11 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(call).toBeDefined();
     const script = call![1] as string;
     // $BASE is initialized as a shell variable so the missing-base fallback
-    // can rewrite it mid-script; the worktree-add uses "origin/$BASE" so a
-    // rewrite (e.g. release/2026-04 → main) is reflected.
+    // can rewrite it mid-script; the tip is resolved from "$BASE" after that
+    // rewrite (e.g. release/2026-04 → main), so the worktree follows it.
     expect(script).toContain("BASE=release/2026-04");
-    expect(script).toMatch(/worktree add .* "refs\/remotes\/origin\/\$BASE"/);
+    expect(script).toContain('ls-remote --end-of-options origin "refs/heads/$BASE"');
+    expect(script).toMatch(/worktree add .* "\$BASE_SHA"/);
   });
 
   it("exports worker identity env vars so `garden whoami` and `garden logs -w $GARDEN_WORKER` work inside the worker shell", () => {

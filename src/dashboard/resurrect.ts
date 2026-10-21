@@ -20,7 +20,7 @@ import { respawnWorkerWindow } from "./create.js";
 import { resolveTranscriptPath } from "./conversation.js";
 import {
   branchExistsOnOrigin, commitExists, createWorktree, fetchOrigin,
-  isAncestor, localBranchExists, resolveBaseBranch, resolveSpawnBase, worktreeExists,
+  isAncestor, localBranchExists, remoteTipSha, resolveBaseBranch, resolveSpawnBase, worktreeExists,
   worktreePath as defaultWorktreePath, workerCleanupMarkerPath,
 } from "./git.js";
 import { branchRef, remoteBranchRef } from "./git-refs.js";
@@ -272,9 +272,30 @@ function rebuildWorktree(
     return `existing local branch ${branch}`;
   }
   const base = entry.baseBranch ?? resolveBaseBranch(repoPath);
-  // git gets the full ref; the operator's output names it the usual way.
-  const baseRef = branchExistsOnOrigin(repoPath, base) ? { ref: remoteBranchRef(base), label: `origin/${base}`, reviewed: base === configuredBase }
-    : localBranchExists(repoPath, base) ? { ref: branchRef(base), label: base, reviewed: false }
+  // The origin case is resolved by asking origin, not by naming its tracking
+  // ref: that ref is in the shared git dir a worker can write, and this is the
+  // only start point whose dependencies are installed with package scripts on,
+  // as the operator. A SHA start point carries no upstream, so the base branch
+  // is named as the tracking target. The local-only case keeps its ref — it is
+  // already treated as unreviewed, so nothing is installed from it.
+  // git gets the full ref or a SHA; the operator's output names it the usual way.
+  // branchExistsOnOrigin reads the local tracking ref, so it still answers yes
+  // with origin unreachable; remoteTipSha then throws. Resurrect is the
+  // emergency-recovery command, and origin being unreachable is one of the
+  // times it is most needed, so a throw degrades to "origin could not be
+  // asked": a null tip falls through to the local ref below with package
+  // scripts off, which the operator is told about. The same intent is twelve
+  // lines up, where a failed fetch is a note rather than an abort.
+  let originTip: string | null = null;
+  if (branchExistsOnOrigin(repoPath, base)) {
+    try {
+      originTip = remoteTipSha(repoPath, base);
+    } catch {
+      notes.push(`could not ask origin for ${base}; rebuilding from the local ref`);
+    }
+  }
+  const baseRef = originTip ? { ref: originTip, label: `origin/${base}`, reviewed: base === configuredBase, track: base }
+    : localBranchExists(repoPath, base) ? { ref: branchRef(base), label: base, reviewed: false, track: undefined }
     : null;
   const tip = entry.lastSeenSha;
   if (tip && commitExists(repoPath, tip) && (!baseRef || !isAncestor(repoPath, tip, baseRef.ref))) {
@@ -288,7 +309,9 @@ function rebuildWorktree(
       `Base branch '${base}' exists neither on origin nor locally in ${repoPath} — cannot rebuild the worktree.`,
     );
   }
-  createWorktree(repoPath, wtPath, branch, { startPoint: baseRef.ref, allowScripts: baseRef.reviewed });
+  createWorktree(repoPath, wtPath, branch, {
+    startPoint: baseRef.ref, allowScripts: baseRef.reviewed, track: baseRef.track,
+  });
   if (!baseRef.reviewed) notes.push(skippedInstallNote);
   return baseRef.label;
 }

@@ -263,6 +263,77 @@ describe("resurrectWorker (real fs/git)", () => {
     expect(outcome.notes.some(n => n.includes("recovered unmerged work"))).toBe(true);
   });
 
+  it("rebuilds from the commit origin carries, not from a rewritten tracking ref", async () => {
+    // This is the one start point whose dependencies are installed with their
+    // package scripts, unsandboxed, as the operator — so the commit it starts
+    // from must not be one a worker chose by rewriting the shared ref.
+    const onOrigin = git(projectPath, "rev-parse", "refs/heads/main");
+    fs.writeFileSync(path.join(projectPath, "smuggled.txt"), "never reviewed\n");
+    git(projectPath, "add", "smuggled.txt");
+    git(projectPath, "commit", "-q", "-m", "smuggled");
+    const smuggled = git(projectPath, "rev-parse", "HEAD");
+    git(projectPath, "reset", "-q", "--hard", onOrigin);
+    // rebuildWorktree fetches first, which would heal the tracking ref — in the
+    // live attack the rewrite lands after that fetch, a window too short to
+    // schedule. Narrowing the fetch refspec reproduces the same end state.
+    git(projectPath, "config", "remote.origin.fetch", "+refs/heads/nothing:refs/remotes/origin/nothing");
+    git(projectPath, "update-ref", "refs/remotes/origin/main", smuggled);
+
+    const t = await tombstoneFor({ lastSeenSha: onOrigin });
+    const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+    const outcome = resurrectWorker(t);
+
+    expect(outcome.startedFrom).toBe("origin/main");
+    expect(git(worktreePath, "rev-parse", "HEAD")).toBe(onOrigin);
+    expect(fs.existsSync(path.join(worktreePath, "smuggled.txt"))).toBe(false);
+  });
+
+  it("still rebuilds when origin cannot be asked, with nothing installed", async () => {
+    // Resurrect is the emergency-recovery command, and origin being
+    // unreachable is one of the times it is most needed. The local ref is
+    // distrusted rather than refused: it rebuilds, installs nothing, and says so.
+    git(projectPath, "config", "remote.origin.url", path.join(env.home, "gone.git"));
+    const t = await tombstoneFor({ lastSeenSha: git(projectPath, "rev-parse", "refs/heads/main") });
+
+    const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+    const outcome = resurrectWorker(t);
+
+    expect(fs.existsSync(path.join(worktreePath, "README.md"))).toBe(true);
+    expect(outcome.notes.some(n => n.includes("could not ask origin"))).toBe(true);
+    expect(outcome.notes.some(n => n.includes("skipped review"))).toBe(true);
+  });
+
+  it("rebuilds from origin's own base ref, not a decoy that glob-matches it", async () => {
+    // `git ls-remote origin refs/heads/main` tail-matches on component
+    // boundaries, so a branch named `a/refs/heads/main` is also listed — and
+    // listed FIRST, since refs sort lexicographically. Workers push branches
+    // routinely, so taking the first line would let one steer every rebuild.
+    const onOrigin = git(projectPath, "rev-parse", "refs/heads/main");
+    fs.writeFileSync(path.join(projectPath, "smuggled.txt"), "never reviewed\n");
+    git(projectPath, "add", "smuggled.txt");
+    git(projectPath, "commit", "-q", "-m", "smuggled");
+    const decoy = git(projectPath, "rev-parse", "HEAD");
+    git(projectPath, "push", "-q", "origin", `${decoy}:refs/heads/a/refs/heads/main`);
+    git(projectPath, "reset", "-q", "--hard", onOrigin);
+
+    const t = await tombstoneFor({ lastSeenSha: onOrigin });
+    const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+    resurrectWorker(t);
+
+    expect(git(worktreePath, "rev-parse", "HEAD")).toBe(onOrigin);
+    expect(fs.existsSync(path.join(worktreePath, "smuggled.txt"))).toBe(false);
+  });
+
+  it("leaves the rebuilt branch tracking its base", async () => {
+    // Resolving the tip from origin means a SHA start point, which carries no
+    // upstream of its own — and the worker rules have every worker check
+    // `git log @{u}..HEAD` before ending a turn.
+    const t = await tombstoneFor({ lastSeenSha: git(projectPath, "rev-parse", "refs/heads/main") });
+    const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+    expect(resurrectWorker(t).startedFrom).toBe("origin/main");
+    expect(git(worktreePath, "rev-parse", "--abbrev-ref", "@{u}")).toBe("origin/main");
+  });
+
   it("adopts a worktree the kill's background cleanup never removed", async () => {
     const { createWorktree } = await import("../../src/dashboard/git.js");
     createWorktree(projectPath, worktreePath, WORKER);

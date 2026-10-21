@@ -187,7 +187,16 @@ reads or runs.
     widens nothing). That grant
     still includes `hooks/` and `config`, so a Codex worker can write `<main>/.git/hooks/*`
     (which the main checkout now runs, post git-hook isolation) or repoint `core.hooksPath`
-    via `config`. It can also write every worktree's `config.worktree` and `commondir`,
+    via `config`. Writing `config` also **repoints `remote.origin.url`**, which defeats
+    every protection that asks origin for a commit rather than trusting a local ref: the
+    bootstrap's `ls-remote`, its fetch, and the merge queue's tip reads all consult
+    whatever remote that file names. Demonstrated end to end against a scratch project
+    on 2026-10-21: with origin repointed at a attacker-controlled bare repo, the real
+    generated bootstrap installed that repo's `main`, ran its `preinstall` as the
+    operator, created the worktree on its commit, and fast-forwarded the operator's main
+    checkout to it. This is strictly stronger than the ref rewrite above — it survives
+    the healing fetch, and no amount of asking origin helps when origin is the
+    attacker's. It is the reason the ref-resolution work above is scoped to claude-code. It can also write every worktree's `config.worktree` and `commondir`,
     which the claude-code sandbox denies. Garden's own git still runs with hooks,
     fsmonitor, external diff drivers and textconv off, but other command-running keys
     cannot be neutralized from the command line — an ssh command on fetch and push,
@@ -263,14 +272,24 @@ reads or runs.
   same reading. Both functions already contact origin for their own fetch, so this costs
   a round-trip rather than a new dependency, and the remote URL comes from the shared
   `.git/config`, which no sandbox grants.
-  Still open, and the reason this stays a residual: the new-worker bootstrap branches
-  each fresh worktree from the base **ref** and installs dependencies there as the
-  operator with package scripts on, resurrect does the same for a tree rebuilt from the
-  base, and `rebaseBranch` takes its rebase target from the ref. A worker that keeps the
-  ref pointed at a commit of its own can still get that commit installed. The remaining
-  fix is the same shape: resolve origin's tip from the remote at those three sites too.
-  The reads that only decide what review *sees* (diffs, commit counts, prompt text) are
-  lower-stakes and unchanged.
+  The two install paths are closed the same way **for a claude-code worker**. The
+  new-worker bootstrap resolves the base commit from origin (`baseShaStep`, `create.ts`)
+  and uses that SHA for both the main-checkout fast-forward and the `worktree add` whose
+  dependencies it then installs with package scripts, aborting the spawn rather than
+  guessing when origin cannot be read or when the commit origin named is not in the
+  object store; resurrect's origin-base start point — its only one that installs with
+  scripts on — resolves the same way. All of it rests on `remote.origin.url` being
+  fixed, which holds only where `.git/config` is write-denied: a **Codex** worker's git
+  grant includes that file (see the Codex residual below), so there the whole mechanism
+  is bypassable by repointing origin, and asking origin is asking whoever the worker
+  chose. Both restore the branch's upstream explicitly, since a SHA
+  start point carries none and garden's own worker rules have every worker check
+  `git log @{u}..HEAD`.
+  Still open: `rebaseBranch` takes its rebase target from the ref. That one cannot put
+  unreviewed code on the base by itself — the merge queue re-verifies ancestry against
+  origin's own tips — so it is a correctness and review-integrity gap rather than an
+  execution one. The reads that only decide what review *sees* (diffs, commit counts,
+  prompt text) are lower-stakes and unchanged.
 - **Other state in the sessions dir is still trusted.** Besides the registry, garden
   keeps files there that sandboxed `garden` commands write: the dashboard state file,
   alerts, the pre-rendered pane files the status, usage, history and alerts panes replay,
