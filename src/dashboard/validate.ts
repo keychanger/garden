@@ -636,6 +636,9 @@ export function cleanContextFiles(): void {
     // not finished with. That is registry state, not window liveness: the window
     // closes as soon as the agent exits, before the poller reads its verdict.
     const registry = readRegistry();
+    // A failed read comes back as an empty registry, which protects no pass;
+    // the next sweep retries.
+    if (isTaintedRegistry(registry)) return;
     const protectedFiles = new Set<string>();
     for (const [projectName, entries] of Object.entries(registry.workers)) {
       for (const entry of entries) {
@@ -667,16 +670,31 @@ export function cleanContextFiles(): void {
       // in-flight review/resolve (its window is still alive).
       if (file.endsWith("-review-result.txt") || file.endsWith("-review-prompt.txt")) {
         if (protectedFiles.has(file)) continue;
-        fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
-        log.info("validate", "removed legacy stale review file", { data: { file } });
+        // Per file, like the context files above: a worker can plant an entry
+        // here that unlink refuses.
+        try {
+          fs.unlinkSync(`${SESSIONS_DIR}/${file}`);
+          log.info("validate", "removed legacy stale review file", { data: { file } });
+        } catch { /* the next sweep retries */ }
       }
     }
 
+    // The age floor protects a pass the registry cannot vouch for. A missing
+    // registry file, or one quarantined for a broken top-level shape, reads as
+    // an honest empty registry rather than a tainted one, so protectedFiles is
+    // empty — and both are within reach of a worker, since the registry sits in
+    // the sandbox-writable sessions dir. An unread verdict is always fresh (the
+    // agent writes it as it finishes), so the floor keeps it whatever the
+    // registry says; what it lets through is genuinely stale.
     const headlessFiles = fs.readdirSync(HEADLESS_RUNS_DIR);
     for (const file of headlessFiles) {
       if (!isHeadlessArtifactName(file) || protectedFiles.has(file)) continue;
-      fs.unlinkSync(path.join(HEADLESS_RUNS_DIR, file));
-      log.info("validate", "removed stale headless artifact", { data: { file } });
+      const full = path.join(HEADLESS_RUNS_DIR, file);
+      try {
+        if (now - fs.lstatSync(full).mtimeMs < RUNTIME_FILE_GRACE_MS) continue;
+        fs.unlinkSync(full);
+        log.info("validate", "removed stale headless artifact", { data: { file } });
+      } catch { /* vanished; the next sweep retries */ }
     }
   } catch { /* sessions dir might not exist */ }
 }

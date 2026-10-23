@@ -803,8 +803,56 @@ describe("sweepGhostEntries", () => {
 describe("cleanContextFiles", () => {
   const DIR = "/tmp/fake-sessions"; // matches the mocked SESSIONS_DIR
 
+  // Every artifact is past the age floor unless a test says otherwise, so these
+  // cases are about what the registry protects, not about how old a file is.
+  beforeEach(() => {
+    vi.spyOn(fs, "lstatSync").mockImplementation(
+      (() => ({ mtimeMs: Date.now() - 2 * 60 * 60 * 1000 })) as unknown as typeof fs.lstatSync,
+    );
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.mocked(isTaintedRegistry).mockReturnValue(false);
+  });
+
+  it("keeps a fresh verdict even when the registry reads as honestly empty", () => {
+    // A missing registry file, or one quarantined for a broken top-level shape,
+    // reads as empty but NOT tainted, so nothing is protected by registry state
+    // — and a worker can delete that file, since it sits in the sandbox-writable
+    // sessions dir. An unread verdict is fresh, so the age floor keeps it.
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
+      String(directory) === HEADLESS_RUNS_DIR
+        ? ["myproject-busy-worker-review-result.txt", "myproject-long-gone-review-result.txt"]
+        : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
+    vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike) => ({
+      mtimeMs: String(file).includes("busy-worker") ? Date.now() - 30_000 : Date.now() - 2 * 60 * 60 * 1000,
+    })) as unknown as typeof fs.lstatSync);
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+    vi.mocked(readRegistry).mockReturnValue({ workers: {} });
+
+    cleanContextFiles();
+
+    expect(unlink).not.toHaveBeenCalledWith(`${HEADLESS_RUNS_DIR}/myproject-busy-worker-review-result.txt`);
+    expect(unlink).toHaveBeenCalledWith(`${HEADLESS_RUNS_DIR}/myproject-long-gone-review-result.txt`);
+  });
+
+  it("deletes no headless artifact when the registry could not be read", () => {
+    // A failed read comes back as an empty registry, which protects no pass:
+    // sweeping by it would delete every in-flight prompt and unread verdict.
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
+      String(directory) === HEADLESS_RUNS_DIR
+        ? ["myproject-live-worker-review-result.txt", "myproject-live-worker-review-prompt.txt"]
+        : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+    vi.mocked(readRegistry).mockReturnValue({ workers: {} });
+    vi.mocked(isTaintedRegistry).mockReturnValue(true);
+
+    cleanContextFiles();
+
+    expect(unlink.mock.calls.filter(c => String(c[0]).startsWith(HEADLESS_RUNS_DIR))).toEqual([]);
   });
 
   it("deletes stale review files but protects an in-flight review's files", () => {
@@ -994,8 +1042,31 @@ describe("cleanContextFiles: system-prompt context files", () => {
         : String(directory) === HEADLESS_RUNS_DIR ? ["myproject-gone-worker-review-result.txt"]
         : []
     ) as unknown as ReturnType<typeof fs.readdirSync>);
-    vi.spyOn(fs, "lstatSync").mockImplementation(() => { throw new Error("ENOENT"); });
+    // Only the planted sessions-dir entry is unreadable; the headless one is old.
+    vi.spyOn(fs, "lstatSync").mockImplementation(((file: fs.PathLike) => {
+      if (String(file).startsWith("/tmp/fake-sessions/")) throw new Error("ENOENT");
+      return { mtimeMs: Date.now() - 2 * 60 * 60 * 1000 };
+    }) as unknown as typeof fs.lstatSync);
     const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation(() => {});
+
+    cleanContextFiles();
+
+    expect(unlink).toHaveBeenCalledWith(path.join(HEADLESS_RUNS_DIR, "myproject-gone-worker-review-result.txt"));
+  });
+
+  it("keeps sweeping when a sessions-dir review file cannot be removed", () => {
+    // A directory planted under a legacy review-file name makes unlink throw.
+    vi.spyOn(fs, "readdirSync").mockImplementation((directory) => (
+      String(directory) === "/tmp/fake-sessions" ? ["planted-review-result.txt"]
+        : String(directory) === HEADLESS_RUNS_DIR ? ["myproject-gone-worker-review-result.txt"]
+        : []
+    ) as unknown as ReturnType<typeof fs.readdirSync>);
+    vi.spyOn(fs, "lstatSync").mockImplementation(
+      (() => ({ mtimeMs: Date.now() - 2 * HOUR })) as unknown as typeof fs.lstatSync,
+    );
+    const unlink = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+      if (String(file).startsWith("/tmp/fake-sessions/")) throw new Error("EPERM");
+    });
 
     cleanContextFiles();
 
