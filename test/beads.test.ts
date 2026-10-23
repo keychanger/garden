@@ -88,6 +88,23 @@ describe("showBeads", () => {
     expect(beads[1].description).toBe("d");
     expect(vi.mocked(spawnSync).mock.calls[0][1]).toEqual(["show", "b1", "b2", "--json"]);
   });
+
+  it("reads bd's every-id-missing failure as an empty list", () => {
+    // bd 1.2.2 exits 0 with only the found beads when some ids are missing,
+    // but exits 1 with this object on stdout when none of them resolves.
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      status: 1,
+      stdout: JSON.stringify({ error: "no issues found matching the provided IDs", schema_version: 1 }, null, 2),
+      stderr: 'Error fetching b9: no issue found matching "b9"\n',
+      error: undefined,
+    } as ReturnType<typeof spawnSync>);
+    expect(showBeads(STORE, ["b9"])).toEqual([]);
+  });
+
+  it("still throws on any other bd show failure", () => {
+    vi.mocked(spawnSync).mockReturnValueOnce(bdFail("Error: no beads database found"));
+    expect(() => showBeads(STORE, ["b1"])).toThrow("bd show b1 failed: Error: no beads database found");
+  });
 });
 
 describe("claimBead", () => {

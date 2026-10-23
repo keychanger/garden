@@ -723,6 +723,89 @@ describe("runIntakeOnce", () => {
     expect(w.labelsRemoved).toEqual([{ id: "e1", label: "dispatch:spent:1" }]);
   });
 
+  it("refunds a spawn that throws and finishes the pass before rethrowing", () => {
+    const w = makeWorld({
+      epics: [
+        epic({ id: "e1", labels: ["dispatch:auto", "budget:5", "dispatch:spent:2"] }),
+        epic({ id: "e2", labels: ["dispatch:auto"] }),
+      ],
+      statuses: {
+        e1: st({ ready: [{ id: "b1", title: "t" }] }),
+        e2: st({ ready: [{ id: "b2", title: "t" }] }),
+      },
+      details: { b1: bead({ id: "b1" }), b2: bead({ id: "b2" }) },
+    });
+    const deps = makeDeps(w, {
+      spawn: (req) => {
+        w.spawns.push(req);
+        // newWorker rolled its entry back, then rethrew the pane failure.
+        if (req.bead === "b1") throw new Error("tmux new-window failed: fork failed: Device not configured");
+        return `worker-${w.spawns.length}`;
+      },
+    });
+    expect(() => runIntakeOnce(deps)).toThrow("Device not configured");
+    // Charge: add spent:3, remove spent:2. Refund: re-add spent:2, remove spent:3.
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:2" });
+    expect(w.labelsRemoved).toContainEqual({ id: "e1", label: "dispatch:spent:3" });
+    // The rest of the pass still ran before the error surfaced.
+    expect(w.spawns.map(s => s.bead)).toEqual(["b1", "b2"]);
+    expect(w.claims).toEqual([{ id: "b2", actor: "worker-2" }]);
+  });
+
+  it("records the armed wave before surfacing a spawn that threw", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:manual"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "1" }, { id: "b2", title: "2" }] }) },
+      details: { b1: bead({ id: "b1", priority: 0 }), b2: bead({ id: "b2", priority: 1 }) },
+    });
+    const deps = makeDeps(w, {
+      spawn: (req) => {
+        w.spawns.push(req);
+        if (req.bead === "b2") throw new Error("tmux new-window failed");
+        return "worker-1";
+      },
+    });
+    expect(() => runIntakeOnce(deps)).toThrow("tmux new-window failed");
+    // b1 started the wave and b2 is still ready: the arm stays, and is marked.
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:dispatching" });
+    expect(w.labelsRemoved).not.toContainEqual({ id: "e1", label: "dispatch:manual" });
+  });
+
+  it("keeps the charge when a spawn throws after registering its worker", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "dispatch:spent:2"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+    });
+    const deps = makeDeps(w, {
+      spawn: (req) => {
+        w.spawns.push(req);
+        // The pane is up and the entry carries the bead; a later step threw.
+        w.workers.push(entry({ name: "half-spawned", bead: req.bead, agentStatus: "loading" }));
+        throw new Error("Could not acquire registry lock after 10000ms");
+      },
+    });
+    expect(() => runIntakeOnce(deps)).toThrow("registry lock");
+    // The session may be running: keep the charge, never refund it.
+    expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:3" });
+    expect(w.labelsAdded).not.toContainEqual({ id: "e1", label: "dispatch:spent:2" });
+    expect(w.labelsRemoved).not.toContainEqual({ id: "e1", label: "dispatch:spent:3" });
+  });
+
+  it("does not exhaust the budget on a refunded spawn failure", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto", "budget:2"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "1" }, { id: "b2", title: "2" }] }) },
+      details: { b1: bead({ id: "b1", priority: 0 }), b2: bead({ id: "b2", priority: 1 }) },
+      spawnResult: (n) => n === 1 ? "worker-1" : null,
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.spawns).toHaveLength(2);
+    // b2's charge was refunded, so one of two sessions is spent.
+    expect(w.labelsAdded).not.toContainEqual({ id: "e1", label: "dispatch:budget-exhausted" });
+    expect(w.alerts).toHaveLength(0);
+  });
+
   it("GCs duplicate spent stragglers on rewrite, charging from the max", () => {
     const w = makeWorld({
       epics: [epic({ id: "e1", labels: ["dispatch:auto", "dispatch:spent:1", "dispatch:spent:3"] })],
@@ -875,6 +958,73 @@ describe("runIntakeOnce", () => {
       { id: "b1", actor: "worker-1" },
     ]);
     expect(w.labelsAdded).toContainEqual({ id: "e1", label: "dispatch:spent:1" });
+  });
+
+  it("does not dispatch a bead again while its worker's own claim is pending", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+      claimResult: false,
+    });
+    const deps = makeDeps(w, {
+      spawn: (req) => {
+        w.spawns.push(req);
+        const name = `worker-${w.spawns.length}`;
+        // newWorker stamps the bead on the entry it registers.
+        w.workers.push(entry({ name, bead: req.bead, agentStatus: "loading" }));
+        return name;
+      },
+    });
+    runIntakeOnce(deps);
+    // Both claims failed, so bd still shows b1 unassigned and ready; this
+    // pass runs before worker-1's own seeded claim lands.
+    runIntakeOnce(deps);
+    expect(w.spawns.map(s => s.bead)).toEqual(["b1"]);
+    expect(w.labelsAdded.filter(l => l.label.startsWith("dispatch:spent:"))).toEqual([
+      { id: "e1", label: "dispatch:spent:1" },
+    ]);
+  });
+
+  it("does not dispatch a bead twice in one pass when two epics list it", () => {
+    // bd lets one bead belong to two epics. With the claim failing, the
+    // second epic's pre-spawn re-check still reads it unassigned.
+    const w = makeWorld({
+      epics: [
+        epic({ id: "e1", labels: ["dispatch:auto"] }),
+        epic({ id: "e2", labels: ["dispatch:auto"] }),
+      ],
+      statuses: {
+        e1: st({ ready: [{ id: "b1", title: "t" }] }),
+        e2: st({ ready: [{ id: "b1", title: "t" }] }),
+      },
+      details: { b1: bead({ id: "b1" }) },
+      claimResult: false,
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.spawns.map(s => s.bead)).toEqual(["b1"]);
+  });
+
+  it("counts a worker whose claim is pending against the cap", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "1" }, { id: "b2", title: "2" }] }) },
+      details: { b1: bead({ id: "b1" }), b2: bead({ id: "b2" }) },
+      workers: [entry({ name: "w1", bead: "b1", agentStatus: "loading" })],
+    });
+    runIntakeOnce(makeDeps(w, { cap: 1 }));
+    expect(w.spawns).toHaveLength(0);
+  });
+
+  it("re-dispatches a bead whose carrier exited", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st({ ready: [{ id: "b1", title: "t" }] }) },
+      details: { b1: bead({ id: "b1" }) },
+      workers: [entry({ name: "w1", bead: "b1", agentStatus: "exited", lastEventAt: NOW - 1000 })],
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.spawns.map(s => s.bead)).toEqual(["b1"]);
   });
 
   it("counts live intake workers against the cap via the assignee join", () => {

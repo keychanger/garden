@@ -114,7 +114,10 @@ export function runBd(
 }
 
 function bdJson(store: BeadsStore, args: string[]): unknown {
-  const res = runBd(store, [...args, "--json"]);
+  return parseBdJson(args, runBd(store, [...args, "--json"]));
+}
+
+function parseBdJson(args: string[], res: BdResult): unknown {
   if (!res.ok) {
     const detail = res.stderr.trim().slice(0, 500) || "unknown error";
     log.warn("beads", "bd command failed", {
@@ -187,11 +190,29 @@ export function swarmStatus(store: BeadsStore, epicId: string): SwarmStatus | nu
   };
 }
 
+// What bd 1.2.2 prints on stdout, exiting 1, when none of the ids passed to
+// `bd show` resolves. When only some fail it exits 0 with the rest.
+const NO_ISSUES_FOUND = "no issues found matching the provided IDs";
+
 export function showBeads(store: BeadsStore, ids: string[]): BeadDetail[] {
   if (ids.length === 0) return [];
-  const parsed = bdJson(store, ["show", ...ids]);
+  const args = ["show", ...ids];
+  const res = runBd(store, [...args, "--json"]);
+  // Absent from the list is already how a missing bead reads when others
+  // resolve, and each caller decides what absence means. Any other failure
+  // still throws.
+  if (!res.ok && noIssuesFound(res.stdout)) return [];
+  const parsed = parseBdJson(args, res);
   if (!Array.isArray(parsed)) throw new Error("bd show returned an unexpected shape");
   return parsed.map(asBeadDetail).filter((d): d is BeadDetail => d !== null);
+}
+
+function noIssuesFound(stdout: string): boolean {
+  try {
+    return (JSON.parse(stdout) as { error?: unknown } | null)?.error === NO_ISSUES_FOUND;
+  } catch {
+    return false;
+  }
 }
 
 // Atomic claim as the given actor: assignee + in_progress in one bd write.

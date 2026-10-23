@@ -103,7 +103,7 @@ import { writeSeedFile } from "./seed-files.js";
 import {
   listOpenEpics, swarmStatus, showBeads, claimBead, reopenBead, unassignBead,
   addLabel, removeLabel, parseLabelCount, incrementFailedLabel,
-  type BeadDetail, type SwarmStatus,
+  type BeadDetail, type BeadRef, type SwarmStatus,
 } from "./beads.js";
 
 export const DEFAULT_BEAD_INTAKE_CAP = 3;
@@ -659,15 +659,28 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
 
   if (epics.length === 0) return changed;
 
+  // The registry half of the join (entry.bead), for a bead bd still shows
+  // unassigned. A worker's own claim lands only after bootstrap and boot, and
+  // it is the only claim for a handoff --bead worker or for one whose two
+  // post-spawn claims failed; until then the assignee alone would hand the
+  // bead to a second worker and leave the first out of the cap. A carrier
+  // that exited holds nothing, so a reaped bead still re-dispatches.
+  const carriers = new Map<string, string>();
+  for (const entry of byName.values()) {
+    if (entry.bead && entry.agentStatus !== "exited") carriers.set(entry.bead, entry.name);
+  }
+  const holderOf = (b: BeadRef): string | undefined => b.assignee ?? carriers.get(b.id);
+
   // Concurrency governor: live intake workers are registry workers whose
-  // names appear as assignees on the gated epics' beads (the bd-assignee ==
-  // registry-name join; no invented registry state). Spawns this pass count
-  // immediately so a multi-epic pass can't overshoot the cap.
+  // names appear as assignees (or carriers, above) on the gated epics' beads
+  // (the bd-assignee == registry-name join; no invented registry state).
+  // Spawns this pass count immediately so a multi-epic pass can't overshoot
+  // the cap.
   let live = 0;
   const counted = new Set<string>();
   for (const st of statuses.values()) {
     for (const bead of [...st.active, ...st.ready]) {
-      const assignee = bead.assignee;
+      const assignee = holderOf(bead);
       if (!assignee || counted.has(assignee)) continue;
       counted.add(assignee);
       const entry = byName.get(assignee);
@@ -675,6 +688,7 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
     }
   }
 
+  let passError: unknown;
   for (const epic of epics) {
     const st = statuses.get(epic.id);
     if (!st) continue;
@@ -696,11 +710,11 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
     }
 
     // The frontier — ONE definition shared by dispatch and the manual-wave
-    // consume rule below: unassigned ready beads not tripped by the circuit
+    // consume rule below: ready beads nobody holds, not tripped by the circuit
     // breaker. Exclusion happens before slots are computed and before the
     // priority sort, so an excluded bead can neither hold a slot open nor
     // outrank an eligible sibling.
-    const unassigned = st.ready.filter(b => !b.assignee);
+    const unassigned = st.ready.filter(b => !holderOf(b));
     const unassignedIds = unassigned.map(b => b.id);
     const frontierDetails = unassignedIds.length > 0 ? deps.showBeads(unassignedIds) : [];
     if (!sameIds(unassignedIds, frontierDetails)) {
@@ -786,7 +800,16 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
         bead,
         mergedSiblings: st.completed.map(c => c.id),
       });
-      const name = deps.spawn({ seed, task: `bead ${bead.id}: ${bead.title}`, bead: bead.id });
+      let name: string | null = null;
+      let spawnError: unknown;
+      try {
+        name = deps.spawn({ seed, task: `bead ${bead.id}: ${bead.title}`, bead: bead.id });
+      } catch (err) {
+        spawnError = err;
+        // Rethrown once the pass is over, so the other epics still dispatch
+        // and runBeadIntake still stamps the intake error.
+        passError ??= err;
+      }
       if (!name) {
         // Spawn machinery is broken (not bead-specific) — stop the pass
         // rather than burn the budget against a dead newWorker. Refund the
@@ -794,13 +817,23 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
         // fails closed (fewer future sessions, never an uncounted one).
         // Restore a non-zero prior count before removing the charge. A failed
         // restore leaves nextLabel in place (an overcount); a failed removal
-        // leaves both labels and max-wins also keeps the overcount.
-        const refunded = prevSpent === 0
+        // leaves both labels and max-wins also keeps the overcount. A throw
+        // can come after newWorker registered the worker and started its pane
+        // (it drops the entry only when the pane fails), so a throw is
+        // refunded only when no new entry carries the bead.
+        const mayBeRunning = spawnError !== undefined
+          && deps.workers().some(e => e.bead === bead.id && !byName.has(e.name));
+        const refunded = !mayBeRunning && (prevSpent === 0
           ? deps.removeLabel(epic.id, nextLabel)
           : deps.addLabel(epic.id, `dispatch:spent:${prevSpent}`)
-            && deps.removeLabel(epic.id, nextLabel);
+            && deps.removeLabel(epic.id, nextLabel));
+        // The budget check below must read the count the labels now hold.
+        if (refunded) spent = prevSpent;
         log.error("intake", "spawn failed; halting dispatch pass", {
-          data: { project: deps.projectName, epic: epic.id, bead: bead.id, refunded },
+          data: {
+            project: deps.projectName, epic: epic.id, bead: bead.id, refunded,
+            ...(spawnError !== undefined ? { error: String(spawnError) } : {}),
+          },
         });
         break;
       }
@@ -815,6 +848,9 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
       spawned++;
       frontierLeft--;
       live++;
+      // bd lets one bead sit under two epics; a later one must see it held
+      // even when the claim above failed.
+      carriers.set(bead.id, name);
       log.info("intake", "dispatched bead to new worker", {
         worker: name,
         data: { project: deps.projectName, epic: epic.id, bead: bead.id, spent },
@@ -844,6 +880,7 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
     }
   }
 
+  if (passError !== undefined) throw passError;
   return changed;
 }
 

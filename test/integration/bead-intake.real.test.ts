@@ -262,4 +262,22 @@ describe.skipIf(!bdInstalled)("bead intake against real bd", () => {
     expect(after.status).toBe("in_progress");
     expect(deps.spawns).toHaveLength(0);
   }, TEST_TIMEOUT);
+
+  it("keeps dispatching when the only bead-carrying worker's bead does not exist", () => {
+    const soloEpic = createBead("solo epic", ["-t", "epic"]);
+    const soloKid = createBead("solo one");
+    bd("link", soloKid, soloEpic, "--type", "parent-child");
+    bd("label", "add", soloEpic, "project:intake-it");
+    bd("label", "add", soloEpic, "dispatch:auto");
+    // A mistyped handoff --bead, or a discarded wisp: bd show exits non-zero
+    // when none of the ids it is asked for resolves.
+    const stray: WorkerEntry = {
+      name: "stray-worker", sessionId: "s", task: "", agentStatus: "working",
+      prState: "working", bead: "nope-zzzz",
+    };
+    const deps = makeDeps({ workers: [stray] });
+    expect(runIntakeOnce(deps)).toBe(true);
+    expect(deps.stops).toHaveLength(0);
+    expect(deps.spawns.map(s => s.bead)).toEqual([soloKid]);
+  }, TEST_TIMEOUT);
 });
