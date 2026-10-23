@@ -394,6 +394,67 @@ describe("validateAndHeal", () => {
       expect(healed.activePaneType).toBeNull();
       expect(healed.activeWindowName).toBeNull();
     });
+
+    it("keeps an exited worker's own pane, and its identity, when nothing is parked under its name", async () => {
+      // The agent exited back to the `exec $SHELL` its launch command ends in,
+      // leaving a bare shell in the worker's own worktree. A visible worker has
+      // no hidden window, and restoring anything else into the slot kills the
+      // window the worker's pane is swapped into.
+      slotWith(WORKTREE);
+      vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
+      vi.mocked(windowExists).mockImplementation((name: string) =>
+        name !== "_garden-worker-bold-ash" && name !== "_garden-active");
+      vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
+      vi.mocked(restoreFromHidden).mockImplementation((_win: string, st: DashboardState) => {
+        st.activePaneId = "%4";
+      });
+      const { addAlert } = await import("../src/dashboard/alerts.js");
+
+      const healed = validateAndHeal(makeState());
+
+      expect(restoreFromHidden).not.toHaveBeenCalled();
+      expect(healed.activePaneId).toBe("%37");
+      expect(healed.activePaneType).toBe("worker");
+      expect(healed.activeWindowName).toBe("_garden-worker-bold-ash");
+      // Still the visible worker, so the registry pass must not call it paneless.
+      expect(vi.mocked(addAlert)).not.toHaveBeenCalled();
+    });
+
+    it("pulls no fallback in over a shell when nothing is parked under the claimed name", () => {
+      // Outside every worktree the shell is no worker's, but it may still be
+      // the operator's: the project shell sits at the checkout.
+      slotWith("/tmp/garden");
+      vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
+      vi.mocked(windowExists).mockImplementation((name: string) => name !== "_garden-worker-bold-ash");
+      vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-calm-bay"]);
+
+      const healed = validateAndHeal(makeState());
+
+      expect(restoreFromHidden).not.toHaveBeenCalled();
+      expect(healed.activePaneId).toBe("%37");
+      expect(healed.activePaneType).toBeNull();
+      expect(healed.activeWindowName).toBeNull();
+    });
+
+    it("never swaps the claimed worker in over another worker's exited pane", () => {
+      // The claim can be wrong in either direction. A bare shell in some other
+      // worker's worktree may be the only pane that worker has.
+      slotWith("/wt/garden/calm-bay");
+      vi.mocked(readRegistry).mockReturnValue({
+        workers: { garden: [
+          { name: "bold-ash", worktreePath: WORKTREE },
+          { name: "calm-bay", worktreePath: "/wt/garden/calm-bay" },
+        ] },
+      } as unknown as ReturnType<typeof readRegistry>);
+      vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
+
+      const healed = validateAndHeal(makeState());
+
+      expect(restoreFromHidden).not.toHaveBeenCalled();
+      expect(healed.activePaneId).toBe("%37");
+      expect(healed.activePaneType).toBeNull();
+      expect(healed.activeWindowName).toBeNull();
+    });
   });
 
   it("recreates the right slot full-height when its pane is gone from the layout", () => {

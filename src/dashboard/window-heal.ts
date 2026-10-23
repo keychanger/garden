@@ -50,12 +50,7 @@ function healEligible(name: string): boolean {
 // worker's worktree but its name says otherwise. First pane per window decides
 // (worker windows are single-pane).
 export function planWindowHeals(panes: SessionPane[], registry: WorkerRegistry): WindowHealPlan {
-  const byWorktree = new Map<string, { project: string; worker: string }>();
-  for (const [project, entries] of Object.entries(registry.workers)) {
-    for (const e of entries) {
-      if (e.worktreePath) byWorktree.set(e.worktreePath, { project, worker: e.name });
-    }
-  }
+  const byWorktree = worktreeIndex(registry);
 
   const seenWindows = new Set<string>();
   const nameCounts = new Map<string, number>();
@@ -102,6 +97,16 @@ export function planWindowHeals(panes: SessionPane[], registry: WorkerRegistry):
   return plan;
 }
 
+function worktreeIndex(registry: WorkerRegistry): Map<string, { project: string; worker: string }> {
+  const byWorktree = new Map<string, { project: string; worker: string }>();
+  for (const [project, entries] of Object.entries(registry.workers)) {
+    for (const e of entries) {
+      if (e.worktreePath) byWorktree.set(e.worktreePath, { project, worker: e.name });
+    }
+  }
+  return byWorktree;
+}
+
 function worktreeOwner(
   panePath: string,
   byWorktree: Map<string, { project: string; worker: string }>,
@@ -110,6 +115,15 @@ function worktreeOwner(
     if (panePath === worktree || panePath.startsWith(worktree + "/")) return owner;
   }
   return null;
+}
+
+// The window name of the registered worker whose worktree holds the pane's
+// cwd, or null when it sits in none. paneHoldsWorker asks whether a pane is
+// running one named worker; this asks whose pane a bare shell may be. A worker
+// whose agent exited leaves exactly that in tmux: a shell in its own worktree.
+export function paneWorktreeWindow(pane: Pick<SessionPane, "panePath">): string | null {
+  const owner = worktreeOwner(pane.panePath, worktreeIndex(readRegistry()));
+  return owner ? workerWindowName(owner.project, owner.worker) : null;
 }
 
 // Whether a pane is actually running the named worker: its cwd sits inside

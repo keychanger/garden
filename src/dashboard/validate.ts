@@ -14,7 +14,7 @@ import { gardenWindowName, workerWindowName, parkingWindowName, shellWindowName 
 import { buildStatusCommand, buildUsageCommand } from "./header.js";
 import { gardenRestoreFromHidden, restoreFromHidden } from "./layout.js";
 import { addAlert } from "./alerts.js";
-import { paneHoldsWorker } from "./window-heal.js";
+import { paneHoldsWorker, paneWorktreeWindow } from "./window-heal.js";
 import { CONTROL_CONTEXTS_DIR, HEADLESS_RUNS_DIR } from "../paths.js";
 import { DASHBOARD_SESSION, dashboardExists } from "../session.js";
 import {
@@ -306,13 +306,26 @@ export function healActivePaneInState(state: DashboardState): DashboardState {
     // 2026-09-21: a fresh shell in $HOME adopted as a codex worker).
     const claimed = healed.activeWindowName;
     if (claimed && paneHoldsWorker(occupant, claimed) === false) {
+      const owner = paneWorktreeWindow(occupant);
+      const parked = windowExists(claimed);
+      // A visible worker has no hidden window, so with nothing parked under
+      // the claimed name a shell in that worker's own worktree is the worker's
+      // pane, its agent exited back to the `exec $SHELL` of its launch command.
+      // The claim is right; dropping it takes the worker's row off the status
+      // pane and gets the worker marked exited for having no window.
+      if (owner === claimed && !parked) return healed;
       healed.activePaneType = null;
       healed.activeWindowName = null;
       log.warn("validate", "adopted right-slot pane is not the worker state claimed", {
         data: { paneId: occupant.paneId, claimed, panePath: occupant.panePath },
       });
-      // A bare shell holds nothing worth showing, so put the worker back.
-      if (paneRunningOnlyShell(occupant.paneId)) refillRightSlot(healed, claimed);
+      // A bare shell holds nothing worth showing, so put the worker back: its
+      // own parked window only, and never over another worker's shell. The
+      // restore kills the window the occupant is swapped into, and that shell
+      // may be the only pane its worker has.
+      if (parked && (owner === null || owner === claimed) && paneRunningOnlyShell(occupant.paneId)) {
+        refillRightSlot(healed, claimed);
+      }
     }
     return healed;
   }
@@ -388,14 +401,17 @@ function recreateRightSlot(state: DashboardState): string | null {
  * repair leaves a usable dashboard rather than an empty shell the operator has
  * to navigate out of by hand. Preference order matches a project switch: the
  * parked pane, then the last worker the operator looked at, then any worker,
- * then the project shell. A worker window the slot was supposed to be showing
- * (`claimed`) outranks all of them.
+ * then the project shell. An adopted occupant is replaced only by the worker
+ * window the slot was supposed to be showing (`claimed`), never a fallback:
+ * the restore kills the window the occupant is swapped into.
  */
 function refillRightSlot(state: DashboardState, claimed?: string): void {
   const project = state.activeProject;
   if (!project) return;
 
-  const target = pickRefillTarget(project, state, claimed);
+  const target = claimed
+    ? { window: claimed, type: "worker" as const }
+    : pickRefillTarget(project, state);
   if (!target) return;
 
   const before = state.activePaneId;
@@ -412,10 +428,7 @@ function refillRightSlot(state: DashboardState, claimed?: string): void {
 function pickRefillTarget(
   project: string,
   state: DashboardState,
-  claimed?: string,
 ): { window: string; type: "worker" | "shell" | null } | null {
-  if (claimed && windowExists(claimed)) return { window: claimed, type: "worker" };
-
   const parked = parkingWindowName(project);
   // The parking name carries no worker name, so its type is genuinely unknown
   // — same reasoning as the parked branch of swapVisibleToProject.
