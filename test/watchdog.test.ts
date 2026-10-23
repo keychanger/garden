@@ -48,6 +48,8 @@ vi.mock("../src/dashboard/registry.js", async (importActual) => {
     _setOnMutate: (cb: (() => void) | undefined) => {
       onMutate = cb;
     },
+    // The real reader, for a test that needs the registry a failed read returns.
+    _readRegistryFromDisk: actual.readRegistry,
     _clear: () => {
       onMutate = undefined;
       for (const key of Object.keys(entries)) delete entries[key];
@@ -106,6 +108,7 @@ const windowExistsMock = vi.mocked(windowExists);
 const registryMock = await import("../src/dashboard/registry.js") as unknown as {
   _setEntries: (project: string, list: WorkerEntry[]) => void;
   _setOnMutate: (cb: (() => void) | undefined) => void;
+  _readRegistryFromDisk: () => import("../src/dashboard/registry.js").WorkerRegistry;
   _clear: () => void;
 };
 
@@ -494,6 +497,20 @@ describe("alertOrphanedWindows", () => {
       "_board-shell", "_garden-watchdog", "_garden-logs",
     ]);
     alertOrphanedWindows({ workers: {} });
+    expect(addAlertMock).not.toHaveBeenCalled();
+  });
+
+  it("does not alert from a registry whose read failed", () => {
+    listWindowsMock.mockReturnValue(["_board-worker-low-arch-wolf"]);
+    // An intact file whose stat fails reads back as the tainted empty registry,
+    // which would otherwise name every live worker window an orphan.
+    const err = Object.assign(new Error("EACCES"), { code: "EACCES" });
+    const stat = vi.spyOn(fs, "statSync").mockImplementationOnce(() => { throw err; });
+    const failedRead = registryMock._readRegistryFromDisk();
+    stat.mockRestore();
+    expect(failedRead).toEqual({ workers: {} });
+
+    alertOrphanedWindows(failedRead);
     expect(addAlertMock).not.toHaveBeenCalled();
   });
 });

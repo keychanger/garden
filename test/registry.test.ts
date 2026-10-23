@@ -165,6 +165,59 @@ describe("registry durability", () => {
     expect(backupSiblings(REGISTRY_FILE, "corrupt")).toHaveLength(1);
   });
 
+  it("drops only an entry that fails validation, and reports it once", async () => {
+    const { readRegistry, getWorkers, updateWorkerTask, REGISTRY_FILE } = await importRegistry();
+    const { readAlerts } = await import("../src/dashboard/alerts.js");
+    const original = JSON.stringify({ workers: {
+      alpha: [mkEntry({ name: "a-one" }), { ...mkEntry({ name: "a-two" }), blockedAt: "2026-10-21T00:00:00Z" }],
+      beta: [mkEntry({ name: "b-one" }), mkEntry({ name: "b-two" })],
+    } });
+    fs.writeFileSync(REGISTRY_FILE, original);
+    const names = () => Object.entries(readRegistry().workers)
+      .flatMap(([project, entries]) => entries.map(e => `${project}/${e.name}`));
+
+    expect(names()).toEqual(["alpha/a-one", "beta/b-one", "beta/b-two"]);
+    // The live file stays in place; a copy keeps every byte for recovery.
+    expect(fs.existsSync(REGISTRY_FILE)).toBe(true);
+    const copies = backupSiblings(REGISTRY_FILE, "corrupt");
+    expect(copies).toHaveLength(1);
+    expect(fs.readFileSync(path.join(path.dirname(REGISTRY_FILE), copies[0]), "utf-8")).toBe(original);
+    const alerts = readAlerts().alerts;
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].message).toContain("alpha/a-two (blockedAt)");
+    expect(alerts[0].message).toContain(copies[0]);
+
+    // Another process reading the same file drops the same entry without
+    // writing a second copy or raising a second alert.
+    vi.resetModules();
+    const again = await importRegistry();
+    expect(again.getWorkers("alpha").map(e => e.name)).toEqual(["a-one"]);
+    expect(backupSiblings(REGISTRY_FILE, "corrupt")).toHaveLength(1);
+    expect(readAlerts().alerts).toHaveLength(1);
+
+    // The next write leaves the dropped entry out of the file.
+    updateWorkerTask("beta", "b-one", "still here");
+    const onDisk = JSON.parse(fs.readFileSync(REGISTRY_FILE, "utf-8"));
+    expect(onDisk.workers.alpha.map((e: WorkerEntry) => e.name)).toEqual(["a-one"]);
+    expect(getWorkers("beta")[0].task).toBe("still here");
+  });
+
+  it("names a dropped entry by position when its name or project key is not plain text", async () => {
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    const { readAlerts } = await import("../src/dashboard/alerts.js");
+    // Alert text reaches the terminal unescaped, and these strings may be
+    // worker-written.
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: {
+      proj: [mkEntry({ name: "kept" }), { name: "\u001b]0;forged\u0007", sessionId: 7 }],
+      "\u001b[2Jx": [{ name: 42 }],
+    } }));
+
+    expect(readRegistry()).toEqual({ workers: { proj: [expect.objectContaining({ name: "kept" })] } });
+    const message = readAlerts().alerts[0].message;
+    expect(message).toContain("proj/#1 (sessionId), ?/#0 (name)");
+    expect(message).not.toContain("\u001b");
+  });
+
   it("after quarantine, a fresh addWorker recreates the registry", async () => {
     const { readRegistry, addWorker, getWorkers, REGISTRY_FILE } = await importRegistry();
     fs.writeFileSync(REGISTRY_FILE, "{{{ not json");
@@ -213,6 +266,24 @@ describe("registry durability", () => {
 
     expect(fs.readFileSync(REGISTRY_FILE, "utf-8")).toBe(good);
     expect(getWorkers("proj")).toHaveLength(1);
+  });
+
+  it("refuses to add a worker when the registry read fails, rather than report it added", async () => {
+    const { addWorker, addWorkerWithUniqueName, getWorkers } = await importRegistry();
+    addWorker("proj", mkEntry({ name: "alpha-beta-gamma" }));
+    const err = Object.assign(new Error("EACCES"), { code: "EACCES" });
+
+    // Unique-name allocation must not run against the empty failed read, where
+    // it would mint a live worker's name again.
+    vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => { throw err; });
+    const createEntry = vi.fn(() => mkEntry({ name: "alpha-beta-gamma", sessionId: "s2" }));
+    expect(() => addWorkerWithUniqueName("proj", createEntry)).toThrow("could not be read");
+    expect(createEntry).not.toHaveBeenCalled();
+
+    vi.spyOn(fs, "readFileSync").mockImplementationOnce(() => { throw err; });
+    expect(() => addWorker("proj", mkEntry({ name: "calm-bay" }))).toThrow("could not be read");
+
+    expect(getWorkers("proj").map(e => e.name)).toEqual(["alpha-beta-gamma"]);
   });
 
   it("snapshots the registry before a write that shrinks the worker set", async () => {

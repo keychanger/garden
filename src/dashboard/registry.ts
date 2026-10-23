@@ -7,6 +7,7 @@
 // created with O_CREAT|O_EXCL. Stale locks (holder PID dead) are reclaimed.
 // See STATUS.md "Detection machinery" — the registry is the single source of
 // truth, so it must be race-free.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
@@ -712,14 +713,15 @@ function withRegistryLock<T>(fn: () => T): T {
 }
 
 // Shape guard for parsed registry. Top-level must be an object with a
-// `workers` field that maps project names to arrays. Per-entry validation
-// requires `name` to be a string, type-checks the guarded scalar fields when
-// present, and separately validates the callback queue, bounded bead id, and
-// ciNoRuns stamp; remaining WorkerEntry fields are optional and untyped here,
-// and absence is always legal (legacy entries from earlier garden versions
-// don't carry baseBranch, workflow, etc.). A failed check signals hand-edit
-// corruption, a forged entry, or a half-write that escaped atomic-rename;
-// fall back to empty rather than feed junk into the poller.
+// `workers` field that maps project names to arrays; anything else is
+// quarantined whole. Each entry is then checked on its own (invalidEntryField):
+// `name` must be a string, the guarded scalar fields are type-checked when
+// present, and the callback queue, bounded bead id, and ciNoRuns stamp are
+// validated separately; remaining WorkerEntry fields are optional and untyped
+// here, and absence is always legal (legacy entries from earlier garden
+// versions don't carry baseBranch, workflow, etc.). A failed entry signals a
+// hand-edit, a forged entry, or a field written in another build's type; that
+// entry is dropped rather than fed into the poller, and the rest still load.
 //
 // The guarded fields are the ones consumed WITHOUT re-validation to build
 // filesystem paths (worktreePath), git targets (baseBranch/branchName), resume
@@ -736,48 +738,73 @@ const GUARDED_STRING_FIELDS = [
 
 const GUARDED_NUMBER_FIELDS = ["continueSentAt", "titleGeneratedAt", "blockedAt", "blockedTurnEndedAt"] as const;
 
-function isWorkerRegistry(x: unknown): x is WorkerRegistry {
+function isWorkerRegistry(x: unknown): x is { workers: Record<string, unknown[]> } {
   if (!x || typeof x !== "object") return false;
   const r = x as Record<string, unknown>;
   if (!r.workers || typeof r.workers !== "object" || Array.isArray(r.workers)) return false;
-  for (const entries of Object.values(r.workers as Record<string, unknown>)) {
-    if (!Array.isArray(entries)) return false;
-    for (const e of entries) {
-      if (!e || typeof e !== "object") return false;
-      const entry = e as Record<string, unknown>;
-      if (typeof entry.name !== "string") return false;
-      for (const field of GUARDED_STRING_FIELDS) {
-        if (entry[field] !== undefined && typeof entry[field] !== "string") return false;
-      }
-      for (const field of GUARDED_NUMBER_FIELDS) {
-        if (entry[field] !== undefined && typeof entry[field] !== "number") return false;
-      }
-      if (entry.pendingHandoffCallbacks !== undefined
-          && (!Array.isArray(entry.pendingHandoffCallbacks)
-            || !entry.pendingHandoffCallbacks.every(callback => typeof callback === "string"))) {
-        return false;
-      }
-      if (entry.bead !== undefined
-          && (typeof entry.bead !== "string"
-            || entry.bead.length === 0
-            || entry.bead.length > 128
-            || entry.bead.startsWith("-"))) return false;
-      if (entry.ciNoRuns !== undefined) {
-        if (!entry.ciNoRuns || typeof entry.ciNoRuns !== "object") return false;
-        const stamp = entry.ciNoRuns as Record<string, unknown>;
-        if (typeof stamp.sha !== "string" || typeof stamp.since !== "number") return false;
-      }
-      if (entry.backgroundTasks !== undefined) {
-        if (!entry.backgroundTasks || typeof entry.backgroundTasks !== "object") return false;
-        const scan = entry.backgroundTasks as Record<string, unknown>;
-        if (typeof scan.transcriptPath !== "string" || typeof scan.offset !== "number"
-            || !Array.isArray(scan.pending) || !scan.pending.every(id => typeof id === "string")) {
-          return false;
-        }
-      }
+  return Object.values(r.workers as Record<string, unknown>).every(entries => Array.isArray(entries));
+}
+
+// The first field of an entry that fails its check, or null when it passes.
+function invalidEntryField(e: unknown): string | null {
+  if (!e || typeof e !== "object") return "entry";
+  const entry = e as Record<string, unknown>;
+  if (typeof entry.name !== "string") return "name";
+  for (const field of GUARDED_STRING_FIELDS) {
+    if (entry[field] !== undefined && typeof entry[field] !== "string") return field;
+  }
+  for (const field of GUARDED_NUMBER_FIELDS) {
+    if (entry[field] !== undefined && typeof entry[field] !== "number") return field;
+  }
+  if (entry.pendingHandoffCallbacks !== undefined
+      && (!Array.isArray(entry.pendingHandoffCallbacks)
+        || !entry.pendingHandoffCallbacks.every(callback => typeof callback === "string"))) {
+    return "pendingHandoffCallbacks";
+  }
+  if (entry.bead !== undefined
+      && (typeof entry.bead !== "string"
+        || entry.bead.length === 0
+        || entry.bead.length > 128
+        || entry.bead.startsWith("-"))) return "bead";
+  if (entry.ciNoRuns !== undefined) {
+    if (!entry.ciNoRuns || typeof entry.ciNoRuns !== "object") return "ciNoRuns";
+    const stamp = entry.ciNoRuns as Record<string, unknown>;
+    if (typeof stamp.sha !== "string" || typeof stamp.since !== "number") return "ciNoRuns";
+  }
+  if (entry.backgroundTasks !== undefined) {
+    if (!entry.backgroundTasks || typeof entry.backgroundTasks !== "object") return "backgroundTasks";
+    const scan = entry.backgroundTasks as Record<string, unknown>;
+    if (typeof scan.transcriptPath !== "string" || typeof scan.offset !== "number"
+        || !Array.isArray(scan.pending) || !scan.pending.every(id => typeof id === "string")) {
+      return "backgroundTasks";
     }
   }
-  return true;
+  return null;
+}
+
+// Project keys and names of a failed entry may be worker-written, and alert
+// text reaches the terminal unescaped, so only a plain label is echoed; anything
+// else is named by its position in the project's list.
+const PLAIN_LABEL = /^[\w.-]{1,64}$/;
+
+// Removes the entries that fail invalidEntryField, in place, and a project
+// left with none. Returns a label for each one removed.
+function dropInvalidEntries(workers: Record<string, unknown[]>): string[] {
+  const dropped: string[] = [];
+  for (const [project, entries] of Object.entries(workers)) {
+    const kept = entries.filter((e, index) => {
+      const field = invalidEntryField(e);
+      if (!field) return true;
+      const name = (e as { name?: unknown } | null)?.name;
+      const label = typeof name === "string" && PLAIN_LABEL.test(name) ? name : `#${index}`;
+      dropped.push(`${PLAIN_LABEL.test(project) ? project : "?"}/${label} (${field})`);
+      return false;
+    });
+    if (kept.length === entries.length) continue;
+    if (kept.length > 0) workers[project] = kept;
+    else delete workers[project];
+  }
+  return dropped;
 }
 
 // In-process cache: registry parses are surprisingly hot. The hook dispatcher
@@ -847,6 +874,33 @@ function quarantineCorruptRegistry(reason: string): void {
   });
 }
 
+// The file keeps its dropped entries until the next write leaves them out, and
+// every process that reads it meanwhile finds them again. The copy is named by
+// content so they share one, and only the process that writes it reports.
+function reportDroppedEntries(contents: string, dropped: string[]): void {
+  const digest = crypto.createHash("sha256").update(contents).digest("hex").slice(0, 12);
+  const dest = `${REGISTRY_FILE}.corrupt-${digest}`;
+  if (fs.existsSync(dest)) return;
+  let copied = false;
+  try {
+    atomicWriteFile(dest, contents);
+    copied = true;
+  } catch { /* best-effort — the report below still names the entries */ }
+  log.error("registry", "dropped registry entries that failed checks", {
+    data: { entries: dropped, copy: copied ? dest : "(copy failed)" },
+  });
+  const more = dropped.length > 5 ? `, and ${dropped.length - 5} more` : "";
+  addAlert({
+    level: "error",
+    source: "registry",
+    project: "(all)",
+    message:
+      `Registry entries that failed validation were dropped and are no longer tracked: ` +
+      `${dropped.slice(0, 5).join(", ")}${more}. Original file: ${copied ? path.basename(dest) : "(copy failed)"}.`,
+    dedupKey: `registry-entries-dropped:${digest}`,
+  });
+}
+
 export function readRegistry(): WorkerRegistry {
   let stat: fs.Stats;
   try {
@@ -902,20 +956,23 @@ export function readRegistry(): WorkerRegistry {
     );
     return { workers: {} };
   }
+  const dropped = dropInvalidEntries(raw.workers);
+  if (dropped.length > 0) reportDroppedEntries(contents, dropped);
+  const registry = raw as WorkerRegistry;
 
   // Lazily migrate legacy field shapes. Idempotent: entries already in the
   // new shape pass through unchanged. The next writeRegistry persists the new
   // shape; readers below this layer never see the old keys.
-  for (const entries of Object.values(raw.workers)) {
-    for (const e of entries as WorkerEntry[]) {
+  for (const entries of Object.values(registry.workers)) {
+    for (const e of entries) {
       migrateLegacyStatusFields(e);
       migrateCreatedAt(e);
       migrateLastStateChangeAt(e);
       migrateLegacyWorkflowNames(e);
     }
   }
-  cachedRegistry = { mtimeMs: stat.mtimeMs, size: stat.size, value: raw };
-  return structuredClone(raw);
+  cachedRegistry = { mtimeMs: stat.mtimeMs, size: stat.size, value: registry };
+  return structuredClone(registry);
 }
 
 // Lazily migrate the pre-multi-model status field names: claudeStatus →
@@ -1023,9 +1080,10 @@ export function writeRegistry(registry: WorkerRegistry): void {
     // This registry descends from a failed read of an intact file. Persisting
     // it would erase every worker record. Refuse and preserve the on-disk
     // file; the transient fault self-heals and the next mutation reads real
-    // state. The mutation that produced this write is silently dropped — a lost
-    // field update recovers on the next event; a lost addWorker is caught by
-    // the create flow noticing the missing entry.
+    // state. The mutation that produced this write is silently dropped, so a
+    // lost field update recovers on the next event. The add paths throw before
+    // reaching here instead (assertRegistryReadable): their callers go on to
+    // build a window and worktree for the worker they were told was added.
     log.error("registry", "refusing to persist registry built from a failed read", {});
     return;
   }
@@ -1056,9 +1114,19 @@ export function mutateRegistry(fn: (registry: WorkerRegistry) => boolean): void 
   });
 }
 
+// An add reports success to a caller that then spends tmux and disk on the
+// worker, and a unique name is only unique against what was read. Neither holds
+// for the empty result of a failed read, whose write writeRegistry drops.
+function assertRegistryReadable(registry: WorkerRegistry): void {
+  if (isTaintedRegistry(registry)) {
+    throw new Error("Worker registry could not be read; no worker was added");
+  }
+}
+
 export function addWorker(project: string, entry: WorkerEntry): void {
   withRegistryLock(() => {
     const registry = readRegistry();
+    assertRegistryReadable(registry);
     if (!registry.workers[project]) registry.workers[project] = [];
     registry.workers[project].push(entry);
     writeRegistry(registry);
@@ -1071,6 +1139,7 @@ export function addWorkerWithUniqueName<T extends WorkerEntry>(
 ): T {
   return withRegistryLock(() => {
     const registry = readRegistry();
+    assertRegistryReadable(registry);
     const existingNames = Object.values(registry.workers)
       .flatMap(entries => entries.map(entry => entry.name));
     const entry = createEntry(existingNames);

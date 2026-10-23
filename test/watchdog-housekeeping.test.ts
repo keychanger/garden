@@ -269,4 +269,37 @@ describe("alertOrphanedWorktrees", () => {
     expect(alertOrphanedWorktrees(NOW)).toBe(0);
     expect(readAlerts().alerts.length).toBe(0);
   });
+
+  it("skips a sweep whose registry read failed, keeping the last signature", async () => {
+    const { alertOrphanedWorktrees, ORPHAN_WORKTREE_GRACE_MS } = await importWatchdog();
+    const { readAlerts } = await import("../src/dashboard/alerts.js");
+    const { readDashState } = await import("../src/dashboard/state.js");
+    const { addWorker, REGISTRY_FILE } = await import("../src/dashboard/registry.js");
+    const old = { idleMs: ORPHAN_WORKTREE_GRACE_MS + 60_000, nowMs: NOW };
+    makeWorktree(env, "garden", "live-calm-wren", old);
+    makeWorktree(env, "garden", "lost-gray-moss", old);
+    addWorker("garden", { name: "live-calm-wren", sessionId: "s", task: "" });
+    expect(alertOrphanedWorktrees(NOW)).toBe(1);
+    const alerts = readAlerts().alerts.length;
+    const signature = readDashState().orphanWorktreeSignature;
+
+    // The file is intact but stat fails, so readRegistry returns its tainted
+    // empty registry: the live worker's tree must not read as unclaimed.
+    const realStat = fs.statSync;
+    const stat = vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
+      if (file === REGISTRY_FILE) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      return (realStat as (...args: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.statSync);
+    try {
+      expect(alertOrphanedWorktrees(NOW)).toBe(0);
+    } finally {
+      stat.mockRestore();
+    }
+    expect(readAlerts().alerts.length).toBe(alerts);
+    expect(readDashState().orphanWorktreeSignature).toBe(signature);
+
+    // The next good sweep finds the same set, so it does not re-alert.
+    expect(alertOrphanedWorktrees(NOW)).toBe(1);
+    expect(readAlerts().alerts.length).toBe(alerts);
+  });
 });

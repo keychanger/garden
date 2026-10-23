@@ -59,7 +59,9 @@ import { SESSIONS_DIR } from "../config.js";
 import { CONTROL_SCRIPTS_DIR } from "../paths.js";
 import { newDashboardWindow, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
-import { readRegistry, mutateRegistry, PR_STATE_KIND, type WorkerEntry, type WorkerRegistry } from "./registry.js";
+import {
+  readRegistry, mutateRegistry, isTaintedRegistry, PR_STATE_KIND, type WorkerEntry, type WorkerRegistry,
+} from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
 import { isAwaitingInput, isDoneSet } from "./continue.js";
 import { addAlert } from "./alerts.js";
@@ -254,6 +256,9 @@ export function healProjectPollers(
 // never re-adds; addAlert's stable dedupKey caps this at one alert per orphan
 // per hour despite the 60s tick.
 export function alertOrphanedWindows(registry: WorkerRegistry): void {
+  // A failed read of an intact registry comes back empty, which would name
+  // every live worker window an orphan. The next tick's read decides instead.
+  if (isTaintedRegistry(registry)) return;
   let windows: string[];
   try {
     windows = listAllWindowNames();
@@ -607,8 +612,15 @@ const ORPHAN_WORKTREE_NAME_LIMIT = 5;
 // re-derives it, so keying addAlert's dedup on it alone (a 1-hour window) would
 // nag ~24 times a day forever. Returns the number of orphans found, whether or
 // not this call alerted.
+//
+// A failed read of an intact registry comes back empty, and would report every
+// live worker's tree as unclaimed and overwrite the signature the next good
+// sweep compares against, so that sweep skips (finding none) without touching
+// either; the next hourly sweep retries.
 export function alertOrphanedWorktrees(nowMs: number): number {
-  const orphans = findOrphanedWorktrees(readRegistry(), nowMs);
+  const registry = readRegistry();
+  if (isTaintedRegistry(registry)) return 0;
+  const orphans = findOrphanedWorktrees(registry, nowMs);
   const signature = orphans.map(o => `${o.project}/${o.name}`).sort().join(",") || null;
   let changed = false;
   withStateLock(() => {

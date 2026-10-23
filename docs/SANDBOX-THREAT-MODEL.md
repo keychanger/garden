@@ -149,10 +149,10 @@ reads or runs.
   claims it, a request and its seed are as writable by a sibling as by their author (see
   residuals).
 - **Registry forgery guard (partial).** The worker registry lives in the
-  sandbox-writable `~/.garden/sessions`. Its read guard (`isWorkerRegistry` in
-  `src/dashboard/registry.ts`) type-checks the trusted fields (`prState`, `agentStatus`,
-  `baseBranch`, `branchName`, `worktreePath`, `sessionId`, `handoffRequestId`, `bead`) so a forged wrong-typed value
-  cannot flow into a path/git/dispatch consumer. This stops malformed forgery; it does
+  sandbox-writable `~/.garden/sessions`. Its read guard (`invalidEntryField`, applied to each
+  entry by `readRegistry` in `src/dashboard/registry.ts`) type-checks the trusted fields (`prState`, `agentStatus`,
+  `baseBranch`, `branchName`, `worktreePath`, `sessionId`, `handoffRequestId`, `bead`) and drops an entry that
+  fails, so a forged wrong-typed value cannot flow into a path/git/dispatch consumer. This stops malformed forgery; it does
   not stop a well-formed malicious entry (see residuals). Values that reach git are also
   checked where git is called (`git-refs.ts`): a SHA must be an object name, a branch is
   passed as a full ref, and `--end-of-options` precedes them, so a forged `lastSeenSha` of

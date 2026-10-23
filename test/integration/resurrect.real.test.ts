@@ -371,6 +371,32 @@ describe("resurrectWorker (real fs/git)", () => {
     expect(fs.readFileSync(path.join(worktreePath, "uncommitted.txt"), "utf-8")).toBe("still here\n");
   });
 
+  it("does not report a resurrection the registry could not record, and the retry adopts the tree", async () => {
+    const registry = await import("../../src/dashboard/registry.js");
+    registry.addWorker(PROJECT, { name: "calm-live-fir", sessionId: "s-live", task: "" });
+    const t = await tombstoneFor({});
+    const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+
+    // The registry file is intact, but stat fails on it for this whole run.
+    const realStat = fs.statSync;
+    const stat = vi.spyOn(fs, "statSync").mockImplementation(((file: fs.PathLike, ...rest: unknown[]) => {
+      if (file === registry.REGISTRY_FILE) throw Object.assign(new Error("EIO"), { code: "EIO" });
+      return (realStat as (...args: unknown[]) => unknown)(file, ...rest);
+    }) as typeof fs.statSync);
+    try {
+      expect(() => resurrectWorker(t)).toThrow("could not be read");
+    } finally {
+      stat.mockRestore();
+    }
+    const { readTelemetryEvents } = await import("../../src/dashboard/telemetry.js");
+    expect(readTelemetryEvents().some(e => e.event === "worker.resurrected")).toBe(false);
+    expect(registry.findWorkerByName(PROJECT, WORKER)).toBeUndefined();
+
+    expect(resurrectWorker(t).startedFrom).toBe("existing worktree");
+    expect(registry.findWorkerByName(PROJECT, WORKER)).toBeTruthy();
+    expect(registry.findWorkerByName(PROJECT, "calm-live-fir")).toBeTruthy();
+  });
+
   it("refuses to race a detached kill cleanup that can still delete the worktree", async () => {
     const { createWorktree, workerCleanupMarkerPath } = await import("../../src/dashboard/git.js");
     createWorktree(projectPath, worktreePath, WORKER);
