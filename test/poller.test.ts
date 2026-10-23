@@ -5465,6 +5465,35 @@ describe("poll — failing state", () => {
   });
 });
 
+describe("poll — prState this build does not know", () => {
+  // The registry guard checks only that prState is a string. "constructor" is
+  // an Object.prototype key, which a plain lookup would find on any handler table.
+  it.each(["holding", "constructor"])("skips a worker in %s and still polls its siblings", (state) => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ name: "odd-elm", prState: state as WorkerEntry["prState"] }),
+      makeWorker({
+        prState: "failing",
+        failingSha: "old-sha",
+        lastSeenSha: "old-sha",
+        lastShaChangeAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    vi.mocked(getBranchHeadSha).mockReturnValue("new-sha");
+
+    poll("myproject");
+
+    expect(log.error).not.toHaveBeenCalledWith("poller", "error polling worker", expect.anything());
+    expect(log.warn).toHaveBeenCalledWith("poller", "unknown prState, skipping worker", {
+      worker: "odd-elm",
+      data: { project: "myproject", workflow: "default", prState: state },
+    });
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", {
+      lastSeenSha: "new-sha",
+      lastShaChangeAt: expect.any(String),
+    });
+  });
+});
+
 describe("poll — merged state", () => {
   // The merged handler is two-legged: resume-on-new-commits recovery, then
   // the gate-reopen sweep (replay of the post-merge auto-continue decision

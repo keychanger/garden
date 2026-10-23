@@ -142,10 +142,21 @@ function pollWorker(
   // schedules a re-check.
   const state = entry.prState ?? "working";
   const workflow = getWorkflow(entry.workflow ?? "default");
-  // WorkflowDefinition.stateHandlers is Record<PrState, StateHandler> — the
-  // type contract guarantees a handler for every state, so no runtime guard
-  // is needed. A new PrState in registry.ts would be a TypeScript error here
-  // until every workflow declares a handler for it.
+  // WorkflowDefinition.stateHandlers is Record<PrState, StateHandler>, so a
+  // new PrState in registry.ts is a TypeScript error here until every workflow
+  // declares a handler for it. The registry guard, though, checks only that
+  // prState is a string, so a state from a newer build, a hand-edit, or a
+  // worker's write arrives with no handler. Skip that worker rather than throw
+  // on every poll, and leave its entry as written so a build that knows the
+  // state can still act on it. hasOwn, because a plain lookup also finds
+  // Object.prototype members ("constructor") on the handler table.
+  if (!Object.hasOwn(workflow.stateHandlers, state)) {
+    log.warn("poller", "unknown prState, skipping worker", {
+      worker: entry.name,
+      data: { project: projectName, workflow: workflow.name, prState: state },
+    });
+    return false;
+  }
   return workflow.stateHandlers[state](projectName, projectPath, baseBranch, entry);
 }
 

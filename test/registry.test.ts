@@ -123,6 +123,21 @@ describe("readRegistry", () => {
       backgroundTasks: { transcriptPath: "/t.jsonl", offset: 42, pending: ["b13krek0m"] },
     });
   });
+
+  it("keeps an entry whose prState is a string this build does not know", async () => {
+    // A newer build's state read after a rollback, a hand-edit, or a worker's
+    // write. The guard checks type, not membership: rejecting the value would
+    // reload the whole fleet empty, and dropping only its entry would remove a
+    // live worker. The poller and watchdog skip it instead, and it stays as
+    // written for a build that knows the state.
+    const { readRegistry, REGISTRY_FILE } = await importRegistry();
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: { proj: [{ name: "odd", prState: "holding" }, { name: "ok", prState: "reviewing" }] },
+    }));
+    expect(readRegistry().workers.proj.map(e => [e.name, e.prState])).toEqual([
+      ["odd", "holding"], ["ok", "reviewing"],
+    ]);
+  });
 });
 
 describe("registry durability", () => {

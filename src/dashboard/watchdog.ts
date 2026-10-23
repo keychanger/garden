@@ -112,7 +112,11 @@ export function isWatchedState(entry: WorkerEntry): boolean {
       && (isDoneSet(entry.worktreePath) || isAwaitingInput(entry.worktreePath))) {
     return false;
   }
-  if (PR_STATE_KIND[state].pollerOwed) return true;
+  // The registry guard checks only that prState is a string, so a state from
+  // a newer build, a hand-edit, or a worker's write can arrive with no kind.
+  // A throw here would end the whole watchdog iteration. The poller skips such
+  // a worker (pollWorker), so it is never watched.
+  if (PR_STATE_KIND[state]?.pollerOwed) return true;
   // A Stop hook saw commits ahead of base but the review-launch poke never
   // arrived — the one stranding class that lives in the working state.
   if (state === "working" && entry.pendingReviewAt !== undefined) return true;
@@ -140,7 +144,8 @@ export function isWatchedState(entry: WorkerEntry): boolean {
 // dead window and still trips, so recovery is preserved.
 export function hasLiveWork(entry: WorkerEntry): boolean {
   const state = entry.prState ?? "working";
-  return PR_STATE_KIND[state].windowed
+  // A prState with no kind is not windowed (see isWatchedState).
+  return PR_STATE_KIND[state]?.windowed === true
     && entry.reviewWindowName !== undefined
     && windowExists(entry.reviewWindowName);
 }
@@ -791,7 +796,14 @@ export async function runWatchdogLoop(): Promise<void> {
       } catch (err) {
         log.warn("watchdog", "failed to ensure usage poller", { data: { error: String(err) } });
       }
-      tick(lastPokeAt, Date.now());
+      // Its own try, like every duty after it: a throw here used to end the
+      // whole iteration, so pane heal, orphan detection, cleanup retries,
+      // awake enforcement and housekeeping all stopped with it.
+      try {
+        tick(lastPokeAt, Date.now());
+      } catch (err) {
+        log.warn("watchdog", "staleness sweep failed", { data: { error: String(err) } });
+      }
       // Re-file worker windows whose name disagrees with the worker their pane
       // holds (a misfiled rename makes a live worker invisible in the status
       // pane), BEFORE orphan detection so it judges the healed names. Under the

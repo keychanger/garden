@@ -391,6 +391,17 @@ describe("tick", () => {
     tick(new Map(), NOW);
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
+
+  it("skips a prState this build does not know and still pokes other projects", () => {
+    // The registry guard checks only that prState is a string. A throw here
+    // ended the sweep for every later project and, in the loop, every duty
+    // after it in the same iteration.
+    registryMock._setEntries("odd", [entry({ prState: "holding" as PrState, lastEventAt: STALE_MS })]);
+    registryMock._setEntries("proj", [entry({ prState: "reviewing", reviewStartedAt: STALE_MS })]);
+    tick(new Map(), NOW);
+    expect(triggerProjectPoll).toHaveBeenCalledTimes(1);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("proj");
+  });
 });
 
 describe("healProjectPollers", () => {
@@ -575,6 +586,19 @@ describe("absorbSleep", () => {
     // eligible.size is 1 (built from the pre-clear read), so the mutate runs.
     expect(absorbSleep(WATCHDOG_TICK_MS + TWO_HOURS)).toBe(TWO_HOURS);
     expect(e.reviewStartedAt).toBeUndefined();
+  });
+
+  it("does not shift a worker whose prState this build does not know", () => {
+    // absorbSleep runs first in each loop iteration, so a throw from it
+    // skipped every duty after it.
+    windowExistsMock.mockReturnValue(true);
+    const start = NOW - TWO_HOURS;
+    const odd = entry({ name: "odd", prState: "holding" as PrState, reviewWindowName: "w1", reviewStartedAt: start });
+    const rev = entry({ name: "rev", prState: "reviewing", reviewWindowName: "w2", reviewStartedAt: start });
+    registryMock._setEntries("p", [odd, rev]);
+    expect(absorbSleep(WATCHDOG_TICK_MS + TWO_HOURS)).toBe(TWO_HOURS);
+    expect(odd.reviewStartedAt).toBe(start);
+    expect(rev.reviewStartedAt).toBe(start + TWO_HOURS);
   });
 });
 
