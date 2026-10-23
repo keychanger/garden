@@ -187,6 +187,11 @@ export function dueCleanupRequests(nowMs: number): WorkerCleanupRequest[] {
   const due: WorkerCleanupRequest[] = [];
   for (const name of names) {
     if (!name.startsWith(CLEANUP_REQUEST_PREFIX)) continue;
+    // A request's lock, file-lock's reclaim salvage of it, and atomicWriteFile's
+    // temps all share its name as a prefix. Read as requests, a running
+    // cleanup's lock was retired as unreadable, admitting a second run beside
+    // it, and a temp an interrupted write left was re-dispatched every window.
+    if (/\.lock(\.reclaiming\..+)?$|\.tmp$/.test(name)) continue;
     const file = path.join(SESSIONS_DIR, name);
     try {
       if (nowMs - fs.statSync(file).mtimeMs < CLEANUP_RETRY_AFTER_MS) continue;

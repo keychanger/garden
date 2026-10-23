@@ -8,9 +8,10 @@
 // across processes without IPC is the filesystem itself.
 //
 // Each acquisition stamps the holder PID plus a unique owner token. If the PID
-// is dead (process crashed without cleanup), the lock is reclaimed. We trust
-// PIDs only for liveness; the actual exclusion is provided by O_EXCL, and the
-// token prevents an old holder from releasing a replacement lock.
+// is dead (process crashed without cleanup), or now names a process that
+// started after the lock was written, the lock is reclaimed. We trust PIDs only
+// for liveness; the actual exclusion is provided by O_EXCL, and the token
+// prevents an old holder from releasing a replacement lock.
 //
 // No log dependency: this module is imported by config.ts, and log.ts
 // imports SESSIONS_DIR from config.ts. Adding a log import here closes a
@@ -18,6 +19,7 @@
 // catch the throw can log themselves with their own context.
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 export interface FileLockOpts {
@@ -73,18 +75,51 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
-// A young file with no parsable pid is an acquire caught between its open and
-// pid-write, so it is not stale. Once old, only an unparseable record or a
-// demonstrably dead holder can be reclaimed.
-function lockAppearsStale(filePath: string): boolean {
-  let ageMs = Infinity;
+// A holder writes its lock after it starts, so a live pid whose process started
+// more than STALE_LOCK_MS after the lock was written is not the holder: the
+// holder died without releasing and a later process was given its pid. macOS
+// hands pids out in sequence below 100,000, so on a machine running a fleet a
+// number comes round again within hours, and from then on kill(0) answers for
+// whoever has it. A real holder is never reclaimed this way, however long it
+// holds, because it existed when it wrote the lock; the margin covers ps's
+// whole-second resolution and small clock steps. ps is denied inside a worker
+// sandbox, and when it cannot answer the pid's own answer stands.
+export function pidStartedAfter(pid: number, sinceMs: number): boolean {
   try {
-    ageMs = Date.now() - fs.statSync(filePath).mtimeMs;
+    const ps = spawnSync("ps", ["-o", "etime=", "-p", String(pid)], {
+      encoding: "utf-8",
+      timeout: 1_000,
+    });
+    // [[dd-]hh:]mm:ss since the process started, or nothing when ps cannot
+    // run or cannot see the pid.
+    const elapsed = /^(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)$/.exec(String(ps.stdout ?? "").trim());
+    if (!elapsed) return false;
+    const [days, hours, minutes, seconds] = elapsed.slice(1).map((v) => Number(v ?? 0));
+    return Date.now() - (((days * 24 + hours) * 60 + minutes) * 60 + seconds) * 1000 > sinceMs;
+  } catch {
+    return false;
+  }
+}
+
+type StartedAfter = (pid: number, sinceMs: number) => boolean;
+
+// A young file with no parsable pid is an acquire caught between its open and
+// pid-write, so it is not stale. Once old, only an unparseable record, a
+// demonstrably dead holder, or a pid a younger process now has can be
+// reclaimed.
+function lockAppearsStale(filePath: string, startedAfter: StartedAfter): boolean {
+  let mtimeMs: number;
+  try {
+    mtimeMs = fs.statSync(filePath).mtimeMs;
   } catch {
     return true; // vanished between checks — a reclaim rename will ENOENT harmlessly
   }
+  const ageMs = Date.now() - mtimeMs;
   const holderPid = readHolderPid(filePath);
-  if (holderPid !== null) return !processIsAlive(holderPid);
+  if (holderPid !== null) {
+    if (!processIsAlive(holderPid)) return true;
+    return ageMs >= STALE_LOCK_MS && startedAfter(holderPid, mtimeMs + STALE_LOCK_MS);
+  }
   return ageMs >= STALE_LOCK_MS;
 }
 
@@ -98,14 +133,14 @@ function lockAppearsStale(filePath: string): boolean {
 // stale we discard it; if it turns out live and young (a fresh holder acquired
 // between our pre-check and our rename), we hand it back and retry rather than
 // run concurrently with that holder. Returns true when the slot was freed.
-function reclaimStaleLock(lockPath: string, ownerId: string): boolean {
+function reclaimStaleLock(lockPath: string, ownerId: string, startedAfter: StartedAfter): boolean {
   const salvage = `${lockPath}.reclaiming.${ownerId}`;
   try {
     fs.renameSync(lockPath, salvage);
   } catch {
     return false; // lost the atomic race (ENOENT) — retry the open
   }
-  if (lockAppearsStale(salvage)) {
+  if (lockAppearsStale(salvage, startedAfter)) {
     try { fs.unlinkSync(salvage); } catch { /* ignore */ }
     return true;
   }
@@ -130,6 +165,14 @@ export function withFileLock<T>(
   const owner = `${myPid}:${randomUUID()}`;
   const ownerId = owner.slice(owner.indexOf(":") + 1);
   let acquired = false;
+  // The loop re-checks every 5ms, and a pid cannot change hands within one
+  // acquire's deadline, so ps is asked at most once per pid and lock.
+  const startTimes = new Map<string, boolean>();
+  const startedAfter: StartedAfter = (pid, sinceMs) => {
+    const key = `${pid}@${sinceMs}`;
+    if (!startTimes.has(key)) startTimes.set(key, pidStartedAfter(pid, sinceMs));
+    return startTimes.get(key) === true;
+  };
 
   while (!acquired && Date.now() < deadline) {
     let fd: number | null = null;
@@ -158,7 +201,8 @@ export function withFileLock<T>(
         // Cheap pre-check on the live path: only escalate to an atomic reclaim
         // when the lock looks abandoned. A normally-contended lock (a live
         // holder mid-write) just waits — no rename churn on the hot path.
-        if (lockAppearsStale(lockPath) && reclaimStaleLock(lockPath, ownerId)) {
+        if (lockAppearsStale(lockPath, startedAfter)
+            && reclaimStaleLock(lockPath, ownerId, startedAfter)) {
           continue;
         }
         const wait = new Int32Array(new SharedArrayBuffer(4));

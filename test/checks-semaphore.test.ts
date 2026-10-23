@@ -3,6 +3,28 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
+// Pass-through by default; the pid-reuse tests stand in for ps, whose answer
+// depends on when this test process started and which a sandbox denies.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
+
+import { spawnSync } from "node:child_process";
+
+// ps -o etime= for any pid: [[dd-]hh:]mm:ss since that process started.
+function psReportsElapsed(etime: string): void {
+  vi.mocked(spawnSync).mockImplementation(((cmd: string) => {
+    if (cmd !== "ps") throw new Error(`unexpected spawn: ${cmd}`);
+    return { pid: 0, output: [], stdout: `${etime}\n`, stderr: "", status: 0, signal: null };
+  }) as typeof spawnSync);
+}
+
+function backdate(file: string, ageMs: number): void {
+  const t = new Date(Date.now() - ageMs);
+  fs.utimesSync(file, t, t);
+}
+
 let tmpHome: string;
 let originalHome: string | undefined;
 
@@ -26,6 +48,8 @@ afterEach(() => {
   // before its mockRestore would otherwise leak the mock into every later
   // test in this file, burying the real failure under unrelated ones.
   vi.restoreAllMocks();
+  // restoreAllMocks leaves a vi.fn's implementation in place.
+  vi.mocked(spawnSync).mockReset();
   process.env.HOME = originalHome;
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });
@@ -131,6 +155,57 @@ describe("tryAcquireChecksSlot / releaseChecksSlot", () => {
     fs.mkdirSync(path.dirname(mod.checksSlotPath(0)), { recursive: true });
     fs.writeFileSync(mod.checksSlotPath(0), `${process.ppid}\n2026-01-01T00:00:00Z\n`);
     expect(mod.tryAcquireChecksSlot(1)).toBe(null);
+    // A young claim cannot be a reused pid, so it is not worth a ps.
+    expect(vi.mocked(spawnSync)).not.toHaveBeenCalled();
+  });
+
+  it("steals a slot whose owner pid now names a process that started after the claim", async () => {
+    // A killed run leaves its slot behind, and once its pid is handed to a
+    // later process kill(0) answers for that one. A machine under 16 cores has
+    // one slot, so every checks run then waited the full 45 minutes.
+    const mod = await loadModule();
+    const slotFile = mod.checksSlotPath(0);
+    fs.mkdirSync(path.dirname(slotFile), { recursive: true });
+    fs.writeFileSync(slotFile, `${process.pid}\n2026-01-01T00:00:00Z\n`);
+    backdate(slotFile, 60 * 60_000);
+    psReportsElapsed("05:00");
+    expect(mod.tryAcquireChecksSlot(1)).toBe(0);
+  });
+
+  it("respects an old slot whose live owner predates the claim, or cannot be dated", async () => {
+    // A suite holds its slot for as long as it runs. ps counts whole seconds
+    // rounded down, so an owner that claimed in its first second can read as
+    // starting up to a second after. ps is denied inside a worker sandbox,
+    // and then the pid's own answer stands.
+    const mod = await loadModule();
+    const slotFile = mod.checksSlotPath(0);
+    fs.mkdirSync(path.dirname(slotFile), { recursive: true });
+    fs.writeFileSync(slotFile, `${process.ppid}\n2026-01-01T00:00:00Z\n`);
+    for (const [ageMs, etime] of [[60 * 60_000, "1-00:00:00"], [60_000, "00:59"]] as const) {
+      backdate(slotFile, ageMs);
+      psReportsElapsed(etime);
+      expect(mod.tryAcquireChecksSlot(1), etime).toBe(null);
+    }
+    vi.mocked(spawnSync).mockImplementation((() => ({
+      pid: 0, output: [], stdout: "", stderr: "", status: null, signal: null,
+      error: Object.assign(new Error("spawnSync ps EPERM"), { code: "EPERM" }),
+    })) as typeof spawnSync);
+    expect(mod.tryAcquireChecksSlot(1)).toBe(null);
+    expect(fs.readFileSync(slotFile, "utf8").split("\n")[0]).toBe(String(process.ppid));
+  });
+
+  it("does not steal a slot its claimant has not stamped yet", async () => {
+    // The claimant creates the file, then writes its pid. Stealing in between
+    // left both runs believing they held the slot.
+    const mod = await loadModule();
+    const slotFile = mod.checksSlotPath(0);
+    fs.mkdirSync(path.dirname(slotFile), { recursive: true });
+    fs.writeFileSync(slotFile, "");
+    expect(mod.tryAcquireChecksSlot(1)).toBe(null);
+    expect(fs.readFileSync(slotFile, "utf8")).toBe("");
+    // One killed before it wrote its pid is abandoned, not a wedge.
+    backdate(slotFile, 60_000);
+    expect(mod.tryAcquireChecksSlot(1)).toBe(0);
   });
 
   it("respects a slot held by a process it is not allowed to signal", async () => {

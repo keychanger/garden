@@ -139,6 +139,28 @@ describe("dueCleanupRequests", () => {
     expect(fs.existsSync(junk)).toBe(false);
     expect(fs.existsSync(path.join(env.sessionsDir, "dashboard.registry.json"))).toBe(true);
   });
+
+  it("leaves a request's lock, its reclaim salvage and write temps alone", async () => {
+    // All three share the request's name as a prefix. The lock of a cleanup
+    // still running past the retry window was read as an unreadable request
+    // and deleted, which let the re-dispatched child run alongside it; a temp
+    // left by an interrupted write parsed as a request and was re-dispatched
+    // every window.
+    const { dueCleanupRequests, CLEANUP_RETRY_AFTER_MS } = await importCleanup();
+    const marker = await seed("garden", "bold-calm-ash", CLEANUP_RETRY_AFTER_MS * 2);
+    const lock = `${marker}.lock`;
+    const salvage = `${lock}.reclaiming.0b9f5a4e-3c2d-4e1f-9a8b-7c6d5e4f3a2b`;
+    const temp = `${marker}.1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f.tmp`;
+    fs.writeFileSync(lock, `${process.pid}:2b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d`);
+    fs.writeFileSync(salvage, `${process.pid}:3c4d5e6f-7081-4b9c-8d1e-2f3a4b5c6d7e`);
+    fs.copyFileSync(marker, temp);
+    for (const f of [lock, salvage, temp]) age(f, CLEANUP_RETRY_AFTER_MS * 2, now);
+
+    const due = dueCleanupRequests(now).map(r => r.worker);
+    expect(fs.existsSync(lock)).toBe(true);
+    expect(fs.existsSync(salvage)).toBe(true);
+    expect(due).toEqual(["bold-calm-ash"]);
+  });
 });
 
 describe("buildCleanupCommand", () => {

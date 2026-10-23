@@ -8,13 +8,20 @@
 //
 // Slots are pid-stamped lock files in SESSIONS_DIR claimed with O_EXCL (the
 // same atomic-create election mkfifo provides for pollers). A slot whose
-// owning pid is dead is stolen, so a crashed or SIGKILLed run cannot leak its
-// slot. Acquisition polls; a bounded max wait fails open (run anyway, warn)
-// so a semaphore bug can only ever cost performance, never wedge the fleet.
+// owning pid is dead, or has passed to a process started since, is stolen, so
+// a crashed or SIGKILLed run cannot leak its slot. Acquisition polls; a bounded
+// max wait fails open (run anyway, warn) so a semaphore bug can only ever cost
+// performance, never wedge the fleet.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { SESSIONS_DIR } from "./config.js";
+import { pidStartedAfter } from "./dashboard/file-lock.js";
+
+// A claimant creates its slot file and then writes its pid, so an empty slot is
+// a claim in progress until it is this old. Also the least gap between a claim
+// and its pid's process starting that reads as a reused pid (see slotHeld).
+const SLOT_STALE_MS = 30_000;
 
 // One suite per ~8 cores: a capped vitest pool uses about half a machine's
 // cores, so this keeps at least half the hardware free for the interactive
@@ -38,6 +45,23 @@ function processAlive(pid: number): boolean {
     // EPERM means the pid exists but belongs to another user.
     return (err as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+// Held while the owner pid answers and its process predates the claim: the
+// owner wrote the slot after it started, so a live pid whose process started
+// later was handed out after the owner died (see pidStartedAfter).
+function slotHeld(slotFile: string): boolean {
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(slotFile);
+  } catch {
+    return false; // gone — the steal's rename fails and the create is retried
+  }
+  const ageMs = Date.now() - stat.mtimeMs;
+  if (stat.size === 0) return ageMs < SLOT_STALE_MS;
+  const owner = slotOwner(slotFile);
+  if (owner === null || !processAlive(owner)) return false;
+  return ageMs < SLOT_STALE_MS || !pidStartedAfter(owner, stat.mtimeMs + SLOT_STALE_MS);
 }
 
 function slotOwner(slotFile: string): number | null {
@@ -64,20 +88,18 @@ function slotOwner(slotFile: string): number | null {
 // (mirroring reclaimStaleLock): free the slot only if its owner is still dead; if a
 // live pid reappeared, restore the file (when the slot is free again, so we never
 // clobber a newer holder) and back off rather than admit two holders on one slot.
-// Liveness is pid-only, with no age backstop: a checks slot is legitimately held for
-// the minutes a suite runs, so evicting on age (as file-lock.ts does for its
-// millisecond registry writes) would kill a live holder.
+// Liveness is the pid and its start time, with no age backstop for a stamped
+// slot: a checks slot is legitimately held for the minutes a suite runs, so
+// evicting on age would kill a live holder.
 function stealAbandonedSlot(slotFile: string): boolean {
-  const owner = slotOwner(slotFile);
-  if (owner !== null && processAlive(owner)) return false; // live holder — leave it
+  if (slotHeld(slotFile)) return false; // live holder — leave it
   const salvage = `${slotFile}.reclaiming.${process.pid}`;
   try {
     fs.renameSync(slotFile, salvage);
   } catch {
     return false; // lost the atomic steal, or already gone — retry the open
   }
-  const salvagedOwner = slotOwner(salvage);
-  if (salvagedOwner === null || !processAlive(salvagedOwner)) {
+  if (!slotHeld(salvage)) {
     try { fs.unlinkSync(salvage); } catch { /* already gone */ }
     return true;
   }
