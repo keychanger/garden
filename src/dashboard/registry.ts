@@ -51,6 +51,20 @@ export const PR_STATE_KIND: Record<PrState, { pollerOwed: boolean; windowed: boo
   done: { pollerOwed: false, windowed: false },
 };
 
+// Wall-clock ceiling on a single reviewer or resolver run. If the tmux window
+// is still alive past this, the poller kills it and escalates to `failing`.
+// Catches hung subprocesses the reviewer can't escape from (e.g. a `npm test`
+// that blocks forever because tests have no timeout and the sandbox silently
+// denies their network calls). Sized from the ledger: across 801 reviews the
+// median was 5.6 min and p99 25 min, and the only runs past 60 min were three
+// on one day — two stalled on 15-17 min API retry gaps, one queued 75 min
+// behind a contended checks suite — none hung, and one was killed nine seconds
+// after committing its fix. Two hours keeps the hang backstop while clearing
+// a bad day; the park it produces is `review-timeout`, kick-recoverable.
+// Defined here, beside the `windowed` classification it bounds, because the
+// watchdog reads it too and cannot import the poller modules.
+export const REVIEW_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+
 // Why the clean-tree gate held a review back. See WorkerEntry.reviewBlockedReason.
 export type ReviewBlockedReason = "dirty" | "indeterminate";
 

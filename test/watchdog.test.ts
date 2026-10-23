@@ -101,7 +101,7 @@ import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import { newDashboardWindow, windowExists, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { withFileLock } from "../src/dashboard/file-lock.js";
-import type { WorkerEntry, PrState } from "../src/dashboard/registry.js";
+import { REVIEW_TIMEOUT_MS, type WorkerEntry, type PrState } from "../src/dashboard/registry.js";
 
 const windowExistsMock = vi.mocked(windowExists);
 
@@ -267,6 +267,21 @@ describe("isWorkerStale", () => {
     expect(isWorkerStale(e, NOW)).toBe(false);
   });
 
+  it.each(["reviewing", "resolving", "ci-fixing"] as PrState[])(
+    "true for a live %s run that has outlived REVIEW_TIMEOUT_MS", (state) => {
+      // The live window exempts a run only while it is inside its cap. Past
+      // it the poller owes the timeout kill, and the one poke scheduled at
+      // launch to deliver it can land before a sleep-shifted deadline.
+      windowExistsMock.mockReturnValue(true);
+      const e = entry({
+        prState: state,
+        reviewStartedAt: NOW - REVIEW_TIMEOUT_MS - 1,
+        reviewWindowName: "_p-review-w",
+      });
+      expect(isWorkerStale(e, NOW)).toBe(true);
+    },
+  );
+
   it("true for a stranded review whose window died and completion poke was lost", () => {
     // The genuine stranding class the watchdog must still recover: window gone,
     // aged past the threshold.
@@ -403,6 +418,26 @@ describe("tick", () => {
     registryMock._setEntries("proj", [entry({ prState: "reviewing", reviewStartedAt: STALE_MS })]);
     tick(new Map(), NOW);
     expect(triggerProjectPoll).toHaveBeenCalledTimes(1);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("proj");
+  });
+
+  it("pokes a live review once its sleep-shifted deadline passes", () => {
+    // The timeout's only deadline event is one poke scheduled at launch for a
+    // fixed REVIEW_TIMEOUT_MS. A 90s watchdog overrun moves reviewStartedAt
+    // 90s later, so that poke lands inside the shifted cap, where the handler
+    // returns without re-arming it. A quiet project sends no other poke.
+    windowExistsMock.mockReturnValue(true);
+    const e = entry({
+      prState: "reviewing", reviewWindowName: "_p-review-w", reviewStartedAt: NOW - REVIEW_TIMEOUT_MS,
+    });
+    registryMock._setEntries("proj", [e]);
+    expect(absorbSleep(WATCHDOG_TICK_MS + 90_000)).toBe(90_000);
+    // isReviewTimedOut's arithmetic at NOW, when the launch-time poke lands.
+    expect(NOW - e.reviewStartedAt! > REVIEW_TIMEOUT_MS).toBe(false);
+    const lastPokeAt = new Map<string, number>();
+    tick(lastPokeAt, NOW);
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+    tick(lastPokeAt, NOW + 90_000 + WATCHDOG_TICK_MS);
     expect(triggerProjectPoll).toHaveBeenCalledWith("proj");
   });
 });

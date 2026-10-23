@@ -569,7 +569,11 @@ cannot be expressed as "wait for an event":
   flight, not stranded — its work is bounded by `REVIEW_TIMEOUT_MS`, not the
   staleness threshold — so it is exempt: a live window is proof the event was
   not dropped, and the genuine stranding class (window exited, completion poke
-  lost) has a dead window and still trips. A `merged` worker holding
+  lost) has a dead window and still trips. The exemption ends when the run
+  outlives `REVIEW_TIMEOUT_MS`: the timeout is delivered by one delayed poke
+  scheduled at launch, `absorbSleep` can move the deadline past it, and a poke
+  that lands early is not re-sent, so a live run past its cap is re-poked like
+  any stranded worker. A `merged` worker holding
   `.garden-done` or `.garden-awaiting-input` is exempt too: the sentinel makes
   every sweep a no-op, and its exit is an operator prompt or `garden resume`
   (after which the next tick watches it again), so a blocked worker parked in

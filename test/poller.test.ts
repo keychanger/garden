@@ -136,6 +136,8 @@ vi.mock("../src/dashboard/registry.js", () => {
     },
   );
   return {
+    // The real cap: the review, resolve and ci-fix timeouts read it from here.
+    REVIEW_TIMEOUT_MS: 2 * 60 * 60 * 1000,
     readRegistry: vi.fn(() => ({ workers: entries })),
     getWorkers: vi.fn((project: string) => entries[project] ?? []),
     updateWorkerFields,

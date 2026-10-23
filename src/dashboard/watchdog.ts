@@ -60,7 +60,8 @@ import { CONTROL_SCRIPTS_DIR } from "../paths.js";
 import { newDashboardWindow, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
 import {
-  readRegistry, mutateRegistry, isTaintedRegistry, PR_STATE_KIND, type WorkerEntry, type WorkerRegistry,
+  readRegistry, mutateRegistry, isTaintedRegistry, PR_STATE_KIND, REVIEW_TIMEOUT_MS,
+  type WorkerEntry, type WorkerRegistry,
 } from "./registry.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
 import { isAwaitingInput, isDoneSet } from "./continue.js";
@@ -170,8 +171,16 @@ export function isWorkerStale(
   entry: WorkerEntry, nowMs: number, thresholdMs = WATCHDOG_THRESHOLD_MS,
 ): boolean {
   if (!isWatchedState(entry)) return false;
-  // A live windowed worker is in flight, not stranded — never stale.
-  if (hasLiveWork(entry)) return false;
+  // A live windowed worker is in flight, not stranded, until its run outlives
+  // REVIEW_TIMEOUT_MS. Past that the poller owes it the timeout kill, and the
+  // poke that delivers it is scheduled once, at launch, for a fixed delay:
+  // absorbSleep can move the deadline later than that poke lands, and the
+  // handler that sees it early returns without re-arming it. The test mirrors
+  // isReviewTimedOut, so this pokes only a run that check will kill.
+  if (hasLiveWork(entry)) {
+    if (!entry.reviewStartedAt) return false;
+    return nowMs - entry.reviewStartedAt > REVIEW_TIMEOUT_MS;
+  }
   const lastActivity = latestActivityMs(entry);
   // No timestamp means no clock to age against — age would be unbounded.
   if (lastActivity === 0) return false;

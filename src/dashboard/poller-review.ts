@@ -31,7 +31,7 @@ import { buildReviewPrompt } from "./prompts.js";
 import { MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes } from "./prompt-compose.js";
 import {
   findWorkerByName, setReviewBlockedReason, updateWorkerFields, updateWorkerFieldsIf,
-  type WorkerEntry,
+  REVIEW_TIMEOUT_MS, type WorkerEntry,
 } from "./registry.js";
 import { windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
 import { growLoopHooks } from "./grow-continue.js";
@@ -48,18 +48,7 @@ import {
 } from "./headless-paths.js";
 
 export { reviewPromptPath, reviewResultPath } from "./headless-paths.js";
-
-// Wall-clock ceiling on a single reviewer or resolver run. If the tmux window
-// is still alive past this, the poller kills it and escalates to `failing`.
-// Catches hung subprocesses the reviewer can't escape from (e.g. a `npm test`
-// that blocks forever because tests have no timeout and the sandbox silently
-// denies their network calls). Sized from the ledger: across 801 reviews the
-// median was 5.6 min and p99 25 min, and the only runs past 60 min were three
-// on one day — two stalled on 15-17 min API retry gaps, one queued 75 min
-// behind a contended checks suite — none hung, and one was killed nine seconds
-// after committing its fix. Two hours keeps the hang backstop while clearing
-// a bad day; the park it produces is `review-timeout`, kick-recoverable.
-export const REVIEW_TIMEOUT_MS = 2 * 60 * 60 * 1000;
+export { REVIEW_TIMEOUT_MS } from "./registry.js";
 
 // Cap on the reviewer body stored in the durable lastReview snapshot (registry
 // is read/written on the hook hot path, so the blob stays bounded). The tail is
@@ -1445,8 +1434,10 @@ export function cancelReviewOnWorkerEdit(
 
 // Pokes the project's FIFO after REVIEW_TIMEOUT_MS so the poller wakes to
 // run the `isReviewTimedOut` check below — a hung reviewer produces no events
-// on its own, so without this the timeout would never be detected. Spurious
-// pokes after normal completion are harmless (handlers no-op).
+// on its own. This fires once, at a fixed delay; when absorbSleep moves the
+// deadline past it, the watchdog re-pokes the live run once the deadline
+// passes (isWorkerStale). Spurious pokes after normal completion are harmless
+// (handlers no-op).
 //
 // Delegates to scheduleDelayedPoke for the same reason b6c4c87 was reverted
 // for that helper in ef12da0: the in-process `setTimeout(...).unref()`
