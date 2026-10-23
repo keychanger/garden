@@ -77,6 +77,22 @@ async function setParentStatus(agentStatus: "idle" | "working"): Promise<void> {
   updateWorkerFields("fox", "calm-bay", { agentStatus });
 }
 
+// What the child's claiming registry write records on the parent
+// (poller-state.ts) before notifyHandoffCallback tries to paste it.
+async function owe(
+  child: Omit<typeof CHILD, "terminalState" | "replyNote"> & {
+    terminalState: "merged" | "done" | "failing";
+    replyNote?: string;
+  },
+): Promise<void> {
+  const { updateWorkerFieldsIf } = await import("../src/dashboard/registry.js");
+  const { handoffCallbackText } = await import("../src/dashboard/handoff-callback-text.js");
+  updateWorkerFieldsIf(child.parentProject, child.parentWorker, entry => ({
+    fields: { pendingHandoffCallbacks: [...(entry.pendingHandoffCallbacks ?? []), handoffCallbackText(child)] },
+    result: undefined,
+  }));
+}
+
 async function pastedMessages(): Promise<string[]> {
   const { pasteAndSubmit } = await import("../src/dashboard/tmux.js");
   return vi.mocked(pasteAndSubmit).mock.calls.map(call => call[1]);
@@ -96,6 +112,7 @@ describe("handoff callback delivery", () => {
     await seedParent("idle");
     const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
 
+    await owe({ ...CHILD, replyNote: "Root cause is in src/foo.ts:42." });
     notifyHandoffCallback({ ...CHILD, replyNote: "Root cause is in src/foo.ts:42." });
 
     const messages = await pastedMessages();
@@ -112,6 +129,7 @@ describe("handoff callback delivery", () => {
     await seedParent("idle");
     const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
 
+    await owe({ ...CHILD, terminalState: "failing" });
     notifyHandoffCallback({ ...CHILD, terminalState: "failing" });
 
     const [message] = await pastedMessages();
@@ -123,6 +141,7 @@ describe("handoff callback delivery", () => {
     await seedParent("idle");
     const { notifyHandoffCallback, deliverHandoffCallbacks } = await import("../src/dashboard/continue.js");
 
+    await owe(CHILD);
     notifyHandoffCallback(CHILD);
     deliverHandoffCallbacks("fox", "calm-bay");
 
@@ -137,6 +156,7 @@ describe("handoff callback delivery", () => {
     updateWorkerFields("fox", "calm-bay", { continueSentAt: 123 });
     vi.mocked(capturePaneText).mockReturnValue("❯ [garden] An older prompt is still unsent");
 
+    await owe(CHILD);
     notifyHandoffCallback(CHILD);
 
     expect(pressEnter).toHaveBeenCalledWith("%5");
@@ -153,6 +173,7 @@ describe("handoff callback delivery", () => {
     await seedParent("working");
     const { notifyHandoffCallback, deliverHandoffCallbacks } = await import("../src/dashboard/continue.js");
 
+    await owe(CHILD);
     notifyHandoffCallback(CHILD);
     expect(await pastedMessages()).toHaveLength(0);
 
@@ -171,6 +192,7 @@ describe("handoff callback delivery", () => {
     await seedParent("paused");
     const { notifyHandoffCallback, deliverHandoffCallbacks } = await import("../src/dashboard/continue.js");
 
+    await owe(CHILD);
     notifyHandoffCallback(CHILD);
     expect(await pastedMessages()).toHaveLength(0);
 
@@ -183,7 +205,9 @@ describe("handoff callback delivery", () => {
     await seedParent("working");
     const { notifyHandoffCallback, deliverHandoffCallbacks } = await import("../src/dashboard/continue.js");
 
+    await owe(CHILD);
     notifyHandoffCallback(CHILD);
+    await owe({ ...CHILD, childWorker: "dry-elm", childBranch: "dry-elm" });
     notifyHandoffCallback({ ...CHILD, childWorker: "dry-elm", childBranch: "dry-elm" });
 
     await setParentStatus("idle");
@@ -203,6 +227,7 @@ describe("handoff callback delivery", () => {
     dispatchOwedHandoffCallbacks("fox", "calm-bay");
     expect(spawn).not.toHaveBeenCalled();
 
+    await owe(CHILD);
     notifyHandoffCallback(CHILD);
     dispatchOwedHandoffCallbacks("fox", "calm-bay");
 

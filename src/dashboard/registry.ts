@@ -1265,22 +1265,40 @@ export function setReviewBlockedReason(
 export interface ConditionalWorkerUpdate<T> {
   fields: WorkerFieldsUpdate | null;
   result: T;
+  // Another worker's fields, written in the same locked write as `fields`, for
+  // a decision whose effect is recorded on that worker: written apart, a crash
+  // or a failed write between the two keeps one and loses the other. Skipped
+  // when that worker is not registered.
+  peer?: PeerWorkerUpdate;
 }
+
+export interface PeerWorkerUpdate {
+  project: string;
+  workerName: string;
+  fields: WorkerFieldsUpdate;
+}
+
+// Reads another worker from the snapshot a decision is made against.
+export type WorkerLookup =
+  (project: string, workerName: string) => Readonly<WorkerEntry> | undefined;
 
 export function updateWorkerFieldsIf<T>(
   project: string,
   workerName: string,
-  decide: (entry: Readonly<WorkerEntry>) => ConditionalWorkerUpdate<T>,
+  decide: (entry: Readonly<WorkerEntry>, find: WorkerLookup) => ConditionalWorkerUpdate<T>,
 ): T | undefined {
   return withRegistryLock(() => {
     const registry = readRegistry();
-    const entry = projectEntries(registry, project)?.find(candidate => candidate.name === workerName);
+    const find = (p: string, name: string) =>
+      projectEntries(registry, p)?.find(candidate => candidate.name === name);
+    const entry = find(project, workerName);
     if (!entry) return undefined;
-    const decision = decide(entry);
-    if (decision.fields !== null) {
-      applyWorkerFields(entry, decision.fields, project, workerName);
-      writeRegistry(registry);
-    }
+    const decision = decide(entry, find);
+    const { peer } = decision;
+    const peerEntry = peer && find(peer.project, peer.workerName);
+    if (decision.fields !== null) applyWorkerFields(entry, decision.fields, project, workerName);
+    if (peer && peerEntry) applyWorkerFields(peerEntry, peer.fields, peer.project, peer.workerName);
+    if (decision.fields !== null || peerEntry) writeRegistry(registry);
     return decision.result;
   });
 }

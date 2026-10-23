@@ -16,7 +16,9 @@ import { log } from "./log.js";
 import {
   findWorkerByName, updateWorkerFields, updateWorkerFieldsIf,
   type WorkerEntry, type PrState, type WorkerFieldsUpdate,
+  type PeerWorkerUpdate, type WorkerLookup,
 } from "./registry.js";
+import { handoffCallbackText } from "./handoff-callback-text.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
 import { recordStateTransition } from "./telemetry.js";
 import { getValidTransitions } from "./workflows/types.js";
@@ -43,6 +45,7 @@ interface TransitionResult {
   requestedWorkflow?: string;
   createdAt?: number;
   callback: HandoffCallbackDispatch | null;
+  callbackOwed?: boolean;
 }
 
 function callbackDispatchFor(
@@ -65,7 +68,35 @@ function callbackDispatchFor(
   };
 }
 
-function dispatchHandoffCallback(callback: HandoffCallbackDispatch): void {
+// The callback the parent is owed, appended in the same registry write that
+// claims it on the child. The claim is permanent, so a record written later, at
+// the end of the poll, would be lost for good to anything in between: the
+// poller killed or crashed first, or that write failing on the lock or on an
+// unreadable registry. Undefined when the parent is not registered.
+function owedCallback(
+  callback: HandoffCallbackDispatch,
+  find: WorkerLookup,
+): PeerWorkerUpdate | undefined {
+  const parent = find(callback.parentProject, callback.parentWorker);
+  if (!parent) return undefined;
+  const owed = [...(parent.pendingHandoffCallbacks ?? []), handoffCallbackText(callback)];
+  return {
+    project: callback.parentProject,
+    workerName: callback.parentWorker,
+    fields: { pendingHandoffCallbacks: owed },
+  };
+}
+
+// Only the paste is left. It runs once the synchronous poll returns, so a
+// poller that dies first leaves the callback owed, for the parent's next turn end.
+function dispatchHandoffCallback(callback: HandoffCallbackDispatch, owed: boolean): void {
+  if (!owed) {
+    log.info("workers", "handoff callback dropped, parent worker gone", {
+      worker: callback.parentWorker,
+      data: { project: callback.parentProject, child: `${callback.childProject}/${callback.childWorker}` },
+    });
+    return;
+  }
   void import("./continue.js").then(({ notifyHandoffCallback }) => {
     notifyHandoffCallback(callback);
   }).catch(err => {
@@ -84,7 +115,7 @@ function applyTransition(
   allowInvalid = false,
 ): boolean {
   const now = Date.now();
-  const result = updateWorkerFieldsIf<TransitionResult>(projectName, workerName, entry => {
+  const result = updateWorkerFieldsIf<TransitionResult>(projectName, workerName, (entry, find) => {
     const fromState: PrState = entry.prState ?? "working";
     const workflowName = entry.workflow ?? "default";
     const valid = getValidTransitions(workflowName)[fromState]?.includes(toState) === true;
@@ -102,12 +133,14 @@ function applyTransition(
     }
 
     const callback = callbackDispatchFor(projectName, workerName, entry, toState);
+    const owed = callback ? owedCallback(callback, find) : undefined;
     const stateFields: Omit<WorkerFieldsUpdate, "prState"> = toState !== fromState
       ? { ...extraFields, lastStateChangeAt: now }
       : { ...extraFields };
     if (callback) stateFields.handoffCallbackFiredAt = now;
     return {
       fields: { ...stateFields, prState: toState },
+      peer: owed,
       result: {
         applied: true,
         fromState,
@@ -115,6 +148,7 @@ function applyTransition(
         requestedWorkflow: entry.workflow,
         createdAt: entry.createdAt,
         callback,
+        callbackOwed: owed !== undefined,
       },
     };
   });
@@ -141,7 +175,7 @@ function applyTransition(
       toState,
     );
   }
-  if (result.callback) dispatchHandoffCallback(result.callback);
+  if (result.callback) dispatchHandoffCallback(result.callback, result.callbackOwed === true);
   return true;
 }
 
@@ -172,14 +206,16 @@ function maybeFireHandoffCallback(
   toState: PrState,
 ): void {
   const now = Date.now();
-  const callback = updateWorkerFieldsIf(projectName, workerName, entry => {
+  const claimed = updateWorkerFieldsIf(projectName, workerName, (entry, find) => {
     const dispatch = callbackDispatchFor(projectName, workerName, entry, toState);
+    const owed = dispatch ? owedCallback(dispatch, find) : undefined;
     return {
       fields: dispatch ? { handoffCallbackFiredAt: now } : null,
-      result: dispatch,
+      peer: owed,
+      result: dispatch ? { dispatch, owed: owed !== undefined } : null,
     };
   });
-  if (callback) dispatchHandoffCallback(callback);
+  if (claimed) dispatchHandoffCallback(claimed.dispatch, claimed.owed);
 }
 
 export function handleFailing(

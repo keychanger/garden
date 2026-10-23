@@ -5,6 +5,8 @@
 // continue.notifyHandoffCallback is mocked since the dispatch tests live in
 // continue.test.ts.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
 import { useTmpHome } from "./helpers.js";
 
 vi.mock("../src/dashboard/continue.js", () => ({
@@ -32,17 +34,21 @@ vi.mock("../src/dashboard/poller-holistic-review.js", () => ({
   maybeDispatchHolisticReview: vi.fn(),
 }));
 
-useTmpHome();
+const home = useTmpHome();
 
 async function seedChild(opts: {
   expectCallback?: boolean;
   parentProject?: string;
   parentWorker?: string;
+  parentGone?: boolean;
   alreadyFired?: boolean;
   replyNote?: string;
   worktreePath?: string;
 } = {}): Promise<void> {
   const { addWorker } = await import("../src/dashboard/registry.js");
+  if (opts.parentProject && opts.parentWorker && !opts.parentGone) {
+    addWorker(opts.parentProject, { name: opts.parentWorker, sessionId: "p", task: "" });
+  }
   addWorker("wolf", {
     name: "bold-ash",
     sessionId: "s",
@@ -56,6 +62,12 @@ async function seedChild(opts: {
     handoffCallbackFiredAt: opts.alreadyFired ? 12345 : undefined,
     handoffReplyNote: opts.replyNote,
   });
+}
+
+// The registry file as a poller killed at this instant leaves it: read straight
+// from disk, before any deferred work in this process gets to run.
+function registryOnDisk(): { workers: Record<string, Array<Record<string, unknown>>> } {
+  return JSON.parse(fs.readFileSync(path.join(home.sessionsDir, "dashboard.registry.json"), "utf-8"));
 }
 
 describe("transitionState handoff callback chokepoint", () => {
@@ -203,6 +215,45 @@ describe("transitionState handoff callback chokepoint", () => {
     const after = findWorkerByName("wolf", "bold-ash");
     expect(typeof after?.handoffCallbackFiredAt).toBe("number");
   });
+
+  // The claim is permanent, so a callback recorded on the parent only after the
+  // rest of the poll is lost to any death or failed write in between.
+  it("records the callback on the parent in the same write that claims it", async () => {
+    await seedChild({
+      expectCallback: true,
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      replyNote: "all green",
+    });
+    const { transitionState } = await import("../src/dashboard/poller-state.js");
+
+    transitionState("wolf", "bold-ash", "merged");
+
+    const { workers } = registryOnDisk();
+    expect(workers.wolf[0].handoffCallbackFiredAt).toEqual(expect.any(Number));
+    expect(workers.fox[0].pendingHandoffCallbacks).toEqual([
+      expect.stringMatching(/wolf\/bold-ash reached terminal state `merged`[\s\S]*all green/),
+    ]);
+  });
+
+  it("spends the claim and attempts no delivery when the parent is gone", async () => {
+    await seedChild({
+      expectCallback: true,
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      parentGone: true,
+    });
+    const { transitionState } = await import("../src/dashboard/poller-state.js");
+    const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
+
+    transitionState("wolf", "bold-ash", "merged");
+    await new Promise(r => setImmediate(r));
+
+    const { workers } = registryOnDisk();
+    expect(workers.wolf[0].handoffCallbackFiredAt).toEqual(expect.any(Number));
+    expect(workers.fox).toBeUndefined();
+    expect(notifyHandoffCallback).not.toHaveBeenCalled();
+  });
 });
 
 describe("handleDone trail-off callback (no-merge completion)", () => {
@@ -263,6 +314,25 @@ describe("handleDone trail-off callback (no-merge completion)", () => {
     await new Promise(r => setImmediate(r));
 
     expect(notifyHandoffCallback).toHaveBeenCalledTimes(1);
+  });
+
+  it("records the trail-off callback on the parent in the same write that claims it", async () => {
+    await seedChild({
+      expectCallback: true,
+      parentProject: "fox",
+      parentWorker: "calm-bay",
+      worktreePath: "/wt/wolf/bold-ash",
+    });
+    const { handleDone } = await import("../src/dashboard/poller-state.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+
+    handleDone("wolf", "/repo/wolf", "main", findWorkerByName("wolf", "bold-ash")!);
+
+    const { workers } = registryOnDisk();
+    expect(workers.wolf[0].handoffCallbackFiredAt).toEqual(expect.any(Number));
+    expect(workers.fox[0].pendingHandoffCallbacks).toEqual([
+      expect.stringContaining("wolf/bold-ash reached terminal state `done (no further work expected)`"),
+    ]);
   });
 
   it("does not fire in handleDone for a plain child without the callback flag", async () => {

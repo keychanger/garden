@@ -505,10 +505,11 @@ const HANDOFF_CALLBACK_FOOTER =
   + "you were waiting on it to proceed, take the next step. If you have already "
   + "finished and moved on, you can ignore this and end your turn.";
 
-// Record a handoff callback on the parent of a worker that just reached a
-// terminal prState (merged/done/failing), then try to paste it. One-shot per
-// child: the caller has already claimed handoffCallbackFiredAt under the
-// registry lock, so a replayed terminal transition never reaches here twice.
+// Try to paste a handoff callback right after its child reached a terminal
+// prState (merged/done/failing). One-shot per child: the caller's registry
+// write claimed handoffCallbackFiredAt on the child and, in that same write,
+// recorded the callback on the parent, so a process that dies before this runs
+// leaves it owed rather than lost.
 //
 // The callback stays owed on the parent (pendingHandoffCallbacks) until a paste
 // lands. A parent that is mid-turn, held, or drafting when its child settles
@@ -521,38 +522,7 @@ const HANDOFF_CALLBACK_FOOTER =
 // specific — just letting it know the worker it spawned has settled. If the
 // parent was waiting on this handoff to proceed, the cue is here. If the
 // parent has already moved on, the inline message tells it so.
-export function notifyHandoffCallback(opts: {
-  childProject: string;
-  childWorker: string;
-  childBranch: string | undefined;
-  terminalState: "merged" | "done" | "failing";
-  parentProject: string;
-  parentWorker: string;
-  replyNote: string | undefined;
-}): void {
-  const stateLabel
-    = opts.terminalState === "merged" ? "merged"
-      : opts.terminalState === "done" ? "done (no further work expected)"
-      : "failing (needs operator attention)";
-  const lines: string[] = [
-    `[garden] Handoff callback: ${opts.childProject}/${opts.childWorker} reached terminal state \`${stateLabel}\`.`,
-  ];
-  if (opts.childBranch) lines.push(`  branch: ${opts.childBranch}`);
-  if (opts.replyNote && opts.replyNote.trim()) {
-    lines.push("", `Reply from ${opts.childWorker}:`, opts.replyNote.trim());
-  }
-  const callback = lines.join("\n");
-  const recorded = updateWorkerFieldsIf(opts.parentProject, opts.parentWorker, entry => ({
-    fields: { pendingHandoffCallbacks: [...(entry.pendingHandoffCallbacks ?? []), callback] },
-    result: true,
-  }));
-  if (!recorded) {
-    log.info("workers", "handoff callback dropped, parent worker gone", {
-      worker: opts.parentWorker,
-      data: { project: opts.parentProject, child: `${opts.childProject}/${opts.childWorker}` },
-    });
-    return;
-  }
+export function notifyHandoffCallback(opts: { parentProject: string; parentWorker: string }): void {
   if (!deliverHandoffCallbacks(opts.parentProject, opts.parentWorker)) {
     rearmContinueIfDrafting(DELIVER_HANDOFF_CALLBACKS, opts.parentProject, opts.parentWorker, 0);
   }
