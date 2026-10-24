@@ -400,7 +400,9 @@ describe("resurrectWorker (real fs/git)", () => {
   it("refuses to race a detached kill cleanup that can still delete the worktree", async () => {
     const { createWorktree, workerCleanupMarkerPath } = await import("../../src/dashboard/git.js");
     createWorktree(projectPath, worktreePath, WORKER);
-    fs.writeFileSync(workerCleanupMarkerPath(PROJECT, WORKER), "");
+    const marker = workerCleanupMarkerPath(PROJECT, WORKER);
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.writeFileSync(marker, "");
 
     const t = await tombstoneFor({});
     const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");

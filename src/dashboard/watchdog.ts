@@ -731,10 +731,8 @@ export function alertOrphanedWorktrees(nowMs: number): number {
 // months is not news that needs reporting within a minute.
 // Re-dispatch worker-cleanup requests that are still on disk. The removing
 // process already fired one attempt; a request that outlived
-// CLEANUP_RETRY_AFTER_MS means that attempt did not finish the job — most often
-// because it ran inside an agent sandbox that denies writes to the project
-// checkout, and so failed every git step. The watchdog is never sandboxed, so
-// its re-dispatch is the one that succeeds.
+// CLEANUP_RETRY_AFTER_MS means that attempt did not finish the job: a git step
+// failed, a pane still held the worktree, or the detached child never ran.
 //
 // Dispatched detached rather than run inline: removing a worktree holding a
 // full node_modules and deleting an origin branch are seconds-to-minutes of

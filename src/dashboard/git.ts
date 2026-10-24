@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
 import { SESSIONS_DIR } from "../config.js";
+import { CONTROL_DIR } from "../paths.js";
 import type { ProjectConfig } from "../config.js";
 import type { WorkerEntry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -280,8 +281,13 @@ export function fetchOrigin(repoPath: string): boolean {
   }
 }
 
+// A worker-cleanup request: what `_worker-cleanup` executes, and the marker
+// resurrect and the orphan-worktree sweep read as "cleanup in flight". In the
+// control tree because only unsandboxed garden writes one (see
+// backgroundGitCleanup); in the worker-writable sessions dir, where older
+// builds kept them, a worker could forge one for a sibling.
 export function workerCleanupMarkerPath(project: string, worker: string): string {
-  return path.join(SESSIONS_DIR, `worker-cleanup-${project}-${worker}`);
+  return path.join(CONTROL_DIR, `worker-cleanup-${project}-${worker}`);
 }
 
 // Run one worker-cleanup git step, returning null on success or git's own

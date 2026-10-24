@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { useTmpHome } from "./helpers.js";
@@ -51,6 +51,22 @@ describe("worker cleanup requests", () => {
     expect(read?.worktreePath).toBe("/wt");
     expect(read?.protectedPids).toEqual([123, 456]);
     expect(read?.attempts).toBe(0);
+  });
+
+  it("keeps a request in the control tree, out of the worker-writable sessions dir", async () => {
+    // Only unsandboxed garden writes one. In the sessions dir any worker could
+    // forge a request and have the unsandboxed retry act on it.
+    const { writeWorkerCleanupRequest } = await importCleanup();
+    const { workerCleanupMarkerPath } = await import("../src/dashboard/git.js");
+
+    writeWorkerCleanupRequest({
+      project: "garden", worker: "bold-calm-ash", repoPath: "/repo", branchName: "bold-calm-ash", attempts: 0,
+    });
+
+    const file = workerCleanupMarkerPath("garden", "bold-calm-ash");
+    expect(path.dirname(file)).toBe(env.controlDir);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(fs.readdirSync(env.sessionsDir).filter(n => n.startsWith("worker-cleanup-"))).toEqual([]);
   });
 
   it("reads an empty legacy marker as no request", async () => {
@@ -135,21 +151,78 @@ describe("dueCleanupRequests", () => {
     expect(due[0].worker).toBe("numb-clear-vow");
   });
 
-  it("ignores unrelated session files and retires unparseable markers", async () => {
+  it("ignores unrelated control files and retires unparseable markers", async () => {
     const { dueCleanupRequests, CLEANUP_RETRY_AFTER_MS } = await importCleanup();
     const oldAge = CLEANUP_RETRY_AFTER_MS * 10;
-    for (const name of ["dashboard.registry.json", "dashboard.log", "bootstrap-garden-elk.sh"]) {
-      const f = path.join(env.sessionsDir, name);
+    const unrelated = ["intake-last-garden", "watchdog.spawn.lock", "claude-usage.json"];
+    for (const name of unrelated) {
+      const f = path.join(env.controlDir, name);
       fs.writeFileSync(f, "{}");
       age(f, oldAge, now);
     }
-    const junk = path.join(env.sessionsDir, "worker-cleanup-garden-junk");
+    const junk = path.join(env.controlDir, "worker-cleanup-garden-junk");
     fs.writeFileSync(junk, "not json");
     age(junk, oldAge, now);
 
     expect(dueCleanupRequests(now)).toEqual([]);
     expect(fs.existsSync(junk)).toBe(false);
-    expect(fs.existsSync(path.join(env.sessionsDir, "dashboard.registry.json"))).toBe(true);
+    for (const name of unrelated) expect(fs.existsSync(path.join(env.controlDir, name))).toBe(true);
+  });
+
+  it("never runs a request an older build left in the sessions dir, and retires it once stale", async () => {
+    // Any worker can write the sessions dir, so a request found there cannot
+    // be told from a forged one. Dispatched or adopted, it would still hand
+    // the unsandboxed retry a target a worker chose.
+    const { dueCleanupRequests, CLEANUP_RETRY_AFTER_MS } = await importCleanup();
+    const legacy = (worker: string, ageMs: number): string => {
+      const file = path.join(env.sessionsDir, `worker-cleanup-wolf-${worker}`);
+      fs.writeFileSync(file, JSON.stringify({
+        project: "wolf", worker, repoPath: "/repo", branchName: worker, attempts: 0,
+      }));
+      age(file, ageMs, now);
+      return file;
+    };
+    const stale = legacy("brisk-firm-oak", CLEANUP_RETRY_AFTER_MS * 2);
+    // Young enough that an older build's cleanup may still be running it.
+    const fresh = legacy("bold-calm-ash", 5_000);
+    const lock = `${stale}.lock`;
+    fs.writeFileSync(lock, `${process.pid}:2b3c4d5e-6f70-4a8b-9c0d-1e2f3a4b5c6d`);
+    age(lock, CLEANUP_RETRY_AFTER_MS * 2, now);
+
+    expect(dueCleanupRequests(now)).toEqual([]);
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(fresh)).toBe(true);
+    expect(fs.existsSync(lock)).toBe(true);
+    expect(fs.readdirSync(env.controlDir).filter(n => n.startsWith("worker-cleanup-"))).toEqual([]);
+    // The drop is visible: the log names the request it retired.
+    const logged = fs.readFileSync(path.join(env.sessionsDir, "dashboard.log"), "utf8")
+      .split("\n").filter(Boolean).map(line => JSON.parse(line) as { level: string; data?: { file?: string } });
+    expect(logged.some(e => e.level === "warn" && e.data?.file === stale)).toBe(true);
+  });
+
+  it("never opens what sits in the sessions dir under a request's name", async () => {
+    // The sweep used to read each one there, so a FIFO a worker planted under
+    // that name blocked the unsandboxed watchdog's tick until something wrote
+    // to it. Retirement goes by name and mtime alone.
+    const { dueCleanupRequests, CLEANUP_RETRY_AFTER_MS } = await importCleanup();
+    const file = path.join(env.sessionsDir, "worker-cleanup-wolf-brisk-firm-oak");
+    fs.writeFileSync(file, JSON.stringify({
+      project: "wolf", worker: "brisk-firm-oak", repoPath: "/repo", branchName: "brisk-firm-oak", attempts: 0,
+    }));
+    age(file, CLEANUP_RETRY_AFTER_MS * 2, now);
+    const read = vi.spyOn(fs, "readFileSync");
+    const opened = vi.spyOn(fs, "openSync");
+    let touched: string[];
+    try {
+      dueCleanupRequests(now);
+      touched = [...read.mock.calls, ...opened.mock.calls].map(([p]) => String(p))
+        .filter(p => path.dirname(p) === env.sessionsDir && path.basename(p).startsWith("worker-cleanup-"));
+    } finally {
+      read.mockRestore();
+      opened.mockRestore();
+    }
+    expect(touched).toEqual([]);
+    expect(fs.existsSync(file)).toBe(false);
   });
 
   it("leaves a request's lock, its reclaim salvage and write temps alone", async () => {

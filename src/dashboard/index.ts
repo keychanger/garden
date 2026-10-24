@@ -405,10 +405,10 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   }
   if (sub === "_worker-cleanup") {
     // Executes one worker-cleanup request (see worker-cleanup.ts). Dispatched
-    // detached by the removal tail and re-dispatched by the watchdog sweep, so
-    // this route is reached from both a possibly-sandboxed and an always-
-    // unsandboxed parent. Dynamically imported to keep git + alerts out of
-    // every other route's parse.
+    // detached by the removal tail and re-dispatched by the watchdog sweep,
+    // both unsandboxed; run by hand inside a sandbox it runs no git, since the
+    // control tree refuses the request's lock. Dynamically imported to keep
+    // git + alerts out of every other route's parse.
     const [, projectName, workerName] = args;
     if (!projectName || !workerName) {
       throw new Error("usage: garden dashboard _worker-cleanup <project> <worker>");

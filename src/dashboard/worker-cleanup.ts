@@ -24,10 +24,17 @@
 // and the watchdog — the fleet's one always-unsandboxed recurring process —
 // re-dispatches any request still on disk after CLEANUP_RETRY_AFTER_MS. A
 // failed fast path therefore costs one wasted attempt, not a leaked worktree.
+//
+// Requests live in the control tree, which no sandbox can write. Every process
+// that writes one is unsandboxed: the two refusals above stop a sandboxed
+// removal before its tail, and a spawn writes its bootstrap into the control
+// tree before the rollback that requests one. In the sessions dir a worker
+// could forge a request to have the watchdog remove a sibling's worktree.
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { SESSIONS_DIR, loadConfig, tryGetProject } from "../config.js";
+import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import {
   workerCleanupMarkerPath, worktreePath as canonicalWorktreePath,
@@ -79,8 +86,8 @@ export interface WorkerCleanupRequest {
   worktreePath?: string;
   branchName?: string;
   // Ancestors of the process that requested detached cleanup. Exclusions are
-  // safe to accept from worker-writable IPC; they can narrow but never widen
-  // the canonical cwd-based target set.
+  // safe to accept from any request body; they can narrow but never widen the
+  // canonical cwd-based target set.
   protectedPids?: number[];
   // Completed attempts. Incremented only by a run that actually failed.
   attempts: number;
@@ -122,9 +129,9 @@ export function readWorkerCleanupRequest(file: string): WorkerCleanupRequest | n
     const parsed: unknown = JSON.parse(fs.readFileSync(file, "utf-8"));
     return isWorkerCleanupRequest(parsed) ? parsed : null;
   } catch {
-    // Absent, unreadable, or a pre-upgrade empty marker written by the old
-    // `sh -c` path. Either way there is no request to act on; the due-request
-    // sweep retires a stale marker so it cannot suppress orphan detection.
+    // Absent, unreadable, or not JSON. Either way there is no request to act
+    // on; the due-request sweep retires a stale marker so it cannot suppress
+    // orphan detection.
     return null;
   }
 }
@@ -139,11 +146,11 @@ function safePathComponent(value: string): boolean {
   return value !== "." && value !== ".." && path.basename(value) === value;
 }
 
-// SESSIONS_DIR is worker-writable request IPC. Its contents therefore cannot
-// authorize an unsandboxed watchdog to choose arbitrary git targets. Bind a
-// request back to Garden's own project/worker layout before any git command:
-// configured checkout, generated worker identity, canonical worktree, matching
-// branch, and no live registry entry (a forged request must not kill a sibling).
+// A request never chooses git targets for the unsandboxed executor. Only
+// garden writes one, but each is still bound back to Garden's own
+// project/worker layout before any git command: configured checkout,
+// generated worker identity, canonical worktree, matching branch, and no live
+// registry entry (a worker holding that name now keeps its tree).
 function cleanupRequestError(req: WorkerCleanupRequest): string | null {
   if (!safePathComponent(req.project) || !isGeneratedWorkerName(req.worker)) {
     return "identity is not a Garden project/worker pair";
@@ -177,13 +184,54 @@ function rejectCleanupRequest(file: string, req: WorkerCleanupRequest, reason: s
   });
 }
 
+// A request's lock, file-lock's reclaim salvage of it, and atomicWriteFile's
+// temps all share its name as a prefix. Read as requests, a running cleanup's
+// lock was retired as unreadable, admitting a second run beside it, and a temp
+// an interrupted write left was re-dispatched every window.
+function isCleanupRequestName(name: string): boolean {
+  return name.startsWith(CLEANUP_REQUEST_PREFIX) && !/\.lock(\.reclaiming\..+)?$|\.tmp$/.test(name);
+}
+
+// Builds before the requests moved to the control tree wrote them in the
+// sessions dir. One found there is never run or adopted: any worker can write
+// that dir, so it cannot be told from a forged one, and adopting it would keep
+// open the route the move closed. Nor is it opened: the sweep used to read
+// each one, and a FIFO planted under that name blocked the watchdog's tick.
+// It is retired by name and mtime with a warn naming it, so the log shows a
+// cleanup an older build left pending at the deploy being dropped, and the
+// worktree it would have removed reads as unclaimed to the orphan sweep,
+// which reports it. Only once stale, and never a lock: an older build's
+// cleanup may still be running it.
+function retireLegacyCleanupRequests(nowMs: number): void {
+  let names: string[];
+  try {
+    names = fs.readdirSync(SESSIONS_DIR);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!isCleanupRequestName(name)) continue;
+    const file = path.join(SESSIONS_DIR, name);
+    try {
+      if (nowMs - fs.lstatSync(file).mtimeMs < CLEANUP_RETRY_AFTER_MS) continue;
+      fs.unlinkSync(file);
+    } catch {
+      continue;
+    }
+    log.warn("cleanup", "retired a cleanup request left in the sessions dir", {
+      data: { file },
+    });
+  }
+}
+
 // Requests old enough to re-dispatch. The mtime update claims each selected
 // request for one retry window, so a 60s watchdog tick does not launch another
 // child every minute while the prior cleanup is still running.
 export function dueCleanupRequests(nowMs: number): WorkerCleanupRequest[] {
+  retireLegacyCleanupRequests(nowMs);
   let names: string[];
   try {
-    names = fs.readdirSync(SESSIONS_DIR);
+    names = fs.readdirSync(CONTROL_DIR);
   } catch {
     return [];
   }
@@ -198,13 +246,8 @@ export function dueCleanupRequests(nowMs: number): WorkerCleanupRequest[] {
   }
   const due: WorkerCleanupRequest[] = [];
   for (const name of names) {
-    if (!name.startsWith(CLEANUP_REQUEST_PREFIX)) continue;
-    // A request's lock, file-lock's reclaim salvage of it, and atomicWriteFile's
-    // temps all share its name as a prefix. Read as requests, a running
-    // cleanup's lock was retired as unreadable, admitting a second run beside
-    // it, and a temp an interrupted write left was re-dispatched every window.
-    if (/\.lock(\.reclaiming\..+)?$|\.tmp$/.test(name)) continue;
-    const file = path.join(SESSIONS_DIR, name);
+    if (!isCleanupRequestName(name)) continue;
+    const file = path.join(CONTROL_DIR, name);
     try {
       if (nowMs - fs.statSync(file).mtimeMs < CLEANUP_RETRY_AFTER_MS) continue;
     } catch {
@@ -212,9 +255,9 @@ export function dueCleanupRequests(nowMs: number): WorkerCleanupRequest[] {
     }
     const req = readWorkerCleanupRequest(file);
     if (!req) {
-      // Legacy empty markers and malformed worker-writable requests cannot be
-      // executed safely. Retire them once stale so they stop reading as
-      // "cleanup in flight" to resurrection and the orphan-worktree sweep.
+      // A request this build cannot parse cannot be executed safely. Retire it
+      // once stale so it stops reading as "cleanup in flight" to resurrection
+      // and the orphan-worktree sweep.
       try { fs.rmSync(file, { force: true }); } catch { /* best-effort retirement */ }
       log.warn("cleanup", "retired unreadable cleanup request", { data: { file } });
       continue;
@@ -257,8 +300,8 @@ export function buildCleanupCommand(
 // Fire the cleanup subcommand and return. Detached because a worktree holding a
 // full node_modules takes seconds to remove and an origin branch delete is a
 // network round trip — neither may block the ⌥x keypress that asked for it, nor
-// the watchdog's liveness tick. The child inherits the caller's sandbox, which
-// is exactly why a failed run leaves its request on disk for the watchdog.
+// the watchdog's liveness tick. A failed run leaves its request on disk for the
+// watchdog.
 export function dispatchWorkerCleanup(
   gardenRunner: string,
   project: string,
@@ -283,7 +326,9 @@ export function dispatchWorkerCleanup(
 export function runWorkerCleanup(project: string, worker: string): void {
   // Validate the CLI identity before composing its marker path. This hidden
   // route is callable, and path separators in either argument must never turn
-  // a cleanup lookup/clear into traversal outside SESSIONS_DIR.
+  // a cleanup lookup/clear into traversal outside the control tree. Run inside
+  // an agent sandbox it runs no git and leaves the request as it is: the
+  // control tree refuses both the request's lock and its removal.
   if (!safePathComponent(project) || !isGeneratedWorkerName(worker)) {
     log.warn("cleanup", "rejected invalid cleanup command identity", {
       worker,
@@ -321,8 +366,7 @@ export function runWorkerCleanup(project: string, worker: string): void {
 
 // A dashboard pane whose cwd is inside the worktree, which is how a worker's
 // pane looks wherever it is shown, the right slot included. Asked of tmux
-// rather than the registry: a sandboxed worker can rewrite the registry and
-// forge this request.
+// rather than the registry, which a sandboxed worker can rewrite.
 //
 // Three answers, because absence is only evidence when tmux gave it. tmux
 // saying no session exists means no dashboard pane can hold the worktree, so a

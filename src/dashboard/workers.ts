@@ -1614,16 +1614,18 @@ export function workerPaneLive(project: string, worker: string): boolean | null 
 }
 
 // Hand a removed worker's worktree/branch cleanup to the `_worker-cleanup`
-// subcommand, via a request file the watchdog can retry.
-//
-// This function's caller is whatever process removed the worker, and that is
-// not always allowed to write the project checkout: `garden` invoked from
-// inside an agent's sandbox can kill the pane and delete the registry entry
-// (both land in permitted paths) and then be denied every git step. The old
+// subcommand, via a request file the watchdog can retry. The old
 // implementation composed the git commands inline with `2>/dev/null || true`,
-// so that denial produced a leaked worktree and not one byte of diagnostics.
+// so a denied step produced a leaked worktree and not one byte of diagnostics.
 // Writing the request first means a failed fast path is recoverable: the
 // watchdog re-dispatches it from its own always-unsandboxed process.
+//
+// Both callers run unsandboxed, which is what lets the request live in the
+// control tree, out of every worker's reach. A removal refuses before its tail
+// when tmux does not answer (stopWorkerByName) or its tombstone cannot be
+// written (finalizeWorkerRemoval), and newWorker writes its context file and
+// bootstrap script into the control tree before the pane-creation rollback
+// that calls this. A sandboxed caller reaching here would fail the write.
 function backgroundGitCleanup(
   project: string,
   worker: string,

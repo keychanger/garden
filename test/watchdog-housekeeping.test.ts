@@ -206,6 +206,21 @@ describe("findOrphanedWorktrees", () => {
     expect(findOrphanedWorktrees({ workers: {} }, NOW)).toEqual([]);
   });
 
+  it("reports a worktree whose only marker is one an older build left in the sessions dir", async () => {
+    // Nothing runs a request found there, so it no longer means a cleanup is
+    // on its way; and any worker could plant one to hide a tree from the sweep.
+    const { findOrphanedWorktrees, ORPHAN_WORKTREE_GRACE_MS } = await importWatchdog();
+    makeWorktree(env, "garden", "left-calm-ash", {
+      idleMs: ORPHAN_WORKTREE_GRACE_MS + 60_000,
+      nowMs: NOW,
+    });
+    fs.writeFileSync(path.join(env.sessionsDir, "worker-cleanup-garden-left-calm-ash"), "");
+
+    const orphans = findOrphanedWorktrees({ workers: {} }, NOW);
+
+    expect(orphans.map(o => `${o.project}/${o.name}`)).toEqual(["garden/left-calm-ash"]);
+  });
+
   it("finds orphans across several projects", async () => {
     const { findOrphanedWorktrees, ORPHAN_WORKTREE_GRACE_MS } = await importWatchdog();
     const old = { idleMs: ORPHAN_WORKTREE_GRACE_MS + 60_000, nowMs: NOW };

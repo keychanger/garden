@@ -243,7 +243,8 @@ reads or runs.
   - **Type into a sibling's agent.** Any entry's `pendingHandoffCallbacks` is pasted
     verbatim into that worker's pane at its next turn end (`deliverHandoffCallbacks` in
     `src/dashboard/continue.ts`).
-  - **Have a stopped sibling's work removed** with a forged cleanup request (below).
+  - **Cancel a removed worker's pending cleanup** with an entry forged under its name
+    (below).
 
   The handoff inbox and `sessions/seeds` are shared the same way: any worker can rewrite
   or delete a sibling's pending request or seed before a poller claims it, so
@@ -330,18 +331,21 @@ reads or runs.
 - **Other state in the sessions dir is still trusted.** Besides the registry, garden
   keeps files there that sandboxed `garden` commands write: the dashboard state file,
   alerts, the pre-rendered pane files the status, usage, history and alerts panes replay,
-  handoff and worker-cleanup requests, lock files, and each project's poll FIFO. A worker
-  can repaint the operator's left column with them, or point the state file's active pane
-  at a pane garden will paste into. A cleanup request is checked against the registry,
-  which a worker can also forge, so a worker that deletes a sibling's entry and forges a
-  request can still have the watchdog remove that sibling's worktree and branches once its
-  pane has exited. A sibling is spared while a pane's cwd is inside the target, which is
-  what a running worker looks like: the executor defers on that, and tmux, not the
-  registry, reports it. The check is the foreground process's cwd, so a sibling whose
-  shell has moved out of its worktree, or whose cwd tmux will not report, is not
-  detected; garden's own infrastructure windows are excluded, since they never hold a
-  worker. A session that cannot be enumerated defers rather than proceeding. A link the
-  removed worker plants at its own worktree path is unlinked instead of followed: neither
+  handoff requests, lock files, and each project's poll FIFO. A worker can repaint the
+  operator's left column with them, or point the state file's active pane at a pane garden
+  will paste into. Worker-cleanup requests have left this set. A worker that deleted a
+  sibling's registry entry and forged a request there could have the watchdog remove that
+  sibling's worktree and branches once its pane had exited. No sandboxed process writes a
+  request (a removal refuses inside a sandbox before it gets that far, and a spawn writes
+  its bootstrap into the control tree before the rollback that requests one), so requests
+  and their locks now live in the control tree. One found in the sessions dir, where only
+  older builds wrote them, is retired by name and age without being opened or run; the
+  sweep used to read each one there, so a FIFO planted under that name blocked the
+  watchdog's tick. The executor still checks a request against the registry, which a
+  worker can forge: an entry forged under a removed worker's name has garden retire that
+  worker's pending request as one for a live worker, leaving its worktree and branches in
+  place. A link the removed worker plants at its own worktree path is unlinked instead of
+  followed: neither
   the reap nor `git worktree remove`, which resolves the path once the worker's admin
   entry is gone, runs on it (`unlinkNonDirectory`, `worker-cleanup.ts`), and the reap
   resolves only the path's parent, so a link to `/` no longer aims it at every process the
@@ -358,9 +362,9 @@ reads or runs.
   a lock is reclaimed unless its pid actually answers — only `EPERM` proves a holder
   exists, so pid 1 or below, a pid past the OS range (which answers with a type error,
   the way a forged body stepped around the pid-1 rule by writing a longer number), and
-  any other unnameable pid all read as dead; a cleanup
-  request or handoff claim whose processing throws is retired rather than blocking every
-  one behind it; and a project or plot name such as `constructor` or `__proto__` resolves
+  any other unnameable pid all read as dead; a handoff claim whose processing throws is
+  retired rather than blocking every one behind it; and a project or plot name such as
+  `constructor` or `__proto__` resolves
   to nothing rather than to an inherited property — a forged active plot threw inside the
   status-pane bake, freezing the pane and silently disabling the plot hotkeys. A FIFO planted where an unsandboxed reader
   expects a regular file, such as the registry, the state file or a lock, still blocks that
@@ -372,8 +376,8 @@ reads or runs.
   every poll for the lock's 2s deadline), and the bead-intake throttle and error stamps (a
   future-dated throttle stamp held background intake off, and a forged error reached
   board's dispatch chip). The locks that stay are taken by sandboxed `garden` commands
-  beside what they guard: the registry, state and alerts locks, the checks-semaphore slots
-  `garden checks` claims inside a worker, and each worker-cleanup request's lock. One planted
+  beside what they guard: the registry, state and alerts locks, and the checks-semaphore
+  slots `garden checks` claims inside a worker. One planted
   there naming a live process older than itself holds what it guards until the operator
   removes it.
 - **`postMerge`/`checks` commands are trusted.** They come from `~/.garden/config.yml`,

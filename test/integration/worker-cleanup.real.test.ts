@@ -336,7 +336,29 @@ describe("runWorkerCleanup (real git)", () => {
     expect(fs.existsSync(wtPath)).toBe(true);
   });
 
-  it("rejects a worker-writable request that targets a different branch", async () => {
+  it("never runs a request found in the sessions dir, where any worker can write one", async () => {
+    // Well-formed and naming this worker's own targets, as one an older build
+    // wrote there would; a forged one looks the same.
+    const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+    const legacy = path.join(env.sessionsDir, "worker-cleanup-leadingtone-io-numb-clear-vow");
+    fs.writeFileSync(legacy, JSON.stringify({
+      project: "leadingtone-io",
+      worker: "numb-clear-vow",
+      repoPath: env.repoPath,
+      worktreePath: wtPath,
+      branchName: "numb-clear-vow",
+      attempts: 0,
+    }));
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(wtPath)).toBe(true);
+    expect(git(wtPath, "rev-parse", "--is-inside-work-tree")).toBe("true");
+    expect(branches(env.repoPath)).toContain("numb-clear-vow");
+    expect(reaped.worktrees).toEqual([]);
+  });
+
+  it("rejects a request that targets a different branch", async () => {
     const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
     const file = await seed({ branchName: "main" });
 
@@ -376,10 +398,11 @@ describe("runWorkerCleanup (real git)", () => {
     },
   );
 
-  // A removed worker's daemon can put a link where its tree was and forge a
-  // request for itself. Once the worker's own admin entry is gone, git
-  // resolves the path it is given, so `worktree remove --force` removed
-  // whatever worktree the link pointed at, uncommitted work included.
+  // A process the removed worker left running can put a link where its tree
+  // was before the cleanup, or its retry, runs. Once the worker's own admin
+  // entry is gone, git resolves the path it is given, so `worktree remove
+  // --force` removed whatever worktree the link pointed at, uncommitted work
+  // included.
   describe("a link planted at the worktree path", () => {
     function sibling(): string {
       const tree = path.join(path.dirname(wtPath), "tame-blue-fox");
