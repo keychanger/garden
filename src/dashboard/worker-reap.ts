@@ -20,7 +20,7 @@
 //
 // The target directory must always be the canonical worktree path Garden
 // derives from a validated (project, worker) pair — never a path read out of a
-// worker-writable request body. Aiming this at an attacker-chosen directory
+// cleanup request body. Aiming this at an attacker-chosen directory
 // would hand an unsandboxed watchdog a machine-wide process killer.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
