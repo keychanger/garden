@@ -33,16 +33,25 @@ vi.mock("../src/dashboard/state.js", () => ({
   })),
 }));
 
-vi.mock("../src/dashboard/registry.js", async (importOriginal) => ({
-  // Spread the real module so pure derivations (isDelegating) run for real.
-  ...(await importOriginal<typeof import("../src/dashboard/registry.js")>()),
-  getWorkers: vi.fn(() => []),
-  // Stub ordering to the prior alphabetical behavior so these render tests
-  // stay order-stable; the real comparator + staleness are unit-tested in
-  // registry.test.ts.
-  compareWorkerFreshness: (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name),
-  isWorkerStale: () => false,
-}));
+vi.mock("../src/dashboard/registry.js", async (importOriginal) => {
+  const { loadConfig } = await import("../src/config.js");
+  const getWorkers = vi.fn((_project: string): unknown[] => []);
+  return {
+    // Spread the real module so pure derivations (isDelegating) run for real.
+    ...(await importOriginal<typeof import("../src/dashboard/registry.js")>()),
+    getWorkers,
+    // status() reads the registry once and renders every project from that
+    // read; serve it from the per-project stub each case sets.
+    readRegistry: vi.fn(() => ({
+      workers: Object.fromEntries(Object.keys(loadConfig().projects).map(p => [p, getWorkers(p)])),
+    })),
+    // Stub ordering to the prior alphabetical behavior so these render tests
+    // stay order-stable; the real comparator + staleness are unit-tested in
+    // registry.test.ts.
+    compareWorkerFreshness: (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name),
+    isWorkerStale: () => false,
+  };
+});
 
 vi.mock("../src/session.js", () => ({
   dashboardExists: vi.fn(() => true),

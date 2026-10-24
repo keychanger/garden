@@ -130,6 +130,38 @@ describe("garden status piped JSON", () => {
     }
   });
 
+  // Each project's rows used to re-read the registry through getWorkers, on top
+  // of the read the title refresh had just made.
+  it("reads the registry once for every project it reports", async () => {
+    await setupProjects();
+    const { REGISTRY_FILE } = await import("../src/dashboard/registry.js");
+    const names = { alpha: ["a1", "a2"], beta: ["b1", "b2"] };
+    // Every task already matches its pane title, so the title refresh writes nothing.
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: Object.fromEntries(Object.entries(names).map(([project, workers]) => [
+        project, workers.map(name => ({ name, sessionId: name, task: `title ${name}`, agentStatus: "working" })),
+      ])),
+    }));
+    tmuxServer.windows = ["main", ...Object.entries(names).flatMap(([p, ws]) => ws.map(w => `_${p}-worker-${w}`))];
+    tmuxServer.panes = Object.entries(names).flatMap(([p, ws]) =>
+      ws.map((w, i) => ({ win: `_${p}-worker-${w}`, id: `%${p === "alpha" ? i + 1 : i + 11}`, title: `title ${w}` })));
+    tmuxServer.up = true;
+    const stat = vi.spyOn(fs, "statSync");
+    try {
+      const parsed = await runStatusJson();
+      expect(stat.mock.calls.filter(c => c[0] === REGISTRY_FILE)).toHaveLength(1);
+      for (const project of parsed) {
+        const workers = project.workers as Array<{ name: string; activity: string | null }>;
+        const expected = names[project.name as "alpha" | "beta"];
+        expect(workers.map(w => w.name).sort()).toEqual(expected);
+        expect(workers.map(w => w.activity).sort()).toEqual(expected.map(w => `title ${w}`));
+      }
+    } finally {
+      stat.mockRestore();
+      tmuxServer.up = false;
+    }
+  });
+
   it("omits the intake fields when no pass has ever run", async () => {
     await setupProjects();
     const parsed = await runStatusJson();

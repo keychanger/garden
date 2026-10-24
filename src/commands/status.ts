@@ -497,16 +497,18 @@ export async function status(args: string[]): Promise<void> {
   const hasDashboard = dashboardExists();
 
   // Board polls this command, so its tmux cost recurs: one list-panes covers
-  // every worker's title, and one list-windows and config load every project.
+  // every worker's title, and one list-windows, config load and registry read
+  // every project. The rows render from the registry the title refresh wrote.
   const windowNames = hasDashboard ? listAllWindowNames() : undefined;
-  if (hasDashboard) refreshWorkerTasks(undefined, dashState, false);
+  let registry = hasDashboard ? readRegistry() : undefined;
+  if (registry) registry = refreshWorkerTasks(registry, dashState, false) ?? registry;
 
   const statuses: ProjectStatusInfo[] = names.map((name, i) => {
     return {
       name,
       index: i + 1,
       isActive: dashState.activeProject === name,
-      workers: hasDashboard ? collectWorkers(name, dashState, windowNames) : [],
+      workers: registry ? collectWorkers(name, dashState, windowNames, registry) : [],
       projectBranch: resolveProjectBranch(name, config),
       ...(config.projects[name]?.beadIntake === true ? readIntakeStatus(name) : {}),
     };
