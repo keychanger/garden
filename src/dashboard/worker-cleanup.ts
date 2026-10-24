@@ -2,16 +2,19 @@
 // origin branch after the registry entry is gone.
 //
 // This used to be a detached `sh -c` one-liner whose every step ended in
-// `2>/dev/null || true`. That swallowed the one failure mode that matters: the
-// removing process cannot always WRITE the project checkout. `garden` run from
-// inside an agent's sandbox (a Codex worker's pane, where the writable roots
-// are the worker's own worktree plus ~/.garden/sessions) can kill the tmux
-// window and delete the registry entry — both land in allowed paths — and then
-// silently fail every git step. The worktree and branch leak with no error, no
-// log line, and no retry; the only surviving signal is the watchdog's orphan
-// sweep an hour later, which can say "nothing owns this" but not "cleanup was
-// attempted and denied". That is how leadingtone-io/numb-clear-vow leaked
-// 351MB on 2026-08-22.
+// `2>/dev/null || true`. That swallowed the one failure mode that mattered: the
+// removing process could not always WRITE the project checkout. `garden` run
+// from inside an agent's sandbox (a Codex worker's pane, where the writable
+// roots are the worker's own worktree plus ~/.garden/sessions) could kill the
+// tmux window and delete the registry entry — both land in allowed paths — and
+// then silently fail every git step. The worktree and branch leaked with no
+// error, no log line, and no retry; the only surviving signal was the
+// watchdog's orphan sweep an hour later, which can say "nothing owns this" but
+// not "cleanup was attempted and denied". That is how
+// leadingtone-io/numb-clear-vow leaked 351MB on 2026-08-22. A removal now
+// refuses in that position — stopWorkerByName when tmux does not answer, the
+// removal tail when the tombstone cannot be written — so the retry is for
+// whatever else fails a cleanup.
 //
 // So cleanup is now a request on disk plus a garden subcommand that executes
 // it. The request file IS the marker resurrect and the orphan sweep already
@@ -20,7 +23,7 @@
 // dispatches the fast path immediately (unchanged snappiness when it works),
 // and the watchdog — the fleet's one always-unsandboxed recurring process —
 // re-dispatches any request still on disk after CLEANUP_RETRY_AFTER_MS. A
-// sandboxed caller therefore costs one wasted attempt, not a leaked worktree.
+// failed fast path therefore costs one wasted attempt, not a leaked worktree.
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";

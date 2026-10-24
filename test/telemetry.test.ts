@@ -327,4 +327,16 @@ describe("telemetry write failures", () => {
       .filter(l => l.includes("ledger write failed"));
     expect(lines).toHaveLength(1);
   });
+
+  // The removal tail keeps a worker whose tombstone did not land, so the
+  // recorder has to say which happened rather than swallow it.
+  it("reports whether the worker.removed tombstone landed", async () => {
+    const t = await importTelemetry();
+    const entry = { name: "elk", sessionId: "s", task: "" };
+    expect(t.recordWorkerRemoved("garden", "elk", 1, "default", entry)).toBe(true);
+
+    fs.rmSync(t.telemetryDir(), { recursive: true, force: true });
+    blockTelemetryDir(env.gardenDir);
+    expect(t.recordWorkerRemoved("garden", "elk", 1, "default", entry)).toBe(false);
+  });
 });

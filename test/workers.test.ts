@@ -233,8 +233,10 @@ vi.mock("../src/dashboard/poller.js", () => ({
 vi.mock("../src/dashboard/telemetry.js", () => ({
   recordWorkerCreated: vi.fn(),
   recordOperatorAction: vi.fn(),
-  recordWorkerRemoved: vi.fn(),
+  // The removal tail keeps a worker whose tombstone did not land.
+  recordWorkerRemoved: vi.fn(() => true),
   shortHash: vi.fn(() => "rulesHash"),
+  telemetryDir: vi.fn(() => "/home/user/.garden/telemetry"),
 }));
 
 // buildRulesContext reads global+project rules off disk; stub it so the
@@ -2492,6 +2494,40 @@ describe("stopWorkerByName", () => {
     expect(vi.mocked(recordWorkerRemoved)).toHaveBeenCalled();
     expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
     expect(vi.mocked(writeWorkerCleanupRequest)).toHaveBeenCalled();
+  });
+
+  // The tombstone is all `garden resurrect` has once the entry, worktree and
+  // branch are gone. A process denied ~/.garden/telemetry (any agent sandbox)
+  // but able to reach tmux would otherwise finish a removal nothing can undo.
+  it("keeps the entry, worktree and branch when the tombstone cannot be written", () => {
+    vi.mocked(recordWorkerRemoved).mockReturnValueOnce(false);
+    vi.mocked(readDashState).mockReturnValue(parkedState());
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
+      worktreePath: "/wt/swift-oak", createdAt: 42, bead: "bd-1",
+    });
+
+    let thrown: unknown;
+    try {
+      stopWorkerByName("myproject", "swift-oak");
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(vi.mocked(recordWorkerRemoved)).toHaveBeenCalled();
+    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(showBeads)).not.toHaveBeenCalled();
+    expect(vi.mocked(stopProjectPoller)).not.toHaveBeenCalled();
+    expect(vi.mocked(writeWorkerCleanupRequest)).not.toHaveBeenCalled();
+    expect(vi.mocked(dispatchWorkerCleanup)).not.toHaveBeenCalled();
+    expect(vi.mocked(addAlert)).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn",
+      project: "myproject",
+      worker: "swift-oak",
+      dedupKey: "tombstone-failed:myproject:swift-oak",
+    }));
+    expect(String(thrown)).toMatch(/tombstone could not be written/);
+    expect(vi.mocked(refreshDashboard)).toHaveBeenCalled();
   });
 });
 

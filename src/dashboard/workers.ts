@@ -22,7 +22,9 @@ import {
   updateWorkerFields, getWorkers, resolveResumeAgentStatus, compareWorkerFreshness,
   type AgentStatus, type WorkerEntry,
 } from "./registry.js";
-import { recordWorkerCreated, recordOperatorAction, recordWorkerRemoved, shortHash, type RoleSnapshot } from "./telemetry.js";
+import {
+  recordWorkerCreated, recordOperatorAction, recordWorkerRemoved, shortHash, telemetryDir, type RoleSnapshot,
+} from "./telemetry.js";
 import { designerSeat, getCrew, resolveProjectCrew, type CrewMember } from "./crew.js";
 import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
@@ -1030,10 +1032,15 @@ export function killPane(target?: WorkerRemovalTarget): void {
   });
 
   if (!didKill) return;
-  if (removalProject && removalWorker) {
-    finalizeWorkerRemoval(removalProject, removalWorker, removalEntry);
+  // The repaint runs even when the tail keeps the worker and throws: the
+  // right slot already changed above.
+  try {
+    if (removalProject && removalWorker) {
+      finalizeWorkerRemoval(removalProject, removalWorker, removalEntry);
+    }
+  } finally {
+    refreshDashboard();
   }
-  refreshDashboard();
 }
 
 // Shared removal tail — every operator removal path (the dashboard ⌥x kill in
@@ -1051,16 +1058,42 @@ export function finalizeWorkerRemoval(
 ): void {
   const project = tryGetProject(projectName);
 
+  // The tombstone is all `garden resurrect` can rebuild this worker from once
+  // its entry, worktree and branch are gone, so it is written first and a
+  // failed write keeps all three, with the bead claim, review windows and
+  // poller that go with them. A process denied ~/.garden/telemetry, as every
+  // worker sandbox is, that can still reach tmux would otherwise finish a
+  // removal nothing could undo.
+  if (entry && !recordWorkerRemoved(
+    projectName, workerName, entry.createdAt,
+    entry.workflow ?? "default", { ...entry },
+  )) {
+    const message =
+      `Kept ${projectName}/${workerName}'s registry entry, worktree and branch: its tombstone `
+      + `could not be written to ${telemetryDir()}, and \`garden resurrect\` can rebuild a removed `
+      + `worker only from that. Run \`garden workers stop ${workerName}\` from a shell that can `
+      + `write there to finish removing it.`;
+    addAlert({
+      level: "warn",
+      source: "workers",
+      project: projectName,
+      worker: workerName,
+      message,
+      dedupKey: `tombstone-failed:${projectName}:${workerName}`,
+    });
+    log.warn("workers", "kept worker: tombstone write failed", {
+      worker: workerName,
+      data: { project: projectName },
+    });
+    throw new Error(message);
+  }
+
   killReviewWindow(projectName, workerName);
   // The ci-fix agent runs in a window of its own, and the git cleanup now
   // defers while any pane holds the worktree, so leaving it alive both lets it
   // keep working for a worker that is gone and stalls the cleanup behind it.
   killCiFixWindow(projectName, workerName);
   if (entry) {
-    recordWorkerRemoved(
-      projectName, workerName, entry.createdAt,
-      entry.workflow ?? "default", { ...entry },
-    );
     // Decision-12 unclaim runs BEFORE removeWorker: if it crashes mid-write,
     // the registry entry (and its bead join) is still on disk for a retry,
     // instead of a hard-deleted entry orphaning an in_progress bead.

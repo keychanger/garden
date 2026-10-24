@@ -155,12 +155,14 @@ export function shardName(date: Date = new Date()): string {
 // garden execs a fresh CLI per poll, so this resets naturally.
 let writeFailureLogged = false;
 
-function write(line: Record<string, unknown>): void {
+// Returns whether the line landed, for the one caller that acts on it.
+function write(line: Record<string, unknown>): boolean {
   try {
     const dir = telemetryDir();
     fs.mkdirSync(dir, { recursive: true });
     const entry = { v: SCHEMA_VERSION, ts: new Date().toISOString(), ...line };
     fs.appendFileSync(path.join(dir, shardName()), JSON.stringify(entry) + "\n");
+    return true;
   } catch (err) {
     // Still swallowed — telemetry must never crash the app — but no longer
     // invisible. A silent swallow here cost real evidence: `garden` run inside
@@ -176,6 +178,7 @@ function write(line: Record<string, unknown>): void {
         });
       } catch { /* the log is best-effort too */ }
     }
+    return false;
   }
 }
 
@@ -393,14 +396,16 @@ export function recordOperatorAction(
 // rather than a field selection — a rebuild wants maximum fidelity, kills are
 // rare, and the ledger is never truncated. Spawn-failure rollbacks also call
 // removeWorker but never tombstone: there is no session worth resurrecting.
+// Returns whether the tombstone landed: the removal tail keeps the worker when
+// it did not, since nothing could rebuild it afterwards.
 export function recordWorkerRemoved(
   project: string,
   worker: string,
   createdAt: number | undefined,
   workflow: string,
   entry: Record<string, unknown>,
-): void {
-  write({
+): boolean {
+  return write({
     event: "worker.removed",
     project,
     worker,
