@@ -13,6 +13,7 @@
 import fs from "node:fs";
 import { type ProjectConfig, tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
+import { FRESH_CI_FIX_CYCLE } from "./cycle-resets.js";
 import { resolveReviewRole } from "./roles.js";
 import { codexStderrSidecar } from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
@@ -164,8 +165,7 @@ export function launchCiFix(
       // Reset the budget on the park, mirroring escalateCiFixBudget — a worker
       // that recovers must not carry a silently-reduced budget into a later
       // merge cycle.
-      ciFixAttempts: 0,
-      preCiFixSha: undefined,
+      ...FRESH_CI_FIX_CYCLE,
     });
     refreshDashboard();
     return true;
@@ -294,8 +294,7 @@ function escalateCiFixBudget(
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     mergePendingAt: undefined,
-    ciFixAttempts: 0,
-    preCiFixSha: undefined,
+    ...FRESH_CI_FIX_CYCLE,
   });
   refreshDashboard();
 }
@@ -406,10 +405,7 @@ export function handleCiFixing(
         lastShaChangeAt: new Date().toISOString(),
         reviewWindowName: undefined,
         reviewStartedAt: undefined,
-        ciFixAttempts: 0,
-        preCiFixSha: undefined,
-        lastCiFixBody: undefined,
-        failingCheckSummary: undefined,
+        ...FRESH_CI_FIX_CYCLE,
         mergePendingAt: undefined,
         pendingReviewAt: Date.now(),
       });
@@ -495,8 +491,7 @@ function handleCiFixTimeout(
     // Reset the ci-fix budget on the timeout park, mirroring
     // escalateCiFixBudget — otherwise a worker that recovers from one timeout
     // carries a silently-reduced budget into later merge cycles.
-    ciFixAttempts: 0,
-    preCiFixSha: undefined,
+    ...FRESH_CI_FIX_CYCLE,
   });
   refreshDashboard();
   return true;

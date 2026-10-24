@@ -287,7 +287,9 @@ export interface WorkerEntry {
   // HEAD SHA captured the moment before the resolver launches — the poller
   // compares post-resolver HEAD against it to confirm the resolver actually
   // committed something. resolveAttempts counts resolver launches for the
-  // current merge; budget is 2, resets on worker push or successful merge.
+  // current merge; budget is 2, reset with the rest of FRESH_RESOLVE_CYCLE
+  // (cycle-resets.ts) on a worker push, a successful merge, or a park in
+  // `failing` from the resolve path.
   // lastResolveBody carries the resolver's last output body for alert text.
   preResolveSha?: string;
   resolveAttempts?: number;
@@ -321,15 +323,16 @@ export interface WorkerEntry {
   // Set when handleReviewing receives an unparseable verdict but the reviewer
   // advanced HEAD; the poller force-pushes and re-queues one more review. A
   // second unparseable verdict falls through to the normal failing path.
-  // Cleared on any parseable verdict (clean/fixed/failed).
+  // Cleared with the rest of FRESH_REVIEW_CYCLE (cycle-resets.ts) whenever the
+  // review cycle ends or restarts, so the retry it spends is this cycle's.
   unparseableReviewAt?: number;
   // Transient-review retry state. Set by handleTransientReviewFailure when the
   // reviewer output ends in an API error (5xx, 429, overloaded_error) and the
   // reviewer didn't commit anything. reviewRetryCount tracks attempts in the
   // current review cycle; the budget (MAX_TRANSIENT_REVIEW_RETRIES) is 3.
   // reviewRetryAt is the earliest epoch ms at which handleWorking is permitted
-  // to relaunch the review — backoff is 30s / 2m / 5m. Both fields clear on
-  // any parseable verdict and on a successful review launch. See
+  // to relaunch the review — backoff is 30s / 2m / 5m. Both fields clear with
+  // the rest of FRESH_REVIEW_CYCLE (cycle-resets.ts). See
   // poller-review.ts handleTransientReviewFailure / handleWorking.
   reviewRetryCount?: number;
   reviewRetryAt?: number;

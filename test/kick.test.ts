@@ -182,6 +182,29 @@ describe("kick command", () => {
     expect(JSON.parse(lines.join("\n"))).toMatchObject({ reviewQueued: true, recoveredFrom: "unparseable-verdict" });
   });
 
+  it("clears every review retry field, the quota fallback included", async () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "failing",
+        failingReason: "quota",
+        failingSha: "abc123",
+        quotaRetryCount: 24,
+        reviewFallbackHarness: "claude-code",
+        reviewRetryAt: Date.now() - 1000,
+      }),
+    ]);
+
+    await captureConsoleLog(() => kick(["bold-ash"]));
+
+    const fields = vi.mocked(updateWorkerFields).mock.calls[0][2] as Record<string, unknown>;
+    for (const field of [
+      "reviewRetryCount", "unparseableRetryCount", "quotaRetryCount",
+      "reviewFallbackHarness", "reviewRetryAt", "unparseableReviewAt",
+    ]) {
+      expect(Object.hasOwn(fields, field) && fields[field] === undefined, field).toBe(true);
+    }
+  });
+
   it("recovers a failing worker whose reason is transient-review", async () => {
     // The reviewer's Claude process couldn't reach the API (5xx / overloaded
     // / rate-limit) for the entire backoff budget. Same recovery shape as

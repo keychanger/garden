@@ -7233,3 +7233,182 @@ describe("claude-code adapter isTransientError", () => {
     expect(isTransientReviewFailureTail("   \n  \n")).toBe(false);
   });
 });
+
+// Every transition that ends or restarts a review cycle clears the whole retry
+// set. The one-shot unparseable marker was cleared by only three of the eleven
+// sites that cleared the retry counters, so a cycle ended by a worker push, an
+// edit, a timeout or a failing park left it set, and the next cycle's first
+// unparseable verdict went straight to `failing` instead of getting its retry.
+describe("poll — review-cycle resets clear every retry field", () => {
+  const RETRY_FIELDS = [
+    "reviewRetryCount", "unparseableRetryCount", "quotaRetryCount",
+    "reviewFallbackHarness", "reviewRetryAt", "unparseableReviewAt",
+  ] as const;
+  const PAST_CAP_AGO = Date.now() - 2 * 60 * 60 * 1000 - 60 * 1000;
+  const current = () => findWorkerByName("myproject", "bold-ash")!;
+  const leftOver = () => RETRY_FIELDS.filter((f) => current()[f] !== undefined);
+  // Every field mid-cycle, as a review that already retried leaves it; cases
+  // override the ones their path keys on.
+  const seeded = (overrides: Partial<WorkerEntry> = {}): WorkerEntry => makeWorker({
+    prState: "reviewing",
+    reviewWindowName: "_myproject-review-bold-ash",
+    lastSeenSha: "abc123",
+    preReviewSha: "pre456",
+    reviewRetryCount: 1,
+    unparseableRetryCount: 1,
+    quotaRetryCount: 1,
+    reviewFallbackHarness: "claude-code",
+    reviewRetryAt: Date.now() - 1000,
+    unparseableReviewAt: Date.now() - 1000,
+    ...overrides,
+  });
+  const reviewerExitedWith = (output: string) => {
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? output : "{}");
+  };
+
+  it("when transient retries run out", () => {
+    registryMock._setEntries("myproject", [seeded({ reviewRetryCount: 3 })]);
+    reviewerExitedWith(`API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`);
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+    poll("myproject");
+    expect(current().failingReason).toBe("transient-review");
+    expect(leftOver()).toEqual([]);
+  });
+
+  it("when quota retries run out", () => {
+    registryMock._setEntries("myproject", [seeded({ quotaRetryCount: 24 })]);
+    reviewerExitedWith("You've hit your session limit · resets 3:40pm");
+    vi.mocked(getBranchHeadSha).mockReturnValue("pre456");
+    poll("myproject");
+    expect(current().failingReason).toBe("quota");
+    expect(leftOver()).toEqual([]);
+  });
+
+  it("when pushing an unparseable verdict's commits fails", () => {
+    registryMock._setEntries("myproject", [seeded({ unparseableReviewAt: undefined })]);
+    reviewerExitedWith("ran the suite; no verdict line");
+    vi.mocked(getBranchHeadSha).mockReturnValue("post789");
+    vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("rejected"); });
+    poll("myproject");
+    expect(current().failingReason).toBe("code");
+    expect(leftOver()).toEqual([]);
+  });
+
+  it("when an unparseable verdict has used its retry", () => {
+    registryMock._setEntries("myproject", [seeded()]);
+    reviewerExitedWith("still no verdict line");
+    vi.mocked(getBranchHeadSha).mockReturnValue("post789");
+    poll("myproject");
+    expect(current().failingReason).toBe("unparseable-verdict");
+    expect(leftOver()).toEqual([]);
+  });
+
+  it("on a CLEAN verdict", () => {
+    registryMock._setEntries("myproject", [seeded()]);
+    reviewerExitedWith("Looks good.\nCLEAN");
+    poll("myproject");
+    expect(current().prState).toBe("merge-pending");
+    expect(leftOver()).toEqual([]);
+  });
+
+  it("on a FAILED verdict", () => {
+    registryMock._setEntries("myproject", [seeded()]);
+    reviewerExitedWith("Could not fix the race.\nFAILED");
+    poll("myproject");
+    expect(current().failingReason).toBe("code");
+    expect(leftOver()).toEqual([]);
+  });
+
+  it("when the worker pushes during the review", () => {
+    registryMock._setEntries("myproject", [seeded()]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("def456");
+    poll("myproject");
+    expect(current().prState).toBe("working");
+    expect(leftOver()).toEqual([]);
+  });
+
+  it("when the worker edits the worktree during the review", () => {
+    registryMock._setEntries("myproject", [seeded({ reviewInterruptedAt: Date.now() })]);
+    poll("myproject");
+    expect(current().prState).toBe("working");
+    expect(leftOver()).toEqual([]);
+  });
+
+  it("when the review times out", () => {
+    registryMock._setEntries("myproject", [seeded({ reviewStartedAt: PAST_CAP_AGO })]);
+    poll("myproject");
+    expect(current().failingReason).toBe("review-timeout");
+    expect(leftOver()).toEqual([]);
+  });
+
+  it("except the one-shot marker its own re-queue sets", () => {
+    registryMock._setEntries("myproject", [seeded({ unparseableReviewAt: undefined })]);
+    reviewerExitedWith("ran the suite; no verdict line");
+    vi.mocked(getBranchHeadSha).mockReturnValue("post789");
+    poll("myproject");
+    expect(current().prState).toBe("working");
+    expect(leftOver()).toEqual(["unparseableReviewAt"]);
+  });
+
+  it("so the cycle after a worker push gets its own unparseable retry", () => {
+    registryMock._setEntries("myproject", [seeded()]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("def456");
+    poll("myproject");
+    // The next review of the pushed commits: its reviewer commits work but
+    // emits no verdict.
+    Object.assign(current(), {
+      prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+      lastSeenSha: "def456", preReviewSha: "def456",
+    });
+    reviewerExitedWith("ran the suite; no verdict line");
+    vi.mocked(getBranchHeadSha).mockReturnValue("post789");
+    poll("myproject");
+    expect(current().prState).toBe("working");
+    expect(current().unparseableReviewAt).toEqual(expect.any(Number));
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
+  });
+});
+
+// A timed-out resolver parks in the kick-recoverable `review-timeout`. The
+// attempt that timed out was counted at its launch, so a budget carried through
+// the recovery escalates the next conflict without launching a resolver — the
+// reason escalateResolveBudget resets it on its own park.
+describe("poll — resolver timeout", () => {
+  const PAST_CAP_AGO = Date.now() - 2 * 60 * 60 * 1000 - 60 * 1000;
+
+  it("resets the resolve budget, so the next conflict still gets a resolver", () => {
+    registryMock._setEntries("myproject", [makeWorker({
+      prState: "resolving",
+      reviewWindowName: "_myproject-review-bold-ash",
+      reviewStartedAt: PAST_CAP_AGO,
+      lastSeenSha: "abc123",
+      resolveAttempts: 2,
+      preResolveSha: "pre456",
+      lastResolveBody: "conflict in src/foo.ts",
+    })]);
+    poll("myproject");
+    const entry = findWorkerByName("myproject", "bold-ash")!;
+    expect(entry.failingReason).toBe("review-timeout");
+    expect(entry.resolveAttempts).toBe(0);
+    expect(entry.preResolveSha).toBeUndefined();
+    expect(entry.lastResolveBody).toBeUndefined();
+
+    // Recovered (kicked and re-reviewed) back to the merge queue, which hits
+    // a conflict again.
+    Object.assign(entry, {
+      prState: "merge-pending", agentStatus: "idle",
+      mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      failingReason: undefined, failingSha: undefined,
+    });
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "conflict" });
+    poll("myproject");
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({ prState: "resolving", resolveAttempts: 1 });
+  });
+});

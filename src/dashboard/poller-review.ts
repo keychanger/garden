@@ -17,6 +17,7 @@ import { showBeads, addLabel, removeLabel, incrementFailedLabel } from "./beads.
 import { codexStderrSidecar } from "./harness/codex-core.js";
 import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
+import { CLEAR_HOLISTIC, FRESH_RESOLVE_CYCLE, FRESH_REVIEW_CYCLE } from "./cycle-resets.js";
 import {
   abortRebase, fetchBaseBranch, forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
   getReviewFixNumstat, hasCommitsAhead, getChangedFiles, hasRebaseInProgress, isWorktreeDirty,
@@ -572,8 +573,7 @@ function handleHolisticFinalReview(
   const finalizeDone = (): void => {
     transitionState(projectName, entry.name, "done", {
       holisticReviewedThroughMergeCount: mergeCount,
-      holisticFinalActive: undefined,
-      holisticReviewMode: undefined,
+      ...CLEAR_HOLISTIC,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       preReviewSha: undefined,
@@ -630,8 +630,7 @@ function handleHolisticFinalReview(
       reviewStartedAt: undefined,
       preReviewSha: undefined,
       holisticReviewedThroughMergeCount: mergeCount,
-      holisticFinalActive: undefined,
-      holisticReviewMode: undefined,
+      ...CLEAR_HOLISTIC,
     });
     refreshDashboard();
     return true;
@@ -807,11 +806,7 @@ function handleTransientReviewFailure(
       lastShaChangeAt: new Date().toISOString(),
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
-      reviewRetryCount: undefined,
-      unparseableRetryCount: undefined,
-      quotaRetryCount: undefined,
-      reviewFallbackHarness: undefined,
-      reviewRetryAt: undefined,
+      ...FRESH_REVIEW_CYCLE,
     });
     refreshDashboard();
     return true;
@@ -904,11 +899,7 @@ function handleQuotaLimitReview(
       lastShaChangeAt: new Date().toISOString(),
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
-      reviewRetryCount: undefined,
-      unparseableRetryCount: undefined,
-      reviewRetryAt: undefined,
-      quotaRetryCount: undefined,
-      reviewFallbackHarness: undefined,
+      ...FRESH_REVIEW_CYCLE,
     });
     refreshDashboard();
     return true;
@@ -1051,11 +1042,7 @@ function handleUnparseableReview(
         lastShaChangeAt: new Date().toISOString(),
         reviewWindowName: undefined,
         reviewStartedAt: undefined,
-        reviewRetryCount: undefined,
-        unparseableRetryCount: undefined,
-        quotaRetryCount: undefined,
-        reviewFallbackHarness: undefined,
-        reviewRetryAt: undefined,
+        ...FRESH_REVIEW_CYCLE,
       });
       refreshDashboard();
       return true;
@@ -1065,6 +1052,8 @@ function handleUnparseableReview(
       data: { project: projectName },
     });
     transitionState(projectName, entry.name, "working", {
+      // First, so the one-shot marker set below survives the set's clear of it.
+      ...FRESH_REVIEW_CYCLE,
       pendingReviewAt: Date.now(),
       unparseableReviewAt: Date.now(),
       lastSeenSha: headSha ?? undefined,
@@ -1072,11 +1061,6 @@ function handleUnparseableReview(
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
       preReviewSha: undefined,
-      reviewRetryCount: undefined,
-      unparseableRetryCount: undefined,
-      quotaRetryCount: undefined,
-      reviewFallbackHarness: undefined,
-      reviewRetryAt: undefined,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 0);
@@ -1150,11 +1134,7 @@ function handleUnparseableReview(
     lastShaChangeAt: new Date().toISOString(),
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
-    reviewRetryCount: undefined,
-    unparseableRetryCount: undefined,
-    quotaRetryCount: undefined,
-    reviewFallbackHarness: undefined,
-    reviewRetryAt: undefined,
+    ...FRESH_REVIEW_CYCLE,
   });
   refreshDashboard();
   return true;
@@ -1205,9 +1185,7 @@ function tryForcePushAfterReview(
       // Fresh cycle: reset the resolver budget and stale resolve state, matching
       // resetToWorkingOnWorkerPush / finalizeMerge, so a re-reviewed worker never
       // inherits a prior cycle's exhausted budget.
-      resolveAttempts: 0,
-      preResolveSha: undefined,
-      lastResolveBody: undefined,
+      ...FRESH_RESOLVE_CYCLE,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 30_000);
@@ -1261,12 +1239,7 @@ function dispatchDefaultVerdict(
       lastReviewBody: review.body,
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
-      unparseableReviewAt: undefined,
-      reviewRetryCount: undefined,
-      unparseableRetryCount: undefined,
-      quotaRetryCount: undefined,
-      reviewFallbackHarness: undefined,
-      reviewRetryAt: undefined,
+      ...FRESH_REVIEW_CYCLE,
     });
     refreshDashboard();
     // The poller is event-driven and will block on the FIFO after this tick.
@@ -1302,12 +1275,7 @@ function dispatchDefaultVerdict(
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     preReviewSha: undefined,
-    unparseableReviewAt: undefined,
-    reviewRetryCount: undefined,
-    unparseableRetryCount: undefined,
-    quotaRetryCount: undefined,
-    reviewFallbackHarness: undefined,
-    reviewRetryAt: undefined,
+    ...FRESH_REVIEW_CYCLE,
   });
   refreshDashboard();
   return true;
@@ -1380,17 +1348,11 @@ export function resetToWorkingOnWorkerPush(
     lastShaChangeAt: new Date().toISOString(),
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
-    resolveAttempts: 0,
-    preResolveSha: undefined,
-    lastResolveBody: undefined,
+    ...FRESH_RESOLVE_CYCLE,
     mergePendingAt: undefined,
     // Worker pushed mid-review: this is a fresh cycle, reset transient retry
     // state so any prior in-flight backoff doesn't bleed into the new review.
-    reviewRetryCount: undefined,
-    unparseableRetryCount: undefined,
-    quotaRetryCount: undefined,
-    reviewFallbackHarness: undefined,
-    reviewRetryAt: undefined,
+    ...FRESH_REVIEW_CYCLE,
     reviewInterruptedAt: undefined,
     reviewBashBaselines: undefined,
     pendingReviewAt: hasCommits ? Date.now() : entry.pendingReviewAt,
@@ -1449,13 +1411,8 @@ export function cancelReviewOnWorkerEdit(
     reviewBashBaselines: undefined,
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
-    reviewRetryCount: undefined,
-    unparseableRetryCount: undefined,
-    quotaRetryCount: undefined,
-    reviewFallbackHarness: undefined,
-    reviewRetryAt: undefined,
-    holisticFinalActive: undefined,
-    holisticReviewMode: undefined,
+    ...FRESH_REVIEW_CYCLE,
+    ...CLEAR_HOLISTIC,
     // Keep the review armed: the branch still holds unreviewed commits.
     // handleWorking's agentStatus="working" guard defers the relaunch until
     // the worker goes quiet, and its Stop hook independently re-marks + pokes
@@ -1531,18 +1488,18 @@ export function handleReviewTimeout(
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     mergePendingAt: kind === "resolve" ? undefined : entry.mergePendingAt,
-    reviewRetryCount: undefined,
-    unparseableRetryCount: undefined,
-    quotaRetryCount: undefined,
-    reviewFallbackHarness: undefined,
-    reviewRetryAt: undefined,
+    ...FRESH_REVIEW_CYCLE,
+    // The park is kick-recoverable, and a timed-out resolver's attempt was
+    // counted at its launch: carried through the recovery, the budget would
+    // escalate the next conflict without launching a resolver, the reason
+    // escalateResolveBudget resets it on its own park.
+    ...FRESH_RESOLVE_CYCLE,
     // A timed-out holistic final review resolves to `failing` here; clear its
     // in-flight markers so a later re-open (failing -> working -> reviewing) is
     // routed to the per-phase reviewer, not misrouted back to
     // handleHolisticFinalReview. Undefined for a per-phase review, so this is a
     // no-op there (STATUS.md: the markers clear when the pass resolves).
-    holisticFinalActive: undefined,
-    holisticReviewMode: undefined,
+    ...CLEAR_HOLISTIC,
   });
   refreshDashboard();
   return true;
@@ -1807,8 +1764,7 @@ function launchReview(
     // review to handleHolisticFinalReview (which finalizes CLEAN to `done`
     // without merging the recovery commits). STATUS.md: the markers clear when
     // the pass resolves — this is the resolution point for that merge-failed leg.
-    holisticFinalActive: undefined,
-    holisticReviewMode: undefined,
+    ...CLEAR_HOLISTIC,
   });
   refreshDashboard();
 

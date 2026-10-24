@@ -48,6 +48,7 @@ import { maybeDispatchHolisticReview } from "./poller-holistic-review.js";
 import { killReviewWindow, resetToWorkingOnWorkerPush } from "./poller-review.js";
 import { launchResolver } from "./poller-resolve.js";
 import { launchCiFix } from "./poller-ci-fix.js";
+import { CLEAR_HOLISTIC, FRESH_CI_FIX_CYCLE, FRESH_RESOLVE_CYCLE } from "./cycle-resets.js";
 import { checkCiStatus, getGitHubRepoSlug, projectDefinesCi, type CiStatus } from "./poller-ci.js";
 
 const AUTO_CONTINUE_DEBOUNCE_MS = 10_000;
@@ -336,9 +337,7 @@ export function handleMergePending(
       // verified branch that reaches this force-push (resolveAttempts already at
       // budget) would, after re-review, hit escalateResolveBudget on the next
       // genuine conflict without ever launching a resolver.
-      resolveAttempts: 0,
-      preResolveSha: undefined,
-      lastResolveBody: undefined,
+      ...FRESH_RESOLVE_CYCLE,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 30_000);
@@ -616,9 +615,7 @@ function finalizeMerge(
       // with resolveAttempts already at budget would, after re-review, hit
       // escalateResolveBudget on the next genuine conflict without ever
       // launching a resolver.
-      resolveAttempts: 0,
-      preResolveSha: undefined,
-      lastResolveBody: undefined,
+      ...FRESH_RESOLVE_CYCLE,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 5_000);
@@ -876,18 +873,13 @@ function transitionToTerminal(
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
     lastReviewBody: undefined,
-    resolveAttempts: 0,
-    preResolveSha: undefined,
-    lastResolveBody: undefined,
+    ...FRESH_RESOLVE_CYCLE,
     // The ci-fix per-merge-cycle budget must reset on a successful merge, same
     // as resolveAttempts above — registry.ts documents ciFixAttempts as
     // "resets on worker push or successful merge", but the successful-merge half
     // was never implemented, so a multi-phase worker accumulated attempts across
     // cycles until launchCiFix refused with a spurious "exhausted" alert.
-    ciFixAttempts: 0,
-    preCiFixSha: undefined,
-    lastCiFixBody: undefined,
-    failingCheckSummary: undefined,
+    ...FRESH_CI_FIX_CYCLE,
     preReviewSha: undefined,
     mergeCount,
     holisticTouchedFiles,
@@ -896,8 +888,7 @@ function transitionToTerminal(
     // the auto-continue payload — a done holistic pass never continues.
     ...(holisticFinal
       ? {
-          holisticFinalActive: undefined,
-          holisticReviewMode: undefined,
+          ...CLEAR_HOLISTIC,
           holisticReviewedThroughMergeCount: mergeCount,
         }
       : {

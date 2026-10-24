@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import { type ProjectConfig, tryGetProject } from "../config.js";
 import { addAlert } from "./alerts.js";
+import { FRESH_RESOLVE_CYCLE } from "./cycle-resets.js";
 import { resolveReviewRole } from "./roles.js";
 import { getHarnessCore } from "./harness/core.js";
 import { codexStderrSidecar } from "./harness/codex-core.js";
@@ -196,8 +197,7 @@ function escalateResolveBudget(
     // at budget would make the next genuine conflict re-escalate via
     // launchResolver without ever launching a resolver (see poller-merge.ts's
     // merge-failure re-arm for the same invariant).
-    resolveAttempts: 0,
-    preResolveSha: undefined,
+    ...FRESH_RESOLVE_CYCLE,
   });
   refreshDashboard();
 }
@@ -338,9 +338,7 @@ export function handleResolving(
       // resetToWorkingOnWorkerPush / finalizeMerge. Without this, the (already at
       // or near budget) resolveAttempts would carry into the re-reviewed cycle
       // and prematurely escalate the next genuine conflict to `failing`.
-      resolveAttempts: 0,
-      preResolveSha: undefined,
-      lastResolveBody: undefined,
+      ...FRESH_RESOLVE_CYCLE,
     });
     refreshDashboard();
     scheduleDelayedPoke(projectName, 30_000);

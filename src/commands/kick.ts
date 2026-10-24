@@ -1,4 +1,5 @@
 import { updateWorkerFields, type FailingReason } from "../dashboard/registry.js";
+import { FRESH_REVIEW_CYCLE } from "../dashboard/cycle-resets.js";
 import { triggerProjectPoll } from "../dashboard/poller.js";
 import { getCommitSummary, getWorkerBaseBranch } from "../dashboard/git.js";
 import { recordOperatorAction } from "../dashboard/telemetry.js";
@@ -99,11 +100,7 @@ export async function kick(args: string[]): Promise<void> {
       pendingReviewAt: Date.now(),
       failingReason: undefined,
       failingSha: undefined,
-      unparseableReviewAt: undefined,
-      reviewRetryCount: undefined,
-      reviewRetryAt: undefined,
-      quotaRetryCount: undefined,
-      unparseableRetryCount: undefined,
+      ...FRESH_REVIEW_CYCLE,
     });
     triggerProjectPoll(project);
     const recoveredFrom = failingReason ?? "code";
