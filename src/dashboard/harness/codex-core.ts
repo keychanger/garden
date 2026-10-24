@@ -241,7 +241,7 @@ export const codexCore: HarnessCore = {
   // coverage is partial (not all shell calls) — the worker-path slices tune
   // stale-detection for that. sandbox: Codex enforces its own (--sandbox
   // modes). skills: false — garden folds its bundled skill content into the
-  // AGENTS.md rules for Codex rather than installing native skill files.
+  // AGENTS.override.md rules for Codex rather than installing native skill files.
   capabilities: {
     turnEnd: true,
     promptSubmitted: true,

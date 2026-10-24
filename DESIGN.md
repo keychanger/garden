@@ -118,8 +118,7 @@ Garden enforces this at two levels:
   to unify, and doctor does not nag for docs a project never kept.
 
 Prefer the import over the symlink: it leaves room for a Claude-only section
-below it, it avoids interacting with garden's atomic rewrite of a Codex
-worktree's `AGENTS.md`, and it needs no Administrator privileges on Windows.
+below it, and it needs no Administrator privileges on Windows.
 
 ## Dashboard Layout
 
@@ -908,7 +907,7 @@ All read commands detect whether stdout is a TTY:
       <sha256-of-runtime-dir>.json  # Claude hooks/sandbox/status line per worktree or checkout, passed with --settings; swept once its worker and project are gone
       statusline.mjs                # The status-line script every worker's settings run (Claude Code runs it outside the sandbox)
     contexts/
-      <sha256-of-runtime-dir>.context  # System-prompt rules per worktree or checkout (--append-system-prompt-file; a Codex worker's AGENTS.md); same keep-set as the settings
+      <sha256-of-runtime-dir>.context  # System-prompt rules per worktree or checkout (--append-system-prompt-file; a Codex worker's AGENTS.override.md); same keep-set as the settings
     scripts/
       bootstrap-<project>-<branch>.sh  # Transient worktree bootstrap script the worker pane runs (swept >6h old by the watchdog)
       growhouse-init.zsh               # Garden growhouse init (custom prompt + auto-dispatch)
