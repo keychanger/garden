@@ -281,6 +281,22 @@ describe("buildStatusCommand", () => {
     expect(cmd).toMatch(/awk .* gsub\(b, f\); printf "\\033\[%d;1H%s"/);
     // Pipe form, not here-string: `awk <<<"$cur"` raced with the USR1 trap and wedged the loop.
     expect(cmd).toContain(`printf '%s\\n' "$cur" | awk`);
+    // The awk runs once per outer iteration; a frame substitutes its glyph into those rows.
+    expect(cmd).toContain(`printf '%s' "\${_ovl//\u280B/$sf_char}"`);
+  });
+
+  it("runs no pipeline or command substitution inside an animation frame", () => {
+    const cmd = buildStatusCommand("garden");
+    const start = cmd.indexOf("while [ $sc -lt 500 ]; do");
+    const end = cmd.indexOf("\n    done;", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const frame = cmd.slice(start, end);
+    // Each of these forks once per 120ms frame for as long as a spinner shows.
+    // $(( )) is arithmetic, evaluated in the shell itself.
+    expect(frame).not.toMatch(/\$\((?!\()/);
+    expect(frame).not.toContain("`");
+    expect(frame.replace(/\|\|/g, "")).not.toContain("|");
   });
 
   it("exits a fork-race duplicate of the loop via the self-pid guard", () => {
@@ -334,15 +350,16 @@ describe("buildStatusCommand", () => {
     expect(cmd).toContain("done");
   });
 
-  it("reloads the plot-strip template per frame using the fork-free $(<file) builtin", () => {
+  it("reloads the plot-strip template per frame using the fork-free read builtin", () => {
     const cmd = buildStatusCommand("garden");
     // Per-frame reload is required so a plot change picked up via writePlotStripTemplate
     // takes effect within ~120ms — without this, the cached template clobbers the
     // JS-set @garden_name back to the previous plot until the next USR1 tick.
-    expect(cmd).toContain(`_ptn=$(<"$pst")`);
-    // Must NOT use $(cat ...) here — that fork stacks SIGCHLDs on the inner loop's
-    // wait, the same wedge that motivated narrowing the SIGUSR1 trap above.
-    expect(cmd).not.toMatch(/_ptn=\$\(cat "\$pst"/);
+    expect(cmd).toContain(`IFS= read -r _ptn 2>/dev/null < "$pst";`);
+    // Must NOT be a command substitution: $(cat ...) and even $(<file) fork a
+    // subshell in bash 3.2, stacking SIGCHLDs on the inner loop's wait — the
+    // same wedge that motivated narrowing the SIGUSR1 trap above.
+    expect(cmd).not.toMatch(/_ptn=\$\(/);
   });
 
   it("animates the plot strip at pane level so the pane-scoped @garden_name set by setPaneVar isn't shadowed", () => {

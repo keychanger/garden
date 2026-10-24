@@ -474,6 +474,7 @@ export function buildStatusCommand(gardenRunner: string): string {
   const pst = PLOT_STRIP_TEMPLATE_FILE;
   const sent = PLOT_SPINNER_SENTINEL;
   const brailleClass = `[${SPINNER_FRAMES.join("")}]`;
+  const baked = SPINNER_FRAMES[0];
   const caseBranches = SPINNER_FRAMES.map((f, i) => `${i}) sf_char='${f}';;`).join(" ");
   // Event-driven status pane loop:
   //   - SIGUSR1 from refreshStatusPane() interrupts the wait and re-renders.
@@ -544,8 +545,13 @@ export function buildStatusCommand(gardenRunner: string): string {
     // per 60s of continuous animation, so this is one cat per ~animation cycle.
     `  pt_tpl=""; [ -r "$pst" ] && pt_tpl=$(cat "$pst" 2>/dev/null);`,
     // Animate if either the pane content or the plot strip has a live spinner.
+    // The spinner rows are found here, once per outer iteration, rather than
+    // by an awk per frame: _ovl holds each such row behind its cursor-position
+    // escape with every spinner glyph rewritten to the baked frame, so a frame
+    // repaints them with one builtin substitution and no fork.
     `  has_cs=0; has_ps=0;`,
-    `  if printf '%s' "$cur" | grep -q '${brailleClass}'; then has_cs=1; fi;`,
+    `  _ovl=$(printf '%s\\n' "$cur" | awk -v b='${brailleClass}' -v f='${baked}' '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }');`,
+    `  if [ -n "$_ovl" ]; then has_cs=1; fi;`,
     `  case "$pt_tpl" in *"${sent}"*) has_ps=1 ;; esac;`,
     // -------- diag auto-detector (REMOVE WITH ALL OTHER diag- PLUMBING) --------
     // Detects the spinner-overlay duplicate-row bug: visible pane has two
@@ -590,20 +596,22 @@ export function buildStatusCommand(gardenRunner: string): string {
     `      fc=$((fc + 1));`,
     `      si=$((fc % ${SPINNER_FRAMES.length}));`,
     `      case $si in ${caseBranches} esac;`,
-    // Partial per-line repaint via awk — full-pane redraw every frame visibly flickers static lines.
-    // Pipe form (printf | awk) instead of `awk <<<"$cur"`; the here-string's
-    // hidden temp-file fork compounds with USR1 trap forks and contributed
-    // to the wedge that motivated the trap-narrowing above.
+    // Partial per-line repaint of the spinner rows only — a full-pane redraw
+    // every frame visibly flickers static lines. One builtin printf of the
+    // rows _ovl holds, so a frame adds no fork (and no SIGCHLD) beside the
+    // sleep; an awk here forked a pipeline every frame.
     `      if [ $has_cs -eq 1 ]; then`,
-    `        printf '%s\\n' "$cur" | awk -v b='${brailleClass}' -v f="$sf_char" '$0 ~ b { gsub(b, f); printf "\\033[%d;1H%s", NR, $0 }';`,
+    `        printf '%s' "\${_ovl//${baked}/$sf_char}";`,
     `      fi;`,
     // Re-read pt_tpl per frame so a plot change picked up via writePlotStripTemplate
     // takes effect within ~120ms — without this, the cached template clobbers
     // the JS-set @garden_name back to the previous plot until the next USR1.
-    // $(<file) is a bash builtin (no fork, no SIGCHLD), so this stays clear of
-    // the trap-wedge that motivated the trap-narrowing above.
+    // The read builtin opens the file in this shell: no fork, so no SIGCHLD
+    // near the trap-wedge that motivated the trap-narrowing above. $(<file)
+    // still forks a subshell in bash 3.2; it only skips the exec of cat. The
+    // template is one line (writePlotStripTemplate joins segments with spaces).
     `      if [ -r "$pst" ]; then`,
-    `        _ptn=$(<"$pst");`,
+    `        IFS= read -r _ptn 2>/dev/null < "$pst";`,
     `        if [ "$_ptn" != "$pt_tpl" ]; then`,
     `          pt_tpl="$_ptn";`,
     `          case "$pt_tpl" in *"${sent}"*) has_ps=1 ;; *) has_ps=0 ;; esac;`,
