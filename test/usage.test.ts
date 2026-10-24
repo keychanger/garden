@@ -36,6 +36,7 @@ import {
   type ScopedOutcome,
 } from "../src/dashboard/usage.js";
 import { useTmpHome } from "./helpers.js";
+import { REVIEW_TIMEOUT_MS } from "../src/dashboard/registry.js";
 
 describe("normalizeUsage", () => {
   it("extracts the flat 5h/weekly meters and a scoped meter from the limits array", () => {
@@ -363,6 +364,54 @@ describe("scopedModelInUse — gate the Fable fetch on an active Fable worker", 
     const observed = vi.fn(() => "claude-fable-5");
     expect(scopedModelInUse(["Fable"], now, workers, observed)).toBe(false);
     expect(observed).not.toHaveBeenCalled();
+  });
+
+  // A harness can move a pinned session off its pin (Claude Code's startup
+  // model dialog did on 2026-09-09), and the watchdog records what each live
+  // session runs in runningModel (model-drift.ts).
+  it("is true when a pinned worker is observed running a scoped model", () => {
+    const workers = [{ name: "w", model: "opus", runningModel: "fable", ...fresh }] as never;
+    expect(scopedModelInUse(["Fable"], now, workers)).toBe(true);
+  });
+  it("answers from the watchdog's reading without reading the transcript", () => {
+    const workers = [{ name: "b", runningModel: "fable", ...fresh }] as never;
+    const observed = vi.fn(() => "claude-opus-5");
+    expect(scopedModelInUse(["Fable"], now, workers, observed)).toBe(true);
+    expect(observed).not.toHaveBeenCalled();
+  });
+
+  // A reviewer, resolver or ci-fix agent spends on its worker's behalf while
+  // the worker itself sits idle and fires no hook, and a builtin crew's review
+  // seat is Fable.
+  describe("a worker's headless agent", () => {
+    const launched = { reviewStartedAt: now - 60_000 };
+    it.each([
+      ["reviewing", "reviewer"],
+      ["resolving", "resolver"],
+      ["ci-fixing", "ciFix"],
+    ] as const)("counts while a %s worker's %s runs a scoped model, however long the worker has been idle", (prState, role) => {
+      const workers = [{ name: "w", model: "opus", prState, ...launched, ...stale }] as never;
+      const headless = vi.fn(() => "fable");
+      expect(scopedModelInUse(["Fable"], now, workers, undefined, headless)).toBe(true);
+      expect(headless).toHaveBeenCalledWith(expect.objectContaining({ name: "w" }), role);
+    });
+    it("does not count while the agent runs an unscoped model", () => {
+      const workers = [{ name: "w", prState: "reviewing", ...launched, ...stale }] as never;
+      expect(scopedModelInUse(["Fable"], now, workers, undefined, () => "opus")).toBe(false);
+    });
+    it("stops counting a launch older than the timeout that kills it", () => {
+      const workers = [{ name: "w", prState: "reviewing", reviewStartedAt: now - REVIEW_TIMEOUT_MS - 1000, ...stale }] as never;
+      expect(scopedModelInUse(["Fable"], now, workers, undefined, () => "fable")).toBe(false);
+    });
+    it("asks nothing of a state that runs no headless agent, or one this build does not know", () => {
+      const workers = [
+        { name: "a", prState: "merge-pending", ...launched, ...stale },
+        { name: "b", prState: "some-later-state", ...launched, ...stale },
+      ] as never;
+      const headless = vi.fn(() => "fable");
+      expect(scopedModelInUse(["Fable"], now, workers, undefined, headless)).toBe(false);
+      expect(headless).not.toHaveBeenCalled();
+    });
   });
 });
 

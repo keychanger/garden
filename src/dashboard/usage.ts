@@ -27,7 +27,7 @@ import fs from "node:fs";
 import https from "node:https";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { anyAnthropicMeteredProject } from "../config.js";
+import { anyAnthropicMeteredProject, loadConfig } from "../config.js";
 import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { readCodexUsage, type CodexUsageData } from "./codex-usage.js";
@@ -40,8 +40,9 @@ import {
 } from "./credentials.js";
 import { withFileLock } from "./file-lock.js";
 import { log } from "./log.js";
-import { readRegistry, type WorkerEntry } from "./registry.js";
+import { readRegistry, REVIEW_TIMEOUT_MS, type WorkerEntry } from "./registry.js";
 import { readLatestTranscriptModel, resolveTranscriptPath } from "./conversation.js";
+import type { HeadlessRole } from "./harness/types.js";
 
 // Control tree, not SESSIONS_DIR: every writer (usage poller, the Stop hook's
 // `_usage-refresh`, `garden usage refresh`, `garden login`) runs unsandboxed,
@@ -901,27 +902,49 @@ function weeklyBarMoved(baseline: number | undefined, live: number | undefined):
 // scoped model itself. Reading the pin alone reported "no scoped worker" for a
 // fleet that was entirely Fable, pinning the bar to the 12h keepalive forever
 // (diagnosed 2026-07-25: three live claude-fable-5 workers, every one unpinned).
-// `observedModel` resolves what the worker is really running; the pin is kept
-// as the cheap first answer, and an unresolvable model counts as not-scoped —
-// the safe direction for the throttled endpoint's budget.
+// Nor is the pin the answer when it exists: a harness can move a pinned session
+// off it (Claude Code's startup model dialog did on 2026-09-09). So the
+// watchdog's reading of the running model (`runningModel`, model-drift.ts)
+// comes first, then the pin, and `observedModel` reads the transcript only for
+// a worker neither names. An unresolvable model counts as not-scoped — the safe
+// direction for the throttled endpoint's budget.
+//
+// A worker's reviewer, resolver or ci-fix agent spends too, while the worker
+// itself sits idle and fires no hook; builtin crews review on Fable.
+// `headlessModel` names the model that agent was launched on.
 export function scopedModelInUse(
   scopedLabels: string[],
   nowMs: number,
   workers: WorkerEntry[],
   observedModel?: (w: WorkerEntry) => string | undefined,
+  headlessModel?: (w: WorkerEntry, role: HeadlessRole) => string | undefined,
 ): boolean {
   const labels = (scopedLabels.length ? scopedLabels : ["fable"]).map((l) => l.toLowerCase());
+  const scoped = (model: string | undefined): boolean =>
+    !!model && labels.some((l) => model.toLowerCase().includes(l));
   for (const w of workers) {
+    // The agent is live from its launch until the timeout that kills it.
+    const role = headlessRole(w.prState);
+    if (role && w.reviewStartedAt !== undefined && nowMs - w.reviewStartedAt <= REVIEW_TIMEOUT_MS
+        && scoped(headlessModel?.(w, role))) return true;
     // Liveness first: observedModel reads the worker's transcript off disk, and
     // a worker that has been quiet past the window cannot open the gate however
     // it is configured.
     if (nowMs - (w.lastEventAt ?? 0) > SCOPED_ACTIVE_MS) continue;
-    const pinned = w.model;
-    const model = (pinned ?? observedModel?.(w) ?? "").toLowerCase();
-    if (!model) continue;
-    if (labels.some((l) => model.includes(l))) return true;
+    if (scoped(w.runningModel ?? w.model ?? observedModel?.(w))) return true;
   }
   return false;
+}
+
+// The headless agent a worker's prState runs in its worktree. A state this
+// build does not know runs none.
+function headlessRole(state: string | undefined): HeadlessRole | undefined {
+  switch (state) {
+    case "reviewing": return "reviewer";
+    case "resolving": return "resolver";
+    case "ci-fixing": return "ciFix";
+    default: return undefined;
+  }
 }
 
 // What a worker is actually running, read from its transcript. Only claude-code
@@ -941,16 +964,44 @@ function observedWorkerModel(w: WorkerEntry): string | undefined {
 // IO wrapper over scopedModelInUse: reads every project's workers from the
 // registry. A read failure degrades to "not in use" (the idle keepalive
 // cadence) — the safe direction for the throttled endpoint's tiny budget.
-function anyScopedModelWorkerActive(
+async function anyScopedModelWorkerActive(
   prior: UsageSnapshot | null | undefined,
   nowMs: number,
-): boolean {
+): Promise<boolean> {
   try {
     const labels = (prior?.data?.scoped ?? []).map((s) => s.label);
-    const workers = Object.values(readRegistry().workers).flat();
-    return scopedModelInUse(labels, nowMs, workers, observedWorkerModel);
+    const byProject = Object.entries(readRegistry().workers);
+    const workers = byProject.flatMap(([, entries]) => entries);
+    const headless = await headlessModelReader(byProject);
+    return scopedModelInUse(labels, nowMs, workers, observedWorkerModel, headless);
   } catch {
     return false;
+  }
+}
+
+// The model a worker's headless agent runs on, resolved as its launch resolved
+// it. Loaded only while some worker is in a headless state, and dynamically:
+// roles.ts reaches the workflow registry, whose poller handlers import this
+// module. Undefined when the config cannot be read, which leaves the workers'
+// own models to decide.
+async function headlessModelReader(
+  byProject: [string, WorkerEntry[]][],
+): Promise<((w: WorkerEntry, role: HeadlessRole) => string | undefined) | undefined> {
+  if (!byProject.some(([, entries]) => entries.some((w) => headlessRole(w.prState)))) return undefined;
+  try {
+    const { resolveReviewRole } = await import("./roles.js");
+    const config = loadConfig();
+    const projectOf = new Map(byProject.flatMap(([name, entries]) => entries.map((w) => [w, name] as const)));
+    return (w, role) => {
+      const project = config.projects[projectOf.get(w) ?? ""];
+      try {
+        return project ? resolveReviewRole(project, w.workflow ?? "default", role, config, w).model : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+  } catch {
+    return undefined;
   }
 }
 
@@ -1284,7 +1335,7 @@ async function fetchScopedIfDue(
   primary: PrimaryOutcome,
 ): Promise<ScopedOutcome> {
   if (primary.error) return { fetched: false };
-  const active = anyScopedModelWorkerActive(prior, Date.now());
+  const active = await anyScopedModelWorkerActive(prior, Date.now());
   const liveWeeklyPct = primary.data?.weekly?.pct;
   // Force skips the cadence, since the operator is asking, but not a 429's hold.
   const due = force
