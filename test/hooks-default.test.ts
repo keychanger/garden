@@ -144,11 +144,21 @@ describe("onToolActivity — mid-review-edit marker", () => {
     expect(interruptStamps()).toHaveLength(0);
   });
 
-  it("ignores mutating tools outside the reviewing state", () => {
-    for (const prState of [undefined, "working", "merge-pending", "merged", "done"] as const) {
+  it("ignores mutating tools outside review and merge-pending", () => {
+    for (const prState of [undefined, "working", "resolving", "ci-fixing", "merged", "done"] as const) {
       workerHookHandlers.onToolActivity(toolCtx({ prState }, "Edit"));
     }
     expect(interruptStamps()).toHaveLength(0);
+  });
+
+  // After the verdict the merge queue rebases and pushes the tree it cleared,
+  // and its cleanWorktree discards an uncommitted edit with no reflog. The
+  // merge waits only while the agent is working, so a worker prompted in that
+  // window that asks a question, is held, or stops before committing reached it.
+  it("stamps a mutating tool while the verdict waits to merge", () => {
+    workerHookHandlers.onToolActivity(toolCtx({ prState: "merge-pending" }, "Edit"));
+    expect(interruptStamps()).toHaveLength(1);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
   });
 
   it("stamps once — an already-marked review is not re-stamped", () => {

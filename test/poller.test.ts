@@ -3122,6 +3122,68 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  // The verdict poll reads the entry once, when it starts. An edit and commit the
+  // worker makes while that poll is still dispatching (the Haiku fallback alone
+  // can hold it for 45 s) is recorded by the hook, but after that read, and the
+  // mergeReadySha the dispatch then stamps names the worker's new commit.
+  it("does not merge a commit the worker made while the verdict was being dispatched", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "reviewing",
+        agentStatus: "idle",
+        reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123",
+        preReviewSha: "abc123",
+      }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? "Reviewed the diff; the suite is green." : "{}");
+    vi.mocked(extractReviewVerdict).mockImplementation(() => {
+      // Mid-call: the prompted worker's Edit is recorded and its commit lands.
+      updateWorkerFields("myproject", "bold-ash", { reviewInterruptedAt: Date.now() });
+      vi.mocked(getBranchHeadSha).mockReturnValue("worker789");
+      return "CLEAN";
+    });
+
+    poll("myproject");
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({
+      prState: "merge-pending", mergeReadySha: "worker789",
+    });
+
+    // The worker's turn is over; the next pass reaches the merge queue.
+    poll("myproject");
+
+    expect(rebaseBranch).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({
+      prState: "working", pendingReviewAt: expect.any(Number), reviewInterruptedAt: undefined,
+    });
+  });
+
+  // The hook marks an edit made while the verdict waits to merge. It moves no
+  // HEAD when it is not committed, and cleanWorktree would discard it.
+  it("sends a worker back when it edited after the verdict without committing", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "asking",
+        mergePendingAt: new Date(Date.now() - 60_000).toISOString(),
+        mergeReadySha: "abc123",
+        reviewInterruptedAt: Date.now() - 5_000,
+      }),
+    ]);
+
+    poll("myproject");
+
+    expect(cleanWorktree).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({
+      prState: "working", pendingReviewAt: expect.any(Number), reviewInterruptedAt: undefined,
+    });
+  });
+
   it("refreshes the base through the bounded fetch before merging, and warns when it times out", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "merge-pending", mergePendingAt: new Date(Date.now() - 1000).toISOString() }),

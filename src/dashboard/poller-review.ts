@@ -1368,7 +1368,7 @@ export function resetToWorkingOnWorkerPush(
   log.info(
     "poller",
     context === "merge"
-      ? "new commits after the review verdict, resetting to working"
+      ? "new work after the review verdict, resetting to working"
       : `new commits during ${context}, resetting to working`,
     { worker: entry.name, data: { project: projectName } },
   );
@@ -1392,6 +1392,8 @@ export function resetToWorkingOnWorkerPush(
     quotaRetryCount: undefined,
     reviewFallbackHarness: undefined,
     reviewRetryAt: undefined,
+    reviewInterruptedAt: undefined,
+    reviewBashBaselines: undefined,
     pendingReviewAt: hasCommits ? Date.now() : entry.pendingReviewAt,
   });
   refreshDashboard();

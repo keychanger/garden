@@ -697,18 +697,25 @@ function toolUseId(ctx: HookContext): string | null {
   return typeof id === "string" && id ? id : null;
 }
 
-// PreToolUse for Bash: while a review is in flight, record the tree as the
-// command starts so its PostToolUse can tell whether the command wrote.
+// From the review's launch until its verdict merges: the reviewer certifies
+// the tree, and the merge queue then rebases and pushes it.
+function editsWatched(prState: WorkerEntry["prState"]): boolean {
+  return prState === "reviewing" || prState === "merge-pending";
+}
+
+// PreToolUse for Bash: while a review is in flight or its verdict waits to
+// merge, record the tree as the command starts so its PostToolUse can tell
+// whether the command wrote.
 // Keyed by tool_use_id because the worker can run Bash calls in parallel.
 const onToolStarting: HookMethod = (ctx) => {
   if (!ctx.workerInfo || isOtherThread(ctx)) return;
   const { project, name, entry } = ctx.workerInfo;
-  if (entry.prState !== "reviewing" || entry.reviewInterruptedAt || !entry.worktreePath) return;
+  if (!editsWatched(entry.prState) || entry.reviewInterruptedAt || !entry.worktreePath) return;
   const id = toolUseId(ctx);
   const fingerprint = id ? worktreeFingerprint(entry.worktreePath) : null;
   if (!id || !fingerprint) return;
   updateWorkerFieldsIf(project, name, current => ({
-    fields: current.prState === "reviewing"
+    fields: editsWatched(current.prState)
       ? { reviewBashBaselines: { ...current.reviewBashBaselines, [id]: fingerprint } }
       : null,
     result: undefined,
@@ -740,18 +747,20 @@ function bashLeftTreeUnchanged(ctx: HookContext): boolean {
 // the reviewer — which shares the worker's worktree — is now certifying a
 // tree being rewritten under it (the operator prompted the worker mid-review;
 // the reviewer's own tool calls never reach here, GARDEN_REVIEWER=1
-// short-circuits in the dispatcher). Stamp the interruption and poke the
-// poller; the cancel itself is the poller's job — hooks write agentStatus,
+// short-circuits in the dispatcher). After the verdict it means the worker
+// changed what was cleared to merge, committed or not, and the merge queue's
+// cleanWorktree would discard an uncommitted edit. Stamp it and poke the
+// poller; the cancel or reset is the poller's job — hooks write agentStatus,
 // the poller writes prState.
 function markReviewInterrupted(ctx: HookContext): void {
   if (!ctx.workerInfo) return;
   const { project, name, entry } = ctx.workerInfo;
-  if (entry.prState !== "reviewing" || entry.reviewInterruptedAt) return;
+  if (!editsWatched(entry.prState) || entry.reviewInterruptedAt) return;
   const toolName = ctx.input.tool_name;
   if (typeof toolName !== "string" || !mutatesWorktree(ctx, toolName)) return;
   updateWorkerFields(project, name, { reviewInterruptedAt: Date.now() });
   triggerProjectPoll(project);
-  log.info("hook", "mutating tool during review, marked for cancel", {
+  log.info("hook", "mutating tool before merge, marked for re-review", {
     worker: name,
     data: { project, tool: toolName },
   });

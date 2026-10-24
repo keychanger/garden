@@ -208,8 +208,14 @@ export function handleMergePending(
 
   // Merge only the SHA that was cleared for it. Merge-pending can last minutes
   // (CI, the serial queue), and a worker prompted in that window commits work
-  // no reviewer saw; with nothing checking, it merged anyway.
-  if (entry.mergeReadySha && headSha && headSha !== entry.mergeReadySha) {
+  // no reviewer saw; with nothing checking, it merged anyway. A review-interrupt
+  // mark sends it back too: the hook sets one for a mutating tool from the
+  // review's launch until this merge. That covers an edit the worker has not
+  // committed, which moves no HEAD and which cleanWorktree below would
+  // discard, and one made while the verdict poll was still dispatching after
+  // it read the entry, whose stamp can then name the worker's own commit.
+  if (entry.reviewInterruptedAt
+      || (entry.mergeReadySha && headSha && headSha !== entry.mergeReadySha)) {
     resetToWorkingOnWorkerPush(projectName, wtPath, baseBranch, entry, "merge");
     return true;
   }
