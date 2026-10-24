@@ -44,8 +44,12 @@ reads or runs.
   home directory, and garden's control plane are refused). Existing targets must be
   directories, and symlinked paths are stored as their canonical targets. A bead-intake
   project's workers may also write its beads store; a configured `beadsDir` is held to
-  the same refusals (`resolveBeadsWriteRoot`). Everything else is read-only or denied at
-  the kernel.
+  the same refusals (`resolveBeadsWriteRoot`). Claude Code adds a grant of its own: the
+  repository's shared git common dir (`<main>/.git`), which a linked worktree's commits
+  write through, so its refs, objects and every other worktree's admin entry are writable
+  too; a Codex worker gets the same directory through its `writable_roots`. The files
+  carved back out of it, and what the rest exposes, are under "Git admin-file isolation"
+  below and in the residuals. Everything else is read-only or denied at the kernel.
 - **Egress allowlist.** Network is restricted to Anthropic, GitHub, npm, the project's
   git remote host, and any per-project `sandboxDomains`. A worker cannot POST to an
   arbitrary host. (Codex is the exception — see residuals.)
