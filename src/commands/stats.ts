@@ -8,7 +8,9 @@
 // workflow). Every metric event carries a workerId; worker.created carries the
 // config for that workerId. We build the join from the FULL created history
 // (never time-windowed) so a worker created before a `--since` window still
-// resolves its config, then window only the metric events.
+// resolves its config, then window only the metric events. worker.tokens is
+// cumulative, so a window is charged its in-window high minus the worker's
+// last sample before the window.
 import { readTelemetryEvents, type LedgerEvent } from "../dashboard/telemetry.js";
 import { getProject } from "../config.js";
 import { output, isTTY } from "../output.js";
@@ -66,7 +68,21 @@ interface Agg {
   autoContinues: number;
   // worker.tokens is cumulative, so a worker's total is its highest-mergeCount
   // sample; keep that per worker and sum across the group.
-  tokensByWorker: Map<string, { mergeCount: number; output: number }>;
+  tokensByWorker: Map<string, TokenSample>;
+}
+
+interface TokenSample {
+  mergeCount: number;
+  output: number;
+}
+
+// Keeps the highest-mergeCount worker.tokens sample per worker.
+function keepLatestTokens(samples: Map<string, TokenSample>, e: LedgerEvent): void {
+  const mergeCount = num(e.mergeCount);
+  const prev = samples.get(e.workerId);
+  if (!prev || mergeCount >= prev.mergeCount) {
+    samples.set(e.workerId, { mergeCount, output: num(e.outputTokens) });
+  }
 }
 
 interface StatRow {
@@ -129,8 +145,16 @@ function parseArgs(args: string[]): Options {
 function aggregate(events: LedgerEvent[], opts: Options): StatRow[] {
   // Join config from the full created history — never time-windowed.
   const configByWorker = new Map<string, CreatedSnapshot>();
+  // The cumulative token count each worker had reached before the window
+  // (telemetry.ts: per-cycle cost is a read-time diff of consecutive samples).
+  // Without it, a worker that merged before the window charged its whole
+  // history to the window's merges.
+  const tokensBeforeWindow = new Map<string, TokenSample>();
   for (const e of events) {
     if (e.event === "worker.created") configByWorker.set(e.workerId, e as unknown as CreatedSnapshot);
+    else if (e.event === "worker.tokens" && opts.sinceMs !== undefined && Date.parse(e.ts) < opts.sinceMs) {
+      keepLatestTokens(tokensBeforeWindow, e);
+    }
   }
 
   const groups = new Map<string, Agg>();
@@ -173,14 +197,9 @@ function aggregate(events: LedgerEvent[], opts: Options): StatRow[] {
       case "continue.dispatched":
         a.autoContinues++;
         break;
-      case "worker.tokens": {
-        const mergeCount = num(e.mergeCount);
-        const prev = a.tokensByWorker.get(e.workerId);
-        if (!prev || mergeCount >= prev.mergeCount) {
-          a.tokensByWorker.set(e.workerId, { mergeCount, output: num(e.outputTokens) });
-        }
+      case "worker.tokens":
+        keepLatestTokens(a.tokensByWorker, e);
         break;
-      }
       default:
         break;
     }
@@ -189,7 +208,9 @@ function aggregate(events: LedgerEvent[], opts: Options): StatRow[] {
   const rows: StatRow[] = [];
   for (const a of groups.values()) {
     let outputTokens = 0;
-    for (const t of a.tokensByWorker.values()) outputTokens += t.output;
+    for (const [workerId, t] of a.tokensByWorker) {
+      outputTokens += Math.max(0, t.output - (tokensBeforeWindow.get(workerId)?.output ?? 0));
+    }
     const pct = (n: number, d: number): number | null => (d > 0 ? Math.round((n / d) * 100) : null);
     rows.push({
       group: a.key,

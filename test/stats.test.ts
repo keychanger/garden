@@ -110,6 +110,39 @@ describe("garden stats", () => {
     expect(gRecent === undefined || gRecent.merges === 0).toBe(true);
   });
 
+  // worker.tokens is cumulative, so a worker that merged before the window
+  // must not charge its whole history to the window's merges.
+  it("--since charges only the tokens spent inside the window", async () => {
+    const before = new Date(Date.now() - 3 * 86_400_000).toISOString();
+    const inside = new Date(Date.now() - 3_600_000).toISOString();
+    writeLedger([
+      ev("worker.created", "garden/w1/1", { harness: "codex", workflow: "default" }, before),
+      ev("merge", "garden/w1/1", { mergeCount: 1 }, before),
+      ev("worker.tokens", "garden/w1/1", { mergeCount: 1, outputTokens: 1000 }, before),
+      ev("merge", "garden/w1/1", { mergeCount: 2 }, before),
+      ev("worker.tokens", "garden/w1/1", { mergeCount: 2, outputTokens: 3000 }, before),
+      ev("merge", "garden/w1/1", { mergeCount: 3 }, inside),
+      ev("worker.tokens", "garden/w1/1", { mergeCount: 3, outputTokens: 4000 }, inside),
+      ev("merge", "garden/w1/1", { mergeCount: 4 }, inside),
+      ev("worker.tokens", "garden/w1/1", { mergeCount: 4, outputTokens: 6000 }, inside),
+      // Created inside the window: nothing before it to subtract.
+      ev("worker.created", "garden/w2/2", { harness: "codex", workflow: "default" }, inside),
+      ev("merge", "garden/w2/2", { mergeCount: 1 }, inside),
+      ev("worker.tokens", "garden/w2/2", { mergeCount: 1, outputTokens: 500 }, inside),
+    ]);
+    const windowed = await runStats(["--since", "1d"]);
+    const g = windowed.rows.find(r => String(r.group).startsWith("codex"))!;
+    expect(g.merges).toBe(3);
+    expect(g.outputTokens).toBe(3000 + 500); // (6000 - 3000) + 500
+    expect(g.outputTokensPerMerge).toBe(1167);
+
+    // Unwindowed, the whole cumulative counts, as before.
+    const all = await runStats([]);
+    const gAll = all.rows.find(r => String(r.group).startsWith("codex"))!;
+    expect(gAll.merges).toBe(5);
+    expect(gAll.outputTokens).toBe(6000 + 500);
+  });
+
   it("returns no rows for an empty ledger", async () => {
     writeLedger([]);
     const { rows } = await runStats([]);
