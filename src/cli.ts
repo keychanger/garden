@@ -75,7 +75,7 @@ Projects:
   init                           Initialize garden config
   add [path]                     Add a project (defaults to current directory)
   create <path> [--org <org>]    Scaffold a new project: mkdir, git init, private GitHub repo (under <org>, else the gh-authed account), add to active plot
-  remove <name>                  Remove a project (also purges from plots)
+  remove <name>                  Remove a project with no registered workers (also purges from plots)
   list, ls                       List all projects
   config <project> [key] [value] View or set project config
                                  keys incl. displayName (label shown in the

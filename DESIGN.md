@@ -207,7 +207,7 @@ Plots scale past the nine-project hotkey ceiling: you can register as many proje
 
 **Project color in the right-pane border**: Every registered project carries a stable `logColor` (palette in `src/log-palette.ts`, auto-assigned by the `loadConfig()` migration), used to color project names in `garden logs`. The right pane's top border echoes that color as a small `●` before the worker/shell label — the one place project identity is otherwise absent (the border names the worker and task, never the project). The dot is gated on the `@garden_color` pane variable (a tmux color name like `colour208`), set by `setPaneProjectColor` (`src/dashboard/header.ts`) at the same sites that set `@garden_clock`; the shared `pane-border-format` renders `#[fg=#{@garden_color}]●#[default]` — tmux expands the nested variable before parsing the style, and the style must stay comma-free like the clock's. The color deliberately appears nowhere else in the dashboard (status pane and bottom bar already name the project in text), and the palette stores 256-color indices, deriving the ANSI form (`logColorAnsi`, log lines) and the tmux form (`logColorTmux`, border format) from the same index.
 
-**Project removal** (`garden remove <project>`) also calls `purgeProjectFromPlots` to strip the project from every plot's project list. Empty plots are kept — delete explicitly with `garden plot delete`.
+**Project removal** (`garden remove <project>`) also calls `purgeProjectFromPlots` to strip the project from every plot's project list. Empty plots are kept — delete explicitly with `garden plot delete`. It refuses, naming them, while the registry holds any worker for the project: the status pane and the pollers resolve projects through the config, so those workers would keep running with no row, no review and no merge, and removing them is the operator's act (`garden workers stop <worker>`). An unreadable registry refuses too, since it cannot show there are none.
 
 ## Hotkeys
 
@@ -760,7 +760,7 @@ Planner follows designer's status-decoration form: a grey `planner` identity bad
 garden init                        # Initialize ~/.garden, check for tmux
 garden add [path]                  # Add a project (defaults to cwd, name = basename)
 garden create <path> [--org <org>] # Scaffold a new project: mkdir, git init -b main, private GitHub repo under <org> (else the gh-authed account), add to active plot
-garden remove <name>               # Remove a project
+garden remove <name>               # Remove a project (refused while it has registered workers)
 garden list                        # List all projects
 garden config <project> [key] [val]  # View or set project config
 garden diary [project] [--path]    # Open the project's diary in $EDITOR (--path prints the file path)
