@@ -161,6 +161,17 @@ function codexStatusLineFlag(): string {
   return ` -c ${shellEscape(toml)}`;
 }
 
+// Codex reads its project instruction file only up to project_doc_max_bytes,
+// 32 KiB by default (verified against 0.163.0 with `codex debug prompt-input`),
+// and garden's rules fill ~20KB of that before the repo's own AGENTS.md begins:
+// a worker saw the first 13-17KB of its repo's instructions. Raised so the
+// worker reads the composed file whole, as a Claude worker reads AGENTS.md
+// through CLAUDE.md's @AGENTS.md import. Headless runs keep the default: the
+// review prompt already carries the repo's docs, and a second whole copy would
+// crowd Codex's window.
+const CODEX_PROJECT_DOC_MAX_BYTES = 1024 * 1024;
+const CODEX_PROJECT_DOC_FLAG = ` -c project_doc_max_bytes=${CODEX_PROJECT_DOC_MAX_BYTES}`;
+
 // Codex/OpenAI transient backend errors (rate limit / 5xx / overload /
 // stream drop) worth a retry, vs. a genuine review failure. Scanned over the
 // last few non-empty lines of the STDERR sidecar (where codex exec emits
@@ -289,10 +300,10 @@ export const codexCore: HarnessCore = {
     const trust = "--dangerously-bypass-hook-trust";
     const sandbox = codexSandboxFlags(plan.runtimeProject, opts.worktreeGitDirs);
     const hooks = codexHookFlags(resolveHookRunner());
-    const statusLine = codexStatusLineFlag();
+    const flags = `${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}${codexStatusLineFlag()}${CODEX_PROJECT_DOC_FLAG}`;
     return opts.resume
-      ? `${plan.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}${statusLine}`
-      : `${plan.envPrefix}codex ${trust} ${sandbox} ${hooks}${modelFlag}${effortFlag}${statusLine}`;
+      ? `${plan.envPrefix}codex resume ${shellEscape(opts.sessionId)} ${flags}`
+      : `${plan.envPrefix}codex ${flags}`;
   },
 
   // Headless one-shot (reviewer/resolver/ci-fix) — the spike-verified path.
@@ -856,14 +867,17 @@ export function initialCodexActivity(seed?: string): string {
 
 // Bounds for the rollout reads on the status and hook paths. The tail serves
 // the latest-prompt and running-model reads. The head has to clear the preamble before the
-// opening prompt, which is NOT small: Codex records the composed instructions
-// (garden's rules ride the worktree AGENTS.override.md) up front, measured at 70-90KB
-// for real garden workers — so the head bound has a wide margin over that, and
-// the read stops once the opening prompt replaces the creation placeholder.
+// opening prompt, which is NOT small: Codex records the composed instruction
+// file (garden's rules plus the repo's AGENTS.md, in the worktree's
+// AGENTS.override.md) up front twice, as the instructions message and again in
+// the world_state snapshot (verified against 0.163.0), and the worker launch
+// lets that file run to CODEX_PROJECT_DOC_MAX_BYTES. So the head bound clears
+// two cap-sized copies and the rest of the preamble, and the read stops once
+// the opening prompt replaces the creation placeholder.
 // Both stay well under readTurns' escalating tail: readActivity runs on
 // the status render and hook paths, readTurns only when the history view is open.
 const ACTIVITY_TAIL_BYTES = 256 * 1024;
-const ACTIVITY_HEAD_BYTES = 512 * 1024;
+const ACTIVITY_HEAD_BYTES = 4 * CODEX_PROJECT_DOC_MAX_BYTES;
 const ACTIVITY_MAX_CHARS = 120;
 
 // The opening operator prompt, condensed — Codex extracts the same message as

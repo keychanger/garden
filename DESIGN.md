@@ -84,6 +84,18 @@ unscoped, through a repo's `CLAUDE.md` `@AGENTS.md` import while older builds
 composed into `AGENTS.md`, pushed their review commits "so the poller sees"
 them; the review prompts now also say not to push.
 
+Codex reads its instruction file only up to `project_doc_max_bytes`, 32 KiB by
+default, and garden's rules alone fill about 20KB of that. The worker launch
+therefore passes `-c project_doc_max_bytes=1048576`, so a Codex worker reads the
+composed file whole, as a Claude worker reads `AGENTS.md` through its
+`CLAUDE.md` import. Headless Codex runs keep the default: the review prompt
+already carries the repo's docs, and a second whole copy would crowd Codex's
+context window; the scope note sits at the top, where a capped read keeps it.
+The rollout records the composed file twice ahead of the opening prompt (the
+instructions message and the `world_state` snapshot), so the head read that
+finds that prompt for the status row and thread titles (`ACTIVITY_HEAD_BYTES`,
+`codex-core.ts`) is derived from the same cap.
+
 ### Agent instruction files
 
 A project's instructions live in **one** file. Claude Code reads `CLAUDE.md` and

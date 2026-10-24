@@ -418,6 +418,25 @@ describe("codex adapter dialect", () => {
     expect(resumed).toContain("-c model_reasoning_effort=high");
   });
 
+  it("lifts Codex's 32 KiB project-doc cap on the worker launch and its resume", async () => {
+    // The composed rules file is garden's ~20KB of rules followed by the repo's
+    // own file. At Codex's default cap a worker saw only the first 13-17KB of
+    // the repo's instructions; a Claude worker reads the whole file through
+    // CLAUDE.md's @AGENTS.md import.
+    const { getHarnessCore } = await importCore();
+    const codex = getHarnessCore("codex");
+    const fresh = codex.buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", settingsFile: "/ignored",
+      launchPlan: workerPlan("codex"),
+    });
+    const resumed = codex.buildAgentCommand({
+      sessionId: "019f-abc", resume: true, contextFile: "/ignored", settingsFile: "/ignored",
+      launchPlan: workerPlan("codex"),
+    });
+    expect(fresh).toContain(" -c project_doc_max_bytes=1048576");
+    expect(resumed).toContain(" -c project_doc_max_bytes=1048576");
+  });
+
   it("adds the worktree's git dirs to the sandbox writable roots", async () => {
     const { getHarnessCore } = await importCore();
     // A linked worktree's git store lives at the main checkout's .git, outside
@@ -780,6 +799,33 @@ describe("codex readActivity (status-pane summary)", () => {
     const { readCodexOpeningPrompt } = await import("../src/dashboard/harness/codex-core.js");
     expect(readCodexOpeningPrompt(path.join(HERE, "fixtures/codex/rollout-response-messages.jsonl")))
       .toBe("Investigate why Codex workers have blank task summaries.\nPlease implement the fix.");
+  });
+
+  // Codex 0.163 writes the composed AGENTS.md into the rollout twice ahead of
+  // the opening prompt (the instructions message and the world_state
+  // snapshot), and the worker launch lets that file run to the 1 MiB
+  // project-doc cap, so the prompt can sit past 2MB into the file.
+  it("finds the opening prompt behind two cap-sized copies of the instructions", async () => {
+    const { readCodexOpeningPrompt } = await import("../src/dashboard/harness/codex-core.js");
+    const body = "- repo convention line\n".repeat(48_000).slice(0, 1024 * 1024);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-head-"));
+    const rollout = path.join(dir, "rollout.jsonl");
+    const records = [
+      { type: "session_meta", payload: { base_instructions: "b".repeat(22_000) } },
+      { type: "response_item", payload: { type: "message", role: "user", content: [
+        { type: "input_text", text: `# AGENTS.md instructions for /wt\n\n<INSTRUCTIONS>\n${body}\n</INSTRUCTIONS>` },
+      ] } },
+      { type: "world_state", payload: { state: { agents_md: { text: body } } } },
+      { type: "response_item", payload: { type: "message", role: "user", content: [
+        { type: "input_text", text: "Fix the flaky merge test." },
+      ] } },
+    ];
+    fs.writeFileSync(rollout, records.map(r => JSON.stringify(r)).join("\n") + "\n");
+    try {
+      expect(readCodexOpeningPrompt(rollout)).toBe("Fix the flaky merge test.");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("heals a task left as the worker's own name by the default codex title", async () => {
