@@ -247,6 +247,33 @@ describe("reconcileCodexInputRequests", () => {
     expect(worker.agentStatus).toBe("idle");
   });
 
+  // An Esc in the pane ends the turn with a developer <turn_aborted> message and
+  // event_msg/turn_aborted: no task_complete and no Stop. Until the next prompt
+  // the row spun and a merge-pending worker stayed deferred (up to 3,990s seen).
+  it("idles a Codex worker whose turn the operator interrupted", () => {
+    const worker = entry({
+      name: "bleak-tall-rook",
+      lastEventAt: Date.parse("2026-09-23T16:58:41.902Z"),
+      transcriptPath: fixture("rollout-turn-aborted.jsonl"),
+    });
+    workers.garden = [worker];
+
+    expect(reconcileCodexInputRequests()).toBe(true);
+    expect(worker.agentStatus).toBe("idle");
+    expect(triggerProjectPoll).toHaveBeenCalledWith("garden");
+  });
+
+  it("leaves a worker prompted after the interrupt working", () => {
+    const worker = entry({
+      lastEventAt: Date.parse("2026-09-23T16:59:07.963Z") + 1000,
+      transcriptPath: fixture("rollout-turn-aborted.jsonl"),
+    });
+    workers.garden = [worker];
+
+    expect(reconcileCodexInputRequests()).toBe(false);
+    expect(worker.agentStatus).toBe("working");
+  });
+
   it("leaves working alone while activity follows the newest task_complete", () => {
     const worker = entry({
       agentStatus: "working",

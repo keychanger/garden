@@ -590,6 +590,12 @@ export interface CodexTurnState {
 // over exactly when no response_item follows the newest task_complete. The
 // trailing `token_count` event_msg that Codex writes alongside task_complete is
 // not activity and is correctly ignored.
+//
+// An interrupted turn (Esc in the pane) ends with `turn_aborted` instead: Codex
+// writes a developer `<turn_aborted>` message, then event_msg/turn_aborted, and
+// neither a task_complete nor a Stop. Without it as a terminator an interrupted
+// worker read `working` until its next prompt (up to 66 min on record) and the
+// merge gate deferred it the whole time.
 export function readCodexTurnState(transcriptPath: string): CodexTurnState | null {
   if (!isReadable(transcriptPath)) return null;
   let tail: string;
@@ -611,7 +617,8 @@ export function readCodexTurnState(transcriptPath: string): CodexTurnState | nul
     }
     if (rec.type === "response_item") {
       complete = false;
-    } else if (rec.type === "event_msg" && rec.payload?.type === "task_complete") {
+    } else if (rec.type === "event_msg"
+        && (rec.payload?.type === "task_complete" || rec.payload?.type === "turn_aborted")) {
       complete = true;
       changedAt = Date.parse(rec.timestamp ?? "") || 0;
     }

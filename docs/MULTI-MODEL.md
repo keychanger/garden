@@ -556,6 +556,8 @@ Notes pinned down by the audit:
   that pair into the same normalized asking/working events. Codex can also
   omit the final `Stop` after later tool activity, so a final `task_complete`
   with no following `response_item` heals a stale `working` worker to `idle`.
+  An Esc interrupt fires no `Stop` and writes `turn_aborted` in place of
+  `task_complete`; it ends the turn the same way.
   Both paths are driven by rollout filesystem writes; no timer scans sessions.
 - **`installRuntimeConfig` owns the config-file dialect**:
   garden's `--settings` file + `.claude/skills/` for Claude;
@@ -807,7 +809,8 @@ otherwise catch-all `PreToolUse` hook. The watchdog's recursive rollout
 watcher detects that pending/result pair and drives Garden's ordinary
 `working → asking → working` status path immediately. The watcher also reads
 the rollout in append order: when no `response_item` follows the newest
-`task_complete`, it heals `working → idle` if the final `Stop` was missed and
+`task_complete` (or the `turn_aborted` an interrupted turn writes in its
+place), it heals `working → idle` if the final `Stop` was missed and
 wakes the project poller so a deferred merge gate re-evaluates immediately.
 
 Reviewer-first slices (each independently mergeable, Claude fleet
