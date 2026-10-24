@@ -198,6 +198,47 @@ describe("runWorkerCleanup (real git)", () => {
     expect(fs.existsSync(file)).toBe(false);
   });
 
+  it("removes a tree whose own .git file is gone while its admin entry remains", async () => {
+    // The reverse of the husk above. Git deletes a worktree's entries in
+    // readdir order, so a removal cut off part way (the 60s step timeout, a
+    // killed process, an interrupted rm) can already have taken the tree's .git
+    // file while leaving .git/worktrees/<name>. `worktree remove` then refuses
+    // the path on every retry ("'<path>/.git' does not exist"), and the branch
+    // still reads as checked out there, so `branch -D` failed with it.
+    const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+    const file = await seed();
+    fs.rmSync(path.join(wtPath, ".git"));
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(wtPath)).toBe(false);
+    expect(fs.existsSync(path.join(env.repoPath, ".git", "worktrees", "numb-clear-vow"))).toBe(false);
+    expect(branches(env.repoPath)).not.toContain("numb-clear-vow");
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it("recognizes the missing .git under the resolved path git recorded", async () => {
+    // Git names the missing .git by the path it recorded at `worktree add`,
+    // which is the resolved one, so under a symlinked ~/.garden the diagnostic
+    // never spells the canonical path.
+    const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+    git(env.repoPath, "worktree", "remove", "--force", wtPath);
+    const projectDir = path.dirname(wtPath);
+    const resolvedDir = path.join(env.home, "elsewhere");
+    fs.mkdirSync(resolvedDir);
+    fs.rmSync(projectDir, { recursive: true, force: true });
+    fs.symlinkSync(resolvedDir, projectDir);
+    git(env.repoPath, "worktree", "add", wtPath, "numb-clear-vow");
+    const file = await seed();
+    fs.rmSync(path.join(wtPath, ".git"));
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(path.join(resolvedDir, "numb-clear-vow"))).toBe(false);
+    expect(branches(env.repoPath)).not.toContain("numb-clear-vow");
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
   it.each(["operator inspection", "is not a working tree"])(
     "preserves a locked worktree with reason '%s'", async (reason) => {
       const { runWorkerCleanup, readWorkerCleanupRequest } =
@@ -215,6 +256,23 @@ describe("runWorkerCleanup (real git)", () => {
       expect(readWorkerCleanupRequest(file)?.lastError).toContain("locked");
     },
   );
+
+  it("preserves a locked worktree whose .git is gone, whatever its lock reason says", async () => {
+    const { runWorkerCleanup, readWorkerCleanupRequest } =
+      await import("../../src/dashboard/worker-cleanup.js");
+    const file = await seed();
+    const uncommitted = path.join(wtPath, "uncommitted.txt");
+    fs.writeFileSync(uncommitted, "keep this work");
+    git(env.repoPath, "worktree", "lock", "--reason",
+      `fatal: validation failed, cannot remove working tree: '${wtPath}/.git' does not exist`, wtPath);
+    fs.rmSync(path.join(wtPath, ".git"));
+
+    runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+    expect(fs.existsSync(uncommitted)).toBe(true);
+    expect(branches(env.repoPath)).toContain("numb-clear-vow");
+    expect(readWorkerCleanupRequest(file)?.lastError).toContain("locked");
+  });
 
   it("retries a husk when directory removal is denied", async () => {
     const { runWorkerCleanup, readWorkerCleanupRequest } =
@@ -264,6 +322,9 @@ describe("runWorkerCleanup (real git)", () => {
     expect(alerts).toHaveLength(1);
     expect(alerts[0].worker).toBe("numb-clear-vow");
     expect(alerts[0].message).toContain(wtPath);
+    // `worktree remove` refuses a tree git no longer tracks, so the remedy
+    // has to name the direct removal too.
+    expect(alerts[0].message).toContain("rm -rf <path>");
   });
 
   it("does nothing when no request exists", async () => {

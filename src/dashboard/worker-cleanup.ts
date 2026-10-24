@@ -394,6 +394,23 @@ function deferCleanup(req: WorkerCleanupRequest, holder: SessionPane | "unreacha
   writeWorkerCleanupRequest({ ...req, deferredSince: since, deferAlertedAt: now });
 }
 
+// The two refusals after which `worktree remove` can never succeed, so cleanup
+// deletes the directory itself and prunes: git has no admin entry for the path
+// ("is not a working tree"), or the tree's own .git file is gone while the
+// entry remains — what a removal cut off part way leaves, since git deletes a
+// tree in readdir order rather than .git last. Each is matched as the whole
+// diagnostic, so a lock reason quoting either cannot bypass a worktree lock.
+// Git names the missing .git by the path it recorded at `worktree add`, which
+// is the resolved one.
+function gitNoLongerTracksTree(err: string, worktreePath: string): boolean {
+  const diagnostic = err.trim();
+  if (diagnostic === `fatal: '${worktreePath}' is not a working tree`) return true;
+  const spellings = [worktreePath];
+  try { spellings.push(fs.realpathSync(worktreePath)); } catch { /* already gone */ }
+  return spellings.some((p) =>
+    diagnostic === `fatal: validation failed, cannot remove working tree: '${p}/.git' does not exist`);
+}
+
 function executeWorkerCleanup(req: WorkerCleanupRequest): void {
   const { project, worker } = req;
   const configured = tryGetProject(project);
@@ -427,8 +444,7 @@ function executeWorkerCleanup(req: WorkerCleanupRequest): void {
 
   if (worktreePath && fs.existsSync(worktreePath)) {
     const err = gitCleanupStep(repoPath, ["worktree", "remove", worktreePath, "--force"]);
-    const unregisteredWorktreeError = `fatal: '${worktreePath}' is not a working tree`;
-    if (err?.trim() === unregisteredWorktreeError) {
+    if (err !== null && gitNoLongerTracksTree(err, worktreePath)) {
       try {
         fs.rmSync(worktreePath, { recursive: true, force: true });
       } catch (rmErr) {
@@ -516,7 +532,8 @@ function executeWorkerCleanup(req: WorkerCleanupRequest): void {
         `Git cleanup for '${worker}' failed ${attempts}x and was given up. `
         + `${leftovers.join(" and ")} may still exist in ${repoPath}. `
         + `Last error: ${detail}. Remove manually: `
-        + `git -C ${repoPath} worktree remove --force <path>, `
+        + `git -C ${repoPath} worktree remove --force <path> (rm -rf <path> instead `
+        + `when git says it is not a working tree or that its .git does not exist), `
         + `then git -C ${repoPath} worktree prune.`,
       dedupKey: `cleanup-failed:${project}:${worker}`,
     });
