@@ -588,10 +588,10 @@ export function buildWorkerCommand(projectName: string, projectPath: string, ses
   });
   const harness = getHarness(launchPlan.harness);
   // No rulesText: targetDir here is the PROJECT CHECKOUT, not a worktree, and
-  // a harness whose rules channel is a repo file (Codex's AGENTS.md) would
-  // rewrite the operator's own tracked instructions and mark them
-  // skip-worktree — invisible in `git status` by construction. Rules delivery
-  // belongs to the worktree paths.
+  // a harness whose rules channel is a repo file (Codex's AGENTS.override.md)
+  // would put garden's worker rules in place of the operator's own AGENTS.md
+  // for every Codex session run in that checkout. Rules delivery belongs to the
+  // worktree paths.
   harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject, {
     ultracode: launchPlan.ultracode, beforeLaunch: true,
   });
@@ -616,8 +616,8 @@ export function buildResumeCommand(
   });
   const harness = getHarness(launchPlan.harness);
   // No rulesText — same reason as buildWorkerCommand: this installs into the
-  // project checkout, where a repo-file rules channel would clobber the
-  // operator's own AGENTS.md behind skip-worktree.
+  // project checkout, where a repo-file rules channel would shadow the
+  // operator's own AGENTS.md.
   harness.installRuntimeConfig(projectPath, launchPlan.runtimeProject, {
     ultracode: launchPlan.ultracode, beforeLaunch: true,
   });
@@ -924,7 +924,7 @@ export function buildWorktreeBootstrapScript(
   // The inline config below is the claude-code dialect (status line +
   // skills). For a Codex worker it is inert (Codex ignores .claude/), so rather
   // than fork the whole bootstrap we leave it and ADD the Codex runtime after
-  // worktree setup: directory-trust + the composed rules as AGENTS.md (hooks
+  // worktree setup: directory-trust + the composed rules as AGENTS.override.md (hooks
   // ride launch-time -c overrides), installed by _install-worker-runtime (reuses the
   // adapter's TS, no fragile shell-gen). Empty string for claude keeps the
   // generated script byte-identical to today.

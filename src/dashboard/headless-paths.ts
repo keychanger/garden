@@ -57,7 +57,7 @@ export const STATUS_LINE_SCRIPT_PATH = path.join(CLAUDE_SETTINGS_DIR, "statuslin
 
 // The rules garden composes for an agent running in runtimeDir, passed to
 // Claude with --append-system-prompt-file and composed into a Codex worker's
-// AGENTS.md. Named like the settings file, so one keep-set sweeps both.
+// AGENTS.override.md. Named like the settings file, so one keep-set sweeps both.
 export function contextFilePath(runtimeDir: string): string {
   return path.join(CONTROL_CONTEXTS_DIR, `${runtimeDirDigest(runtimeDir)}.context`);
 }

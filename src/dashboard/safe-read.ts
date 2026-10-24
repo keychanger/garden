@@ -77,3 +77,23 @@ export function appendToStableFile(filePath: string, file: StableFile, text: str
     fs.closeSync(fd);
   }
 }
+
+// Replace the contents of a file that readStableRegularFile just returned, under
+// appendToStableFile's refusals, and only while it still holds the bytes that
+// read returned, so a concurrent append is not dropped. Written through the
+// pinned descriptor rather than renamed into place: a rename would follow a
+// directory link swapped into the path.
+export function rewriteStableFile(filePath: string, file: StableFile, text: string): void {
+  const fd = fs.openSync(filePath, fs.constants.O_RDWR | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+  try {
+    const current = fs.fstatSync(fd);
+    if (!current.isFile() || !sameFile(current, file) || !fs.readFileSync(fd).equals(file.data)) {
+      throw new Error(`${filePath} changed since it was read`);
+    }
+    const data = Buffer.from(text);
+    fs.writeSync(fd, data, 0, data.length, 0);
+    fs.ftruncateSync(fd, data.length);
+  } finally {
+    fs.closeSync(fd);
+  }
+}

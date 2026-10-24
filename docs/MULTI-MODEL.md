@@ -559,8 +559,9 @@ Notes pinned down by the audit:
   Both paths are driven by rollout filesystem writes; no timer scans sessions.
 - **`installRuntimeConfig` owns the config-file dialect**:
   garden's `--settings` file + `.claude/skills/` for Claude;
-  `CODEX_HOME/config.toml` directory-trust + `AGENTS.md` for Codex
-  (rules text written to `AGENTS.md`; skills folded into the rules text
+  `CODEX_HOME/config.toml` directory-trust + `AGENTS.override.md` for Codex
+  (rules text, over the repo's own `AGENTS.md`, written to the worktree's
+  `AGENTS.override.md`, which Codex reads in its place; skills folded into the rules text
   when `capabilities.skills` is false; the lifecycle hooks ride `-c` launch
   overrides, not a config file); `opencode.json` + plugin +
   `AGENTS.md` for opencode. The rules *content* (`rules.ts`) stays
@@ -570,11 +571,10 @@ Notes pinned down by the audit:
   dialects side by side — see mixed fleets below.
 - **Runtime refresh is idempotent and current.** Attach, bounce, and loop
   respawn recompose the same workflow-specific rules used at spawn. For Codex,
-  the first install preserves the worktree's actual repository instructions;
-  subsequent refreshes strip the managed block and read tracked `AGENTS.md`
-  content from Git's index (the working file is intentionally skip-worktree),
-  then write one fresh composition. Repo rules and Garden rules can therefore
-  both advance. The shared `CODEX_HOME/config.toml` trust-table check/append
+  each install composes them over the worktree's `AGENTS.md` as it stands and
+  writes one fresh `AGENTS.override.md`; `AGENTS.md` itself is never written,
+  so git can update it and a worker can commit edits to it. Repo rules and
+  Garden rules can therefore both advance. The shared `CODEX_HOME/config.toml` trust-table check/append
   runs under a cross-process file lock, so concurrent worker bootstraps cannot
   emit duplicate TOML tables.
 - **Sandbox is a capability, not a given.** Claude and Codex both
@@ -745,8 +745,12 @@ captures stdout→result / stderr→sidecar (not `2>&1`, which would make
 the token count the last line); `GARDEN_REVIEWER=1` suppression is
 already harness-agnostic (checked in garden's hook entry), so a
 cross-harness reviewer needs no new suppression; and the reviewer takes
-its prompt on stdin, so the AGENTS.md-collision concern below is
-worker-only.
+its prompt on stdin. The AGENTS.md-collision concern below is not
+worker-only, though: a headless run still loads the worktree's instruction
+file as project instructions (up to Codex's 32 KiB `project_doc_max_bytes`),
+and in a Codex worker's worktree that is garden's composition in
+`AGENTS.override.md`. Garden's block therefore opens with a note scoping it to
+the worker.
 
 Every unpinned Codex launch uses Garden's harness default of
 `gpt-6-astra` with `high` reasoning. The launch-plan boundary applies that
@@ -829,7 +833,8 @@ byte-identical, full gate green):
   sidecar; and reviewer, resolver, *and* ci-fix default to explicit Opus
   on the claude-code path (operator choice — a behavior change from the old
   provider-only Opus pin, each overridable). A Codex reviewer works because
-  its prompt is delivered on stdin (no AGENTS.md), it authenticates itself
+  its prompt is delivered on stdin (it needs no AGENTS.md, though Codex still
+  loads the worktree's instruction file as project instructions), it authenticates itself
   (no env), and it omits `--dangerously-bypass-hook-trust` (fires no relay).
   Worker bootstrap retains the Claude runtime beside Codex's config, so a
   default Claude reviewer in a Codex worktree keeps its sandbox and the shared

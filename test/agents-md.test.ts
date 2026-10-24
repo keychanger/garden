@@ -1,7 +1,7 @@
 // The AGENTS.md composition format: garden's worker rules above the repo's own
 // instructions, and the strip that undoes it for the reviewer prompt.
 import { describe, it, expect } from "vitest";
-import { AGENTS_MARKER, composeAgentsMd, stripGardenRules } from "../src/dashboard/harness/agents-md.js";
+import { AGENTS_MARKER, composeAgentsMd, composedOver, stripGardenRules } from "../src/dashboard/harness/agents-md.js";
 
 describe("composeAgentsMd", () => {
   it("puts garden's rules above the repo's own AGENTS.md", () => {
@@ -40,5 +40,33 @@ describe("stripGardenRules", () => {
   it("keeps a --- inside the repo's own content", () => {
     const original = "# Repo\n\nfirst\n\n---\n\nsecond\n";
     expect(stripGardenRules(composeAgentsMd("worker rules", original))).toBe(original);
+  });
+});
+
+// Retiring an older build's composition must tell garden's own text from a
+// worker's edit, including when the operator's rules contain the delimiter.
+describe("composedOver", () => {
+  const repo = "# Repo\n\nfirst\n\n---\n\nsecond\n";
+
+  it("matches a composition over exactly the repo's text", () => {
+    expect(composedOver(composeAgentsMd("worker rules", repo), repo)).toBe(true);
+  });
+
+  it("matches when the rules themselves contain the delimiter", () => {
+    expect(composedOver(composeAgentsMd("rule one\n\n---\n\nrule two", repo), repo)).toBe(true);
+  });
+
+  it("rejects a composition whose repo part was edited", () => {
+    expect(composedOver(`${composeAgentsMd("worker rules", repo)}WORKER EDIT\n`, repo)).toBe(false);
+  });
+
+  it("rejects a composition over different repo text, and an uncomposed file", () => {
+    expect(composedOver(composeAgentsMd("worker rules", "# Other\n"), repo)).toBe(false);
+    expect(composedOver(repo, repo)).toBe(false);
+  });
+
+  it("matches rules alone over an empty AGENTS.md, and nothing appended to them", () => {
+    expect(composedOver(composeAgentsMd("worker rules", ""), "")).toBe(true);
+    expect(composedOver(composeAgentsMd("worker rules", "added\n"), "")).toBe(false);
   });
 });

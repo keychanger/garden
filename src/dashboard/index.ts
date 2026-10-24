@@ -629,7 +629,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     // bootstrap does not (it inlines only the claude dialect). For a claude
     // worker this is a no-op — its config is inlined. For codex: directory
     // trust + excludes (installRuntimeConfig) plus the composed rules as
-    // AGENTS.md (hooks ride launch-time -c overrides). Best-effort: a failure
+    // AGENTS.override.md (hooks ride launch-time -c overrides). Best-effort: a failure
     // logs but does not abort the pane (the worker still launches; a missing
     // relay/rules degrades, it does not wedge).
     const [, projectName, workerName, contextFile] = args;

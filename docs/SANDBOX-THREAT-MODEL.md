@@ -83,16 +83,18 @@ reads or runs.
   The grow goal and log files, which are git-excluded and edited mid-loop, are read with
   `readStableRegularFile` (`src/dashboard/safe-read.ts`): no-follow, non-blocking (a FIFO
   is refused at fstat instead of blocking the open), contained within the worktree,
-  single-link, and size-capped. The same reader serves the Codex installer's read of the
-  worktree `AGENTS.md`, which it composes back into the worker's own instructions (a
-  symlink there would otherwise deliver a file the worker's sandbox cannot read), the
-  handoff dispatcher's seed copies, and both installers' `info/exclude` heal, whose
-  append goes only to the file that was read (`appendToStableFile`).
+  single-link, and size-capped. The same reader serves the Codex installer's reads of the
+  worktree `AGENTS.md` and `AGENTS.override.md`, which it composes back into the worker's
+  own instructions (a symlink there would otherwise deliver a file the worker's sandbox
+  cannot read), the handoff dispatcher's seed copies, and both installers' `info/exclude`
+  heal, whose append goes only to the file that was read (`appendToStableFile`), as does
+  the Codex installer's one-time rewrite of it, which also requires the file to still hold
+  the bytes it read (`rewriteStableFile`).
 - **Launch inputs.** What an unsandboxed process runs, or hands an agent as
   instructions, lives under `~/.garden/control` rather than `~/.garden/sessions`: the
   worker bootstrap script and the dashboard pane scripts (`control/scripts`), the
   system-prompt context files Claude reads with `--append-system-prompt-file` and the
-  Codex installer composes into `AGENTS.md` (`control/contexts`), the status-line script
+  Codex installer composes into `AGENTS.override.md` (`control/contexts`), the status-line script
   Claude Code runs outside the sandbox (`control/claude-settings`), and the seed prompts
   the unsandboxed seeder pastes as a worker's first prompt (`control/seeds`). In the
   sessions dir a worker could rewrite a bootstrap script while its shell was still

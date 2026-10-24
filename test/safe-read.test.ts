@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
-import { appendToStableFile, readStableRegularFile } from "../src/dashboard/safe-read.js";
+import { appendToStableFile, readStableRegularFile, rewriteStableFile } from "../src/dashboard/safe-read.js";
 
 // What a worker can leave at a path an unsandboxed reader is about to read.
 describe("readStableRegularFile", () => {
@@ -109,5 +109,57 @@ describe("appendToStableFile", () => {
     fs.renameSync(path.join(root, "replacement"), file);
     expect(() => appendToStableFile(file, read, "b\n")).toThrow();
     expect(fs.readFileSync(file, "utf8")).toBe("replacement\n");
+  });
+});
+
+describe("rewriteStableFile", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "garden-safe-rewrite-")));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("replaces the contents of the file that was read, shorter or longer", () => {
+    const file = path.join(root, "exclude");
+    fs.writeFileSync(file, "a\nlegacy line\nb\n");
+    rewriteStableFile(file, readStableRegularFile(file, root, 1024)!, "a\nb\n");
+    expect(fs.readFileSync(file, "utf8")).toBe("a\nb\n");
+    rewriteStableFile(file, readStableRegularFile(file, root, 1024)!, "a\nb\nc\nd\n");
+    expect(fs.readFileSync(file, "utf8")).toBe("a\nb\nc\nd\n");
+  });
+
+  it("refuses a file appended to since the read, keeping the append", () => {
+    const file = path.join(root, "exclude");
+    fs.writeFileSync(file, "a\n");
+    const read = readStableRegularFile(file, root, 1024)!;
+    fs.appendFileSync(file, "another writer\n");
+    expect(() => rewriteStableFile(file, read, "b\n")).toThrow();
+    expect(fs.readFileSync(file, "utf8")).toBe("a\nanother writer\n");
+  });
+
+  it("refuses a symlink swapped in after the read, leaving its target alone", () => {
+    const file = path.join(root, "exclude");
+    const target = path.join(root, "target");
+    fs.writeFileSync(file, "a\n");
+    fs.writeFileSync(target, "a\n");
+    const read = readStableRegularFile(file, root, 1024)!;
+    fs.rmSync(file);
+    fs.symlinkSync(target, file);
+    expect(() => rewriteStableFile(file, read, "b\n")).toThrow();
+    expect(fs.readFileSync(target, "utf8")).toBe("a\n");
+  });
+
+  it("refuses a file replaced since the read, even with the same contents", () => {
+    const file = path.join(root, "exclude");
+    fs.writeFileSync(file, "a\n");
+    const read = readStableRegularFile(file, root, 1024)!;
+    fs.writeFileSync(path.join(root, "replacement"), "a\n");
+    fs.renameSync(path.join(root, "replacement"), file);
+    expect(() => rewriteStableFile(file, read, "b\n")).toThrow();
+    expect(fs.readFileSync(file, "utf8")).toBe("a\n");
   });
 });

@@ -241,7 +241,7 @@ export const codexCore: HarnessCore = {
     skills: false,
     providerProfiles: false,
     // The designer workflow is default-shaped from the harness's side: an
-    // interactive session whose inverted posture rides the composed AGENTS.md
+    // interactive session whose inverted posture rides the composed rules file
     // and whose skill is a file in the worktree the rules point at. The loop
     // workflow (grow) stays claude-code only: its cold-respawn identity is
     // not wired for Codex.
@@ -260,7 +260,7 @@ export const codexCore: HarnessCore = {
 
   // Interactive worker launch (worker-path; refined + live-verified there).
   // No --session-id (Codex assigns its own id) and no system-prompt flag —
-  // garden's rules reach Codex via AGENTS.md (installRuntimeConfig). The
+  // garden's rules reach Codex via AGENTS.override.md (installRuntimeConfig). The
   // event relay REQUIRES --dangerously-bypass-hook-trust: garden's
   // programmatically-injected hook config is untrusted, so without the bypass
   // Codex silently skips every hook and no turn-end/status reaches the
@@ -857,7 +857,7 @@ export function initialCodexActivity(seed?: string): string {
 // Bounds for the rollout reads on the status and hook paths. The tail serves
 // the latest-prompt and running-model reads. The head has to clear the preamble before the
 // opening prompt, which is NOT small: Codex records the composed instructions
-// (garden's rules ride the worktree AGENTS.md) up front, measured at 70-90KB
+// (garden's rules ride the worktree AGENTS.override.md) up front, measured at 70-90KB
 // for real garden workers — so the head bound has a wide margin over that, and
 // the read stops once the opening prompt replaces the creation placeholder.
 // Both stay well under readTurns' escalating tail: readActivity runs on

@@ -91,7 +91,7 @@ export interface NewWorkerOptions {
   background?: boolean;
   // Harness adapter for this worker (agent CLI in the pane). Defaults to
   // claude-code. "codex" spawns a Codex worker (own sandbox, launch-time hook
-  // relay, AGENTS.md rules). Validated against the registry; an unknown
+  // relay, AGENTS.override.md rules). Validated against the registry; an unknown
   // harness is refused. Persisted on entry.harness and threaded through
   // launch/resume/loop.
   harness?: string;
