@@ -463,7 +463,10 @@ export function handleTitleChanged(windowName: string | undefined, paneId: strin
     setPaneVar(paneId, "garden_task", title);
   }
 
-  writeQuickStatus();
+  // Thread one window list, config and registry read through the bake, as
+  // refreshDashboard does: without them renderQuickStatus forks list-windows
+  // and re-reads the registry once per focused project.
+  writeQuickStatus({ state, windowNames: listAllWindowNames(), config: loadConfig(), registry: readRegistry() });
 }
 
 // ---------------------------------------------------------------------------
@@ -783,7 +786,9 @@ export function _resetHeaderCachesForTest(): void {
 export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
   const shared: RefreshOptions = {
     state: opts?.state ?? readDashState(),
-    windowNames: opts?.windowNames,
+    // One window list for the bake, else renderQuickStatus forks list-windows
+    // once per project in the plot (the same cascade handleTitleChanged had).
+    windowNames: opts?.windowNames ?? listAllWindowNames(),
     config: opts?.config ?? loadConfig(),
     registry: opts?.registry ?? readRegistry(),
   };

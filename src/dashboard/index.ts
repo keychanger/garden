@@ -492,7 +492,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     // Project pollers are left running unless their loop command drifted (see
     // restartLongLivedPollers): the merge that triggered this rebuild is still
     // finishing in one of them.
-    const { respawnStatusPane, respawnLogsPane } = await import("./create.js");
+    const { respawnStatusPane, respawnLogsPane, installTitleChangedHook } = await import("./create.js");
     const { resolveGardenRunner } = await import("./runner.js");
     const { readDashState } = await import("./state.js");
     const { refreshDashboard, setupStatusBar } = await import("./header.js");
@@ -503,6 +503,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
       const runner = resolveGardenRunner();
       try { setupStatusBar(runner); } catch { /* best effort — pick up format-string changes */ }
       try { setupKeybindings(runner); } catch { /* best effort — pick up binding changes */ }
+      installTitleChangedHook(runner);
       try { respawnStatusPane(state); } catch { /* pane gone */ }
       try { restartLongLivedPollers(runner); } catch { /* best effort */ }
       try { respawnLogsPane(state); } catch { /* pane gone */ }

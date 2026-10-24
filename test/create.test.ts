@@ -138,6 +138,8 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   shellEscape: vi.fn((s: string) =>
     /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`,
   ),
+  // Mirror the real tmuxDoubleQuote for the same reason.
+  tmuxDoubleQuote: (s: string) => `"${s.replace(/[\\$"`]/g, "\\$&")}"`,
   getPaneSize: vi.fn(() => ({ width: 200, height: 50 })),
   resizeWindow: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
@@ -220,6 +222,7 @@ import {
   respawnUsagePane,
   respawnHistoryPane,
   respawnAlertsPane,
+  installTitleChangedHook,
 } from "../src/dashboard/create.js";
 import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput, killWindowSafe } from "../src/dashboard/tmux.js";
 import { tryGetProject, tryResolveProvider } from "../src/config.js";
@@ -698,6 +701,25 @@ describe("buildWorktreeWorkerCommand", () => {
       expect(cmd).not.toContain("ANTHROPIC_BASE_URL=");
       expect(cmd).not.toContain("deepseek");
     });
+  });
+});
+
+describe("installTitleChangedHook", () => {
+  // Undo one level of tmux double-quoting: `\x` -> `x` inside "...".
+  const unquote = (s: string) => s.slice(1, -1).replace(/\\(.)/g, "$1");
+
+  it("filters title events in tmux before cold-starting the CLI", () => {
+    installTitleChangedHook("/usr/bin/node /opt/garden/dist/cli.js");
+    const call = vi.mocked(tmux).mock.calls.find(c => c[0] === "set-hook" && c[3] === "pane-title-changed");
+    expect(call?.slice(0, 4)).toEqual(["set-hook", "-t", "garden-dashboard", "pane-title-changed"]);
+    const m = /^if-shell -F ("(?:[^"\\]|\\.)*") ("(?:[^"\\]|\\.)*")$/.exec(call![4]);
+    expect(m).not.toBeNull();
+    // Only the right slot of `main` can carry a worker's title; the left
+    // column's panes used to pay a node start to return.
+    expect(unquote(m![1])).toBe("#{&&:#{==:#{window_name},main},#{pane_at_right}}");
+    // The command tmux runs once the condition holds is the old unfiltered hook.
+    expect(unquote(m![2])).toBe(
+      "run-shell -b \"/usr/bin/node /opt/garden/dist/cli.js dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null\"");
   });
 });
 

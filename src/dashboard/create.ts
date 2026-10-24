@@ -116,6 +116,9 @@ export function ensureDashboard(): void {
 
     // Re-install on reattach so dashboards from older builds pick up the guard.
     installInputGuard(healed);
+    // Same for the title hook: a session created by an older build keeps its
+    // unfiltered hook (and that build's runner path) until it is replaced.
+    installTitleChangedHook(resolveGardenRunner());
 
     // Re-bind hotkeys with the current gardenRunner. tmux key bindings are
     // server-global and persist for the life of the tmux server — they bake in
@@ -313,14 +316,7 @@ export function ensureDashboard(): void {
       `run-shell ${tmuxDoubleQuote(inner)}`);
   } catch { /* hooks may not be supported on very old tmux */ }
 
-  // tmux pane-title-changed hook: Claude Code sets the pane title via escape
-  // sequences as it works. This hook captures those changes live so task
-  // summaries in the status pane and pane border stay current without polling.
-  try {
-    const inner = `${gardenRunner} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null`;
-    tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-title-changed",
-      `run-shell -b ${tmuxDoubleQuote(inner)}`);
-  } catch { /* hooks may not be supported on very old tmux */ }
+  installTitleChangedHook(gardenRunner);
 
   // Re-bake pane content + re-pin heights on terminal resize (see reattach path for rationale).
   try {
@@ -434,6 +430,25 @@ export function ensureDashboard(): void {
   } else {
     tmux("select-pane", "-t", gardenShellId);
   }
+}
+
+// tmux pane-title-changed hook: Claude Code sets the pane title via escape
+// sequences as it works. This hook captures those changes live so task
+// summaries in the status pane and pane border stay current without polling.
+// As a session hook, tmux runs it only for panes in the session's current
+// window, `main` (tmux 3.7c; a parked worker's title change never reaches
+// it), and each run cold-starts the CLI. Of main's panes only the right slot
+// holds a worker or the project shell, so tmux drops the left column's title
+// churn (the root shell's prompt, the logs view, the diary editor) before it
+// reaches node. A title change that never fires is picked up by the next
+// refreshDashboard's batched refreshWorkerTasks.
+export function installTitleChangedHook(gardenRunner: string): void {
+  try {
+    const inner = `${gardenRunner} dashboard _title-changed '#{window_name}' '#{pane_id}' 2>/dev/null`;
+    const actionable = "#{&&:#{==:#{window_name},main},#{pane_at_right}}";
+    tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-title-changed",
+      `if-shell -F ${tmuxDoubleQuote(actionable)} ${tmuxDoubleQuote(`run-shell -b ${tmuxDoubleQuote(inner)}`)}`);
+  } catch { /* hooks may not be supported on very old tmux */ }
 }
 
 export function createLogsWindow(): void {

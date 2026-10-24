@@ -159,6 +159,7 @@ import {
   refreshStatusPane,
   refreshUsagePane,
   refreshDashboard,
+  refreshDashboardPlotCycle,
   refreshStatusElapsed,
   installInputGuard,
   setPaneProjectColor,
@@ -168,7 +169,7 @@ import {
   _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
 
-import { tmux, tmuxBatch, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles } from "../src/dashboard/tmux.js";
+import { tmux, tmuxBatch, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { readDashState, type DashboardState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields, readRegistry, batchUpdateWorkerFields, removeWorker } from "../src/dashboard/registry.js";
 import { currentBranchFast, worktreeExists } from "../src/dashboard/git.js";
@@ -1008,6 +1009,28 @@ describe("handleTitleChanged", () => {
     );
   });
 
+  // Unthreaded, the bake forks list-windows and re-reads the registry once per
+  // focused project — on every title change that reaches this handler.
+  it("bakes the status pane from one window list, config and registry read", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "bold-ash", sessionId: "s1", task: "old task", agentStatus: "working",
+    });
+    vi.mocked(getPaneTitle).mockReturnValue("new task");
+    vi.mocked(listAllWindowNames).mockReturnValue(["main", "_garden-worker-bold-ash"]);
+    const registry = {
+      workers: { garden: [{ name: "bold-ash", sessionId: "s1", task: "new task", agentStatus: "working" as const }] },
+    };
+    vi.mocked(readRegistry).mockReturnValue(registry);
+
+    handleTitleChanged("_garden-worker-bold-ash", "%5");
+
+    expect(listAllWindowNames).toHaveBeenCalledTimes(1);
+    const [, windowNames, config, bakedRegistry] = vi.mocked(renderQuickStatus).mock.calls.at(-1)!;
+    expect(windowNames).toEqual(["main", "_garden-worker-bold-ash"]);
+    expect(config).toEqual(expect.objectContaining({ projects: expect.any(Object) }));
+    expect(bakedRegistry).toBe(registry);
+  });
+
   // Regression: Codex's default terminal title renders `project-name`, which
   // falls back to the worktree basename — the worker's own name. Writing it
   // here stomped the transcript-derived summary readActivity had just set,
@@ -1027,6 +1050,23 @@ describe("handleTitleChanged", () => {
 
     expect(updateWorkerFields).not.toHaveBeenCalled();
     expect(setPaneVar).not.toHaveBeenCalled();
+  });
+});
+
+// ===========================================================================
+// refreshDashboardPlotCycle
+// ===========================================================================
+
+describe("refreshDashboardPlotCycle", () => {
+  // navigate.ts passes only the state; the bake used to fork list-windows once
+  // per project in the plot on every ⌥p.
+  it("bakes the status pane from one window list", () => {
+    vi.mocked(listAllWindowNames).mockReturnValue(["main", "_garden-worker-bold-ash"]);
+
+    refreshDashboardPlotCycle({ state: makeState() });
+
+    expect(listAllWindowNames).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(renderQuickStatus).mock.calls.at(-1)?.[1]).toEqual(["main", "_garden-worker-bold-ash"]);
   });
 });
 
