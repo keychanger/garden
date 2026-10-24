@@ -27,7 +27,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { SESSIONS_DIR, tryGetProject } from "../config.js";
+import { SESSIONS_DIR, loadConfig, tryGetProject } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import {
   workerCleanupMarkerPath, worktreePath as canonicalWorktreePath,
@@ -184,6 +184,15 @@ export function dueCleanupRequests(nowMs: number): WorkerCleanupRequest[] {
   let names: string[];
   try {
     names = fs.readdirSync(SESSIONS_DIR);
+  } catch {
+    return [];
+  }
+  // Validation resolves each request's project through the config. A config
+  // that does not load says nothing about any one request, so none is retired
+  // for it (that would leave each worktree to leak); they wait for a sweep
+  // that can read it. The watchdog alerts on the config itself.
+  try {
+    loadConfig();
   } catch {
     return [];
   }

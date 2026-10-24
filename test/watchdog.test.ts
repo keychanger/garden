@@ -490,6 +490,32 @@ describe("healProjectPollers", () => {
     expect(ensure).toHaveBeenCalledTimes(2);
   });
 
+  // This is the tick's first config read. A config that does not load used to
+  // throw out of here, skipping every later duty of the tick (awake release,
+  // cleanup retries, pane heals) behind one generic "tick failed" warn, while
+  // nothing told the operator which file had stopped the fleet.
+  it("alerts once with the file and the fault when the config does not load, and keeps going", () => {
+    vi.mocked(loadConfig).mockImplementation(() => {
+      throw new Error(
+        "Failed to parse garden config at /home/op/.garden/config.yml: bad indentation of a mapping entry (4:4)\n\n 4 |    bad: [\n--------^",
+      );
+    });
+    registryMock._setEntries("one", [entry({ prState: "reviewing" })]);
+    const ensure = vi.fn();
+    let ensured: string[] = [];
+    expect(() => { ensured = healProjectPollers(ensure); }).not.toThrow();
+    expect(ensured).toEqual(["one"]);
+    expect(addAlert).toHaveBeenCalledTimes(1);
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error",
+      dedupKey: "config-unloadable",
+      message: expect.stringMatching(
+        /^Failed to parse garden config at \/home\/op\/\.garden\/config\.yml: bad indentation of a mapping entry \(4:4\)\. /,
+      ),
+    }));
+    expect(vi.mocked(addAlert).mock.calls[0][0].message).not.toContain("\n");
+  });
+
   it("isolates a per-project failure so other projects are still ensured", () => {
     registryMock._setEntries("boom", [entry({ prState: "reviewing" })]);
     registryMock._setEntries("ok", [entry({ name: "bold-elm", sessionId: "s-2", task: "", prState: "reviewing" })]);

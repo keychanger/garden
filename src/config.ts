@@ -972,14 +972,13 @@ export function getProject(name: string): ProjectConfig & { name: string } {
   return { ...project, name };
 }
 
+// Null means no such project, or no garden yet. A config.yml that exists but
+// does not load throws loadConfig's error, naming the file and the fault: read
+// as null, it made every lookup in a running fleet report an unknown project,
+// and a launch fall back to a stub project with no claudeProfile.
 export function tryGetProject(name: string): (ProjectConfig & { name: string }) | null {
-  try {
-    const config = loadConfig();
-    const project = configuredProject(config, name);
-    return project ? { ...project, name } : null;
-  } catch {
-    return null;
-  }
+  const project = fs.existsSync(CONFIG_PATH) && configuredProject(loadConfig(), name);
+  return project ? { ...project, name } : null;
 }
 
 /**
@@ -1064,25 +1063,23 @@ export function allPlotProjectNames(config?: GardenConfig): string[] {
   return names;
 }
 
+// Same rule as tryGetProject: only an uninitialized garden reads as "not in a
+// project"; a config that does not load says so instead.
 export function detectProjectFromPath(dir?: string): string | undefined {
-  try {
-    const config = loadConfig();
-    const target = dir ?? process.cwd();
-    let bestName: string | undefined;
-    let bestLen = 0;
-    for (const [name, project] of Object.entries(config.projects)) {
-      if (target === project.path || target.startsWith(project.path + "/")) {
-        if (project.path.length > bestLen) {
-          bestLen = project.path.length;
-          bestName = name;
-        }
+  if (!fs.existsSync(CONFIG_PATH)) return undefined;
+  const config = loadConfig();
+  const target = dir ?? process.cwd();
+  let bestName: string | undefined;
+  let bestLen = 0;
+  for (const [name, project] of Object.entries(config.projects)) {
+    if (target === project.path || target.startsWith(project.path + "/")) {
+      if (project.path.length > bestLen) {
+        bestLen = project.path.length;
+        bestName = name;
       }
     }
-    return bestName;
-  } catch {
-    // Config not initialized yet
   }
-  return undefined;
+  return bestName;
 }
 
 // ---------------------------------------------------------------------------

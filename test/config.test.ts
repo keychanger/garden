@@ -203,6 +203,49 @@ describe("tryGetProject", () => {
   });
 });
 
+// A config.yml that exists but does not parse is a fault to report, not an
+// absent project: read as one, every lookup in a running fleet said "Unknown
+// project", polls and the Stop hook stopped without a word, and a launch could
+// fall back to a stub project with no claudeProfile.
+describe("project lookups over a config that does not parse", () => {
+  async function writeBrokenConfig(): Promise<string> {
+    const { GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    const projectDir = path.join(tmpHome, "wolf");
+    fs.mkdirSync(projectDir);
+    fs.writeFileSync(CONFIG_PATH, `projects:\n  wolf:\n    path: ${projectDir}\n   bad: [\n`);
+    return projectDir;
+  }
+
+  it("tryGetProject throws the parse error naming the file", async () => {
+    await writeBrokenConfig();
+    const { tryGetProject } = await importConfig();
+    expect(() => tryGetProject("wolf")).toThrow(/Failed to parse garden config at .*config\.yml: bad indentation/);
+  });
+
+  it("detectProjectFromPath and resolveProject report the parse error, not a missing project", async () => {
+    const projectDir = await writeBrokenConfig();
+    const { detectProjectFromPath, resolveProject } = await importConfig();
+    expect(() => detectProjectFromPath(projectDir)).toThrow(/Failed to parse garden config/);
+    const saved = process.env.GARDEN_PROJECT;
+    const savedCwd = process.cwd();
+    delete process.env.GARDEN_PROJECT;
+    try {
+      process.chdir(projectDir);
+      expect(() => resolveProject()).toThrow(/Failed to parse garden config/);
+    } finally {
+      process.chdir(savedCwd);
+      if (saved !== undefined) process.env.GARDEN_PROJECT = saved;
+    }
+  });
+
+  it("still reads an uninitialized garden as no project", async () => {
+    const { tryGetProject, detectProjectFromPath } = await importConfig();
+    expect(tryGetProject("wolf")).toBeNull();
+    expect(detectProjectFromPath(tmpHome)).toBeUndefined();
+  });
+});
+
 describe("resolveProject", () => {
   it("resolves from explicit name", async () => {
     const { resolveProject, saveConfig, GARDEN_DIR } = await importConfig();

@@ -111,6 +111,18 @@ describe("dueCleanupRequests", () => {
     expect(fs.existsSync(poison)).toBe(false);
   });
 
+  // Validation resolves each request's project through the config, so a
+  // config.yml that does not parse failed every request at once. Retired as
+  // "project not configured", each one's worktree was left to leak.
+  it("keeps every request while the config does not parse, and retires none", async () => {
+    const { dueCleanupRequests, CLEANUP_RETRY_AFTER_MS } = await importCleanup();
+    const file = await seed("wolf", "brisk-firm-oak", CLEANUP_RETRY_AFTER_MS * 2);
+    fs.appendFileSync(path.join(env.gardenDir, "config.yml"), "   broken: [\n");
+
+    expect(dueCleanupRequests(now)).toEqual([]);
+    expect(fs.existsSync(file)).toBe(true);
+  });
+
   it("recovers identity from the body, not the filename", async () => {
     // Both project and worker names contain hyphens, so the filename
     // `worker-cleanup-<project>-<worker>` cannot be parsed back apart.

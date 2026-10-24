@@ -81,7 +81,7 @@ import {
   commitsBehindOrigin, gardenInstallRepo, listWorktreeDirs, workerCleanupMarkerPath,
 } from "./git.js";
 import { readDashState, writeDashState, withStateLock } from "./state.js";
-import { getBuildBranch, loadConfig } from "../config.js";
+import { getBuildBranch, loadConfig, type GardenConfig } from "../config.js";
 import { GARDEN_COMMIT } from "../version.js";
 import { withFileLock } from "./file-lock.js";
 import { enforceAwake } from "./awake.js";
@@ -211,6 +211,30 @@ export function tick(lastPokeAt: Map<string, number>, nowMs: number): void {
   }
 }
 
+// The tick's first config read. A config.yml that exists but does not load
+// stops every project's poll at its own first read, and each consumer reports
+// only its downstream symptom, so the watchdog, the fleet's one recurring
+// process, names the file and the fault in an error alert (once per alert
+// dedup window). It used to throw out of the tick instead, skipping every
+// later duty (awake release, cleanup retries, pane heals) behind a generic warn.
+function loadConfigOrAlert(): GardenConfig | null {
+  try {
+    return loadConfig();
+  } catch (err) {
+    // js-yaml appends a multi-line source excerpt; its first line already
+    // names the file, the fault, and the line:column.
+    const fault = (err instanceof Error ? err.message : String(err)).split("\n")[0].trim();
+    addAlert({
+      level: "error",
+      source: "watchdog",
+      project: "(all)",
+      message: `${/[.!?]$/.test(fault) ? fault : `${fault}.`} No project is polled, reviewed or merged until it loads.`,
+      dedupKey: "config-unloadable",
+    });
+    return null;
+  }
+}
+
 // Ensure every project that holds workers or has bead intake enabled has
 // exactly one live poller window.
 // Delegates to the injected `ensurePoller` (startProjectPoller), which is
@@ -228,13 +252,13 @@ export function healProjectPollers(
   ensurePoller: (project: string) => void,
 ): string[] {
   const registry = readRegistry();
-  const config = loadConfig();
+  const config = loadConfigOrAlert();
   const projects = new Set(
     Object.entries(registry.workers)
       .filter(([, entries]) => entries.length > 0)
       .map(([project]) => project),
   );
-  for (const [project, projectConfig] of Object.entries(config.projects)) {
+  for (const [project, projectConfig] of Object.entries(config?.projects ?? {})) {
     if (projectConfig.beadIntake === true) projects.add(project);
   }
   const ensured: string[] = [];
