@@ -22,17 +22,14 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
-import { DASHBOARD_SESSION } from "../session.js";
-import { readDashState } from "./state.js";
 import {
   findWorkerByName, updateWorkerFields, updateWorkerFieldsIf, type AgentStatus,
 } from "./registry.js";
 import {
-  shellEscape, getFirstPaneId, paneExists, windowExists, pasteAndSubmit,
-  pressEnter, capturePaneText, capturePaneCursor, paneRunningOnlyShell,
-  type PaneCursor,
+  shellEscape, pasteAndSubmit, pressEnter, capturePaneText, capturePaneCursor,
+  paneRunningOnlyShell, type PaneCursor,
 } from "./tmux.js";
-import { workerWindowName as workerWin } from "./window-names.js";
+import { resolveWorkerPaneId } from "./worker-pane.js";
 import { branchRef, remoteBranchRef } from "./git-refs.js";
 import { harnessSignalsPromptReady } from "./harness/core.js";
 import {
@@ -235,19 +232,6 @@ export function setAwaitingInput(worktreePath: string | undefined): boolean {
   } catch {
     return false;
   }
-}
-
-function resolveWorkerPaneId(project: string, worker: string): string | null {
-  const windowName = workerWin(project, worker);
-  const state = readDashState();
-  if (state.activeWindowName === windowName && state.activePaneId
-      && paneExists(state.activePaneId)) {
-    return state.activePaneId;
-  }
-  if (windowExists(windowName)) {
-    return getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  }
-  return null;
 }
 
 // The input prompt glyphs: Claude Code's "❯" (U+276F) and Codex's "›"

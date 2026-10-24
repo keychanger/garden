@@ -25,8 +25,10 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
   triggerProjectPoll: vi.fn(),
 }));
 vi.mock("../src/dashboard/header.js", () => ({
-  findWorkerPaneId: vi.fn(() => null),
   refreshDashboard: vi.fn(),
+}));
+vi.mock("../src/dashboard/worker-pane.js", () => ({
+  resolveWorkerPaneId: vi.fn(() => null),
 }));
 vi.mock("../src/dashboard/tmux.js", () => ({
   getPaneTitle: vi.fn(() => ""),

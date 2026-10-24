@@ -17,8 +17,9 @@
 // `working`, or, when a subagent's dialog raised the episode, to the status
 // recorded with it (WorkerEntry.subagentAsk), since the main thread may be idle.
 import { readRegistry, updateWorkerFieldsIf, type AgentStatus, type WorkerRegistry } from "./registry.js";
-import { findWorkerPaneId, refreshDashboard } from "./header.js";
+import { refreshDashboard } from "./header.js";
 import { capturePaneText, readPaneCursorState, type PaneCursorState } from "./tmux.js";
+import { resolveWorkerPaneId } from "./worker-pane.js";
 import { DEFAULT_HARNESS } from "./harness/core.js";
 import { log } from "./log.js";
 
@@ -49,7 +50,7 @@ export function composerHasCursor(captured: string, cursor: PaneCursorState | nu
 }
 
 function dialogClosed(project: string, worker: string): boolean {
-  const paneId = findWorkerPaneId(project, worker);
+  const paneId = resolveWorkerPaneId(project, worker);
   if (!paneId) return false;
   return composerHasCursor(capturePaneText(paneId), readPaneCursorState(paneId));
 }

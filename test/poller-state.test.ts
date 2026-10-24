@@ -14,7 +14,9 @@ vi.mock("../src/dashboard/poller-fifo.js", () => ({
 }));
 vi.mock("../src/dashboard/header.js", () => ({
   refreshDashboard: vi.fn(),
-  findWorkerPaneId: vi.fn(() => null),
+}));
+vi.mock("../src/dashboard/worker-pane.js", () => ({
+  resolveWorkerPaneId: vi.fn(() => null),
 }));
 vi.mock("../src/dashboard/poller-holistic-review.js", () => ({
   evaluateHolisticGate: vi.fn(() => ({ eligible: false })),

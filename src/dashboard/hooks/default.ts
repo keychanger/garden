@@ -4,7 +4,7 @@
 // a method here. hook-dispatcher.ts translates wire events and invokes them.
 //
 // Helpers that were previously private to handleClaudeHook (workerFromCwd,
-// readHookInput, findWorkerPaneId, routeStopHookEnd, hasRecentWorkerAlert)
+// readHookInput, routeStopHookEnd, hasRecentWorkerAlert)
 // live here too — they are hook-internal, not part of the dashboard's
 // rendering surface, and moving them out of header.ts shrinks that file by
 // ~150 lines while keeping all hook logic colocated.
@@ -24,7 +24,7 @@ import {
 import { getWorkerBaseBranch } from "../git.js";
 import { runGit } from "../git-exec.js";
 import { remoteBranchRef } from "../git-refs.js";
-import { findWorkerPaneId, refreshDashboard } from "../header.js";
+import { refreshDashboard } from "../header.js";
 import { log } from "../log.js";
 // Import the FIFO wake primitive directly. The hook only signals the poller;
 // it must not import poller.ts or any state handler.
@@ -34,6 +34,7 @@ import {
   updateWorkerFieldsIf, type SubagentAsk, type WorkerEntry,
 } from "../registry.js";
 import { getPaneTitle, shellEscape } from "../tmux.js";
+import { resolveWorkerPaneId } from "../worker-pane.js";
 import { DEFAULT_HARNESS, resolveWorkerActivity } from "../harness/core.js";
 import { CODEX_AWAITING_TASK } from "../harness/codex-core.js";
 import { maybeRefreshUsage } from "../usage.js";
@@ -259,7 +260,7 @@ type FieldsDelta = Partial<Pick<WorkerEntry,
 // traffic — a busy agent completes many tools per second, and with N agents in
 // flight that is N × tool-rate cold-started hook processes. A heartbeat hook
 // (one that carries no state change) does a registry read-modify-write under
-// the global lock plus the findWorkerPaneId + getPaneTitle tmux forks; doing
+// the global lock plus the resolveWorkerPaneId + getPaneTitle tmux forks; doing
 // that on every tool call churns the very resources the operator's keystrokes
 // and pane swaps share (CPU, the registry lock, the tmux server). So a pure
 // heartbeat refreshes liveness at most once per this interval per worker.
@@ -359,7 +360,7 @@ function applyAndLog(
   // back empty — at session start, briefly after UserPromptSubmit, or before
   // the agent has said anything — so leave the previous task field intact then.
   const summary = resolveWorkerActivity(ctx.workerInfo.entry, () => {
-    const paneId = findWorkerPaneId(ctx.workerInfo!.project, ctx.workerInfo!.name);
+    const paneId = resolveWorkerPaneId(ctx.workerInfo!.project, ctx.workerInfo!.name);
     return paneId ? getPaneTitle(paneId) : null;
   });
   const taskChanged = Boolean(summary && summary !== ctx.workerInfo.entry.task);

@@ -416,7 +416,7 @@ function renderProjectHeader(h: {
 //
 // Batched: one tmux `list-panes -s -F` call yields every pane's
 // (windowName, paneId, title) in a single fork. The previous shape ran
-// findWorkerPaneId + getPaneTitle per worker — 2-3 tmux forks each, scaling
+// resolveWorkerPaneId + getPaneTitle per worker — 2-3 tmux forks each, scaling
 // linearly with worker count. Now constant: one fork regardless of N.
 //
 // Returns the registry with the refreshed tasks applied when any changed, else

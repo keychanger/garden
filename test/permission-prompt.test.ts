@@ -21,8 +21,11 @@ vi.mock("../src/dashboard/registry.js", () => ({
 }));
 
 vi.mock("../src/dashboard/header.js", () => ({
-  findWorkerPaneId: vi.fn(() => "%1"),
   refreshDashboard: vi.fn(),
+}));
+
+vi.mock("../src/dashboard/worker-pane.js", () => ({
+  resolveWorkerPaneId: vi.fn(() => "%1"),
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({
@@ -39,7 +42,8 @@ import {
   sweepAnsweredPermissionPrompts,
   watchPermissionPrompt,
 } from "../src/dashboard/permission-prompt.js";
-import { findWorkerPaneId, refreshDashboard } from "../src/dashboard/header.js";
+import { refreshDashboard } from "../src/dashboard/header.js";
+import { resolveWorkerPaneId } from "../src/dashboard/worker-pane.js";
 
 const RULE = "─".repeat(60);
 const DASHED = "╌".repeat(60);
@@ -124,7 +128,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useRealTimers();
   for (const key of Object.keys(workers)) delete workers[key];
-  vi.mocked(findWorkerPaneId).mockReturnValue("%1");
+  vi.mocked(resolveWorkerPaneId).mockReturnValue("%1");
 });
 
 describe("watchPermissionPrompt", () => {
@@ -169,7 +173,7 @@ describe("watchPermissionPrompt", () => {
     await vi.advanceTimersByTimeAsync(3_000);
     await done;
     expect(entry.agentStatus).toBe("asking");
-    expect(findWorkerPaneId).not.toHaveBeenCalled();
+    expect(resolveWorkerPaneId).not.toHaveBeenCalled();
   });
 
   // A subagent's dialog leaves the main thread as it was, which can be idle.
@@ -248,7 +252,7 @@ describe("sweepAnsweredPermissionPrompts", () => {
     expect(codex.agentStatus).toBe("asking");
 
     const claude = seed({ agentStatus: "asking", lastStateChangeAt: now - 60_000 });
-    vi.mocked(findWorkerPaneId).mockReturnValue(null);
+    vi.mocked(resolveWorkerPaneId).mockReturnValue(null);
     expect(sweepAnsweredPermissionPrompts({ workers }, now)).toBe(false);
     expect(claude.agentStatus).toBe("asking");
   });

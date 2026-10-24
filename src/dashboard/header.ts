@@ -10,7 +10,7 @@ import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused, logCo
 import { CONTROL_DIR } from "../paths.js";
 import { logColorTmux } from "../log-palette.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxBatch, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames } from "./tmux.js";
+import { tmux, tmuxBatch, getPanePid, getPaneTitle, setPaneVar, getPaneSize, listAllWindowNames } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
 import { findWorkerByName, updateWorkerFields, removeWorker, readRegistry, type WorkerRegistry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -19,7 +19,7 @@ import { renderQuickStatus, refreshWorkerTasks } from "../commands/status.js";
 import { log } from "./log.js";
 import { unreadAlertCount, formatRightBar, statusBarStyle } from "./alerts.js";
 import { renderAlertsPane } from "../commands/alerts.js";
-import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
+import { parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
 import { formatConversationPane } from "./conversation.js";
 import { getHarnessCore } from "./harness/core.js";
@@ -309,23 +309,6 @@ export function installInputGuard(state: DashboardState): void {
     tmux("set-hook", "-t", DASHBOARD_SESSION, "pane-focus-in",
       `if-shell -F "${condition}" "select-pane -R"`);
   } catch { /* hooks may not be supported on very old tmux */ }
-}
-
-// Locate a worker's pane regardless of whether it's currently visible in the
-// right slot or parked in a hidden window. Used by the shared hook handler
-// to read the live tmux pane title (which Claude sets via terminal escape
-// sequences and which doubles as a "what is this worker doing" summary), and
-// by the dashboard's task-refresh paths (handleTitleChanged, refreshWorkerTasks).
-export function findWorkerPaneId(project: string, worker: string): string | null {
-  const windowName = workerWin(project, worker);
-  const state = readDashState();
-  if (state.activeWindowName === windowName && state.activePaneId) {
-    return state.activePaneId;
-  }
-  if (windowExists(windowName)) {
-    return getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------

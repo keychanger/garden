@@ -61,6 +61,7 @@ import {
 } from "./continue.js";
 import { swapVisibleToProject, parkNameFor } from "./navigate.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "./window-names.js";
+import { resolveWorkerPaneId } from "./worker-pane.js";
 
 // Model half of the `--ultracode` handoff preset: pin the worker to Opus
 // (1M context). The effort + dynamic-workflow half is rendered by the harness
@@ -1602,19 +1603,6 @@ export function holdActiveWorker(): void {
     ? releaseWorker(state.activeProject, workerName)
     : holdWorker(state.activeProject, workerName);
   tmuxDisplay(result.message);
-}
-
-function resolveWorkerPaneId(project: string, worker: string): string | null {
-  const windowName = workerWin(project, worker);
-  const state = readDashState();
-  if (state.activeWindowName === windowName && state.activePaneId
-      && paneExists(state.activePaneId)) {
-    return state.activePaneId;
-  }
-  if (windowExists(windowName)) {
-    return getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  }
-  return null;
 }
 
 // Whether a worker's pane exists: its hidden window, or the right slot it was

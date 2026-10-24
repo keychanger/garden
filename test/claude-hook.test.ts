@@ -53,6 +53,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   getPaneTitle: vi.fn(() => ""),
   getPanePid: vi.fn(() => null),
   getPaneSize: vi.fn(() => null),  // null triggers resize since current size unknown
+  paneExists: vi.fn(() => true),
   windowExists: vi.fn(() => false),
   setPaneVar: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
@@ -156,7 +157,7 @@ import { handleClaudeHook } from "../src/dashboard/hook-dispatcher.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
-import { tmux, tmuxBatch, getPaneTitle } from "../src/dashboard/tmux.js";
+import { tmux, tmuxBatch, getPaneTitle, getFirstPaneId, paneExists, windowExists } from "../src/dashboard/tmux.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { _resetHeaderCachesForTest } from "../src/dashboard/header.js";
 
@@ -1615,6 +1616,33 @@ describe("handleClaudeHook — refresh skip on no-op transitions", () => {
       g => g[0] === "refresh-client" && g[1] === "-S",
     );
     expect(refreshCalls.length).toBeGreaterThan(0);
+  });
+
+  it("posttooluse reads the task from the worker's own window once the slot's recorded pane is gone", () => {
+    // Dashboard state still names the worker in the right slot, but tmux no
+    // longer has that pane; the worker runs in its own hidden window.
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working",
+      task: "old task",
+    });
+    setCwd("garden", "bold-ash");
+    vi.mocked(readDashState).mockReturnValueOnce({
+      activeProject: "garden",
+      statusPaneId: null,
+      gardenShellPaneId: null,
+      activePaneId: "%5",
+      activePaneType: "worker",
+      activeWindowName: "_garden-worker-bold-ash",
+    });
+    vi.mocked(paneExists).mockReturnValueOnce(false);
+    vi.mocked(windowExists).mockReturnValueOnce(true);
+    vi.mocked(getFirstPaneId).mockReturnValueOnce("%12");
+    vi.mocked(getPaneTitle).mockImplementationOnce(id => id === "%12" ? "Investigate blank task summaries" : "");
+
+    handleClaudeHook("posttooluse");
+
+    expect(entries.garden[0].task).toBe("Investigate blank task summaries");
+    expect(getPaneTitle).not.toHaveBeenCalledWith("%5");
   });
 
   it("pretooluse that flips working → asking DOES refresh the dashboard", () => {

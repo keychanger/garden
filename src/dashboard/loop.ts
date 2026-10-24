@@ -21,7 +21,6 @@
 // continue.ts would close that into a cycle.
 import { spawn } from "node:child_process";
 import { tryGetProject } from "../config.js";
-import { DASHBOARD_SESSION } from "../session.js";
 import {
   buildWorktreeWorkerCommand,
   buildWorktreeContextText,
@@ -37,11 +36,8 @@ import {
 } from "./registry.js";
 import { resolveGardenRunner } from "./runner.js";
 import { tmuxWorkerCommand } from "./claude-env.js";
-import { readDashState } from "./state.js";
-import {
-  tmux, shellEscape, getFirstPaneId, paneExists, windowExists,
-} from "./tmux.js";
-import { workerWindowName as workerWin } from "./window-names.js";
+import { tmux, shellEscape } from "./tmux.js";
+import { resolveWorkerPaneId } from "./worker-pane.js";
 
 export interface LoopHooks {
   /** Read the current iteration counter from a worker entry's per-workflow
@@ -299,19 +295,4 @@ export function loopAutoContinueAfterMerge(
     },
   });
   return true;
-}
-
-// --- Helpers -------------------------------------------------------------
-
-function resolveWorkerPaneId(project: string, worker: string): string | null {
-  const windowName = workerWin(project, worker);
-  const state = readDashState();
-  if (state.activeWindowName === windowName && state.activePaneId
-      && paneExists(state.activePaneId)) {
-    return state.activePaneId;
-  }
-  if (windowExists(windowName)) {
-    return getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-  }
-  return null;
 }
