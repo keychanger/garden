@@ -1614,6 +1614,14 @@ function resolveWorkerPaneId(project: string, worker: string): string | null {
   return null;
 }
 
+// Whether a worker's pane exists: its hidden window, or the right slot it was
+// swapped into. Null when tmux does not answer, since every probe then fails
+// exactly as a destroyed pane does (a garden process inside an agent sandbox).
+export function workerPaneLive(project: string, worker: string): boolean | null {
+  if (dashboardReach().state === "unreachable") return null;
+  return resolveWorkerPaneId(project, worker) !== null;
+}
+
 // Hand a removed worker's worktree/branch cleanup to the `_worker-cleanup`
 // subcommand, via a request file the watchdog can retry.
 //

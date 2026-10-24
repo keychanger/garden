@@ -18,7 +18,7 @@ import { SESSIONS_DIR } from "../config.js";
 import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { getWorkers } from "./registry.js";
-import { newWorker } from "./workers.js";
+import { newWorker, workerPaneLive } from "./workers.js";
 import { getCrew } from "./crew.js";
 import { isWorkerEffort } from "./worker-effort.js";
 import { loadConfig } from "../config.js";
@@ -305,6 +305,23 @@ function findExistingWorker(request: HandoffRequest): string | null {
     .find(entry => entry.handoffRequestId === request.id)?.name ?? null;
 }
 
+// An entry carrying the request's id means an earlier attempt registered the
+// worker, but newWorker writes the entry before the worker's window exists. A
+// dispatcher that died or threw in between left an entry with nothing behind
+// it (the ghost sweep removes it later), so only a worker whose pane exists
+// completed the spawn. Null when tmux does not answer, where every probe fails
+// as an absent pane does.
+function existingWorkerResponse(workerName: string, request: HandoffRequest): HandoffResponse | null {
+  const live = workerPaneLive(request.targetProject, workerName);
+  if (live === null) return null;
+  return live
+    ? { workerName, completedAt: Date.now() }
+    : {
+        error: `${workerName} was registered for this handoff but has no window; submit the handoff again`,
+        completedAt: Date.now(),
+      };
+}
+
 // The claim owner's pid comes from a filename garden wrote in the control
 // tree, so none of the forged values reach here today. Kept the same shape as
 // the lock and slot probes so it stays safe if one ever does: only EPERM
@@ -389,12 +406,9 @@ function processClaim(claimFile: string, filenameId: string): void {
 
   const existingWorker = findExistingWorker(request);
   if (existingWorker) {
-    deliverClaimResult(
-      claimFile,
-      filenameId,
-      { workerName: existingWorker, completedAt: Date.now() },
-      request,
-    );
+    // Left in place when tmux does not answer; a later poll recovers it again.
+    const response = existingWorkerResponse(existingWorker, request);
+    if (response) deliverClaimResult(claimFile, filenameId, response, request);
     return;
   }
 
@@ -469,9 +483,8 @@ function processClaim(claimFile: string, filenameId: string): void {
         };
   } catch (err) {
     const reconciledWorker = findExistingWorker(request);
-    response = reconciledWorker
-      ? { workerName: reconciledWorker, completedAt: Date.now() }
-      : { error: String(err), completedAt: Date.now() };
+    const reconciled = reconciledWorker ? existingWorkerResponse(reconciledWorker, request) : null;
+    response = reconciled?.workerName ? reconciled : { error: String(err), completedAt: Date.now() };
   }
 
   deliverClaimResult(claimFile, filenameId, response, request);

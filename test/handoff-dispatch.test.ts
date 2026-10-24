@@ -24,6 +24,8 @@ vi.mock("../src/dashboard/log.js", () => ({
 
 vi.mock("../src/dashboard/workers.js", () => ({
   newWorker: vi.fn(),
+  // A registered worker's pane exists unless a case says otherwise (see beforeEach).
+  workerPaneLive: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => ({
@@ -34,7 +36,7 @@ import {
   submitHandoffRequest, waitForHandoffResponse, withdrawPendingHandoffRequest,
   processPendingHandoffs,
 } from "../src/dashboard/handoff-dispatch.js";
-import { newWorker } from "../src/dashboard/workers.js";
+import { newWorker, workerPaneLive } from "../src/dashboard/workers.js";
 import { getWorkers } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
 import { loadConfig } from "../src/config.js";
@@ -67,6 +69,7 @@ function resultPath(id: string): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(workerPaneLive).mockReset().mockReturnValue(true);
   vi.mocked(loadConfig).mockReturnValue({ projects: {} });
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-handoff-dispatch-test-"));
   cfg.SESSIONS_DIR = tmpDir;
@@ -264,6 +267,66 @@ describe("processPendingHandoffs", () => {
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")))
       .toMatchObject({ workerName: "already-spawned" });
+  });
+
+  // The entry is registered before the worker's window exists, so a dispatcher
+  // that died in between left an entry with no worker behind it. Recovery
+  // reported that as a handoff to a worker that would never run.
+  it("fails an abandoned claim whose worker never got a window", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    moveToClaim(id, 999_999_999);
+    vi.mocked(getWorkers).mockReturnValueOnce([{
+      name: "never-opened",
+      sessionId: "session",
+      task: "",
+      agentStatus: "loading",
+      handoffRequestId: id,
+    }]);
+    vi.mocked(workerPaneLive).mockReturnValueOnce(false);
+
+    processPendingHandoffs();
+
+    const receipt = JSON.parse(fs.readFileSync(resultPath(id), "utf8"));
+    expect(receipt.workerName).toBeUndefined();
+    expect(receipt.error).toMatch(/never-opened.*submit the handoff again/);
+    expect(vi.mocked(workerPaneLive)).toHaveBeenCalledWith("wolf", "never-opened");
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(fs.readdirSync(claimsDir)).toEqual([]);
+  });
+
+  it("leaves an abandoned claim for a later poll when tmux does not answer", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    moveToClaim(id, 999_999_999);
+    vi.mocked(getWorkers).mockReturnValueOnce([{
+      name: "already-spawned",
+      sessionId: "session",
+      task: "",
+      handoffRequestId: id,
+    }]);
+    vi.mocked(workerPaneLive).mockReturnValueOnce(null);
+
+    processPendingHandoffs();
+
+    expect(fs.existsSync(resultPath(id))).toBe(false);
+    expect(fs.readdirSync(claimsDir)).toHaveLength(1);
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+  });
+
+  it("reports the spawn's own error when newWorker throws after registering a worker with no window", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    vi.mocked(newWorker).mockImplementationOnce(() => {
+      throw new Error("could not write the bootstrap script");
+    });
+    vi.mocked(getWorkers)
+      .mockReturnValueOnce([])
+      .mockReturnValueOnce([{ name: "half-made", sessionId: "s", task: "", handoffRequestId: id }]);
+    vi.mocked(workerPaneLive).mockReturnValueOnce(false);
+
+    processPendingHandoffs();
+
+    const receipt = JSON.parse(fs.readFileSync(resultPath(id), "utf8"));
+    expect(receipt.workerName).toBeUndefined();
+    expect(receipt.error).toContain("could not write the bootstrap script");
   });
 
   it("replays a durable receipt instead of repeating a completed dispatch", () => {

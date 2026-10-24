@@ -249,7 +249,7 @@ vi.mock("../src/rules.js", () => ({
 
 import {
   newWorker, newWorkerFromHotkey, killPane, stopWorkerByName, bounceWorker, bounceActiveWorker,
-  decideHold, holdWorker, releaseWorker, holdActiveWorker,
+  decideHold, holdWorker, releaseWorker, holdActiveWorker, workerPaneLive,
 } from "../src/dashboard/workers.js";
 import { showBeads, reopenBead, unassignBead } from "../src/dashboard/beads.js";
 import { explainPtyFailure } from "../src/dashboard/pty-census.js";
@@ -1948,6 +1948,23 @@ describe("newWorker", () => {
     const entry = vi.mocked(addWorker).mock.calls[0][1] as Record<string, unknown>;
     expect(entry.workflow).toBe("grow");
     expect(entry.harness).toBeUndefined();
+  });
+});
+
+describe("workerPaneLive", () => {
+  it("answers null when tmux does not answer, instead of reading the pane as gone", () => {
+    vi.mocked(dashboardReach).mockReturnValue({ state: "unreachable", detail: "Operation not permitted" });
+    vi.mocked(windowExists).mockReturnValue(false);
+    expect(workerPaneLive("myproject", "bold-ash")).toBeNull();
+  });
+
+  it("finds a worker in its hidden window or in the right slot", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(workerPaneLive("myproject", "bold-ash")).toBe(true);
+    vi.mocked(windowExists).mockReturnValue(false);
+    expect(workerPaneLive("myproject", "bold-ash")).toBe(false);
+    // makeState's right slot holds swift-oak, whose hidden window is swapped out.
+    expect(workerPaneLive("myproject", "swift-oak")).toBe(true);
   });
 });
 
