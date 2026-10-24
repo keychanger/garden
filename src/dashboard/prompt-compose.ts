@@ -264,8 +264,8 @@ export function readDocSections(wtPath: string): string[] {
 // The agent docs Claude Code loads from the worktree as project instructions:
 // CLAUDE.md, or the AGENTS.md it names when it is only that pointer. A
 // claude-code reviewer runs `claude -p` there, so these are already in its
-// context. Codex reads AGENTS.md as well, but a headless Codex run keeps its
-// 32 KiB project-doc limit, so a Codex reviewer gets the docs inline.
+// context. A Codex reviewer runs with project_doc_max_bytes=0 and loads no
+// instruction file of its own (codex-core.ts), so it gets the docs inline.
 export function claudeLoadedDocs(wtPath: string): string[] {
   const claude = readCommittedFiles(wtPath, ["CLAUDE.md"]).get("CLAUDE.md")?.trim();
   if (!claude) return [];

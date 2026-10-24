@@ -166,11 +166,21 @@ function codexStatusLineFlag(): string {
 // and garden's rules fill ~20KB of that before the repo's own AGENTS.md begins:
 // a worker saw the first 13-17KB of its repo's instructions. Raised so the
 // worker reads the composed file whole, as a Claude worker reads AGENTS.md
-// through CLAUDE.md's @AGENTS.md import. Headless runs keep the default: the
-// review prompt already carries the repo's docs, and a second whole copy would
-// crowd Codex's window.
+// through CLAUDE.md's @AGENTS.md import.
 const CODEX_PROJECT_DOC_MAX_BYTES = 1024 * 1024;
 const CODEX_PROJECT_DOC_FLAG = ` -c project_doc_max_bytes=${CODEX_PROJECT_DOC_MAX_BYTES}`;
+
+// A reviewer reads no project instruction file. In a Codex worker's worktree
+// that file is the worker's AGENTS.override.md: garden's worker rules (commit
+// and push, touch .garden-done once the request is done) above the repo's
+// AGENTS.md, which the review prompt already carries, inline or named for the
+// reviewer to read. At 0 Codex reads no project instruction file and the rest
+// of its prompt input is unchanged (verified against 0.163.0 with `codex debug
+// prompt-input`; the operator's $CODEX_HOME/AGENTS.md still loads). Resolver
+// and CI-fix prompts carry no repo docs, so those runs keep the default and
+// read the repo's AGENTS.md through the override, under the note scoping
+// garden's rules to the worker.
+const CODEX_NO_PROJECT_DOC_FLAG = " -c project_doc_max_bytes=0";
 
 // Codex/OpenAI transient backend errors (rate limit / 5xx / overload /
 // stream drop) worth a retry, vs. a genuine review failure. Scanned over the
@@ -320,8 +330,9 @@ export const codexCore: HarnessCore = {
     const effortFlag = plan.effort
       ? ` -c ${shellEscape(`model_reasoning_effort=${plan.effort}`)}`
       : "";
+    const docFlag = plan.role === "reviewer" ? CODEX_NO_PROJECT_DOC_FLAG : "";
     const err = shellEscape(codexStderrSidecar(opts.resultFile));
-    return `${opts.inlineEnv}${plan.envPrefix}codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag}${effortFlag}`
+    return `${opts.inlineEnv}${plan.envPrefix}codex exec --dangerously-bypass-approvals-and-sandbox${modelFlag}${effortFlag}${docFlag}`
       + ` < ${shellEscape(opts.promptFile)} > ${shellEscape(opts.resultFile)} 2> ${err}`;
   },
 

@@ -748,11 +748,12 @@ the token count the last line); `GARDEN_REVIEWER=1` suppression is
 already harness-agnostic (checked in garden's hook entry), so a
 cross-harness reviewer needs no new suppression; and the reviewer takes
 its prompt on stdin. The AGENTS.md-collision concern below is not
-worker-only, though: a headless run still loads the worktree's instruction
-file as project instructions (up to Codex's 32 KiB `project_doc_max_bytes`),
-and in a Codex worker's worktree that is garden's composition in
-`AGENTS.override.md`. Garden's block therefore opens with a note scoping it to
-the worker.
+worker-only, though: a headless resolver or CI-fix run still loads the
+worktree's instruction file as project instructions (up to Codex's 32 KiB
+`project_doc_max_bytes`), and in a Codex worker's worktree that is garden's
+composition in `AGENTS.override.md`. Garden's block therefore opens with a note
+scoping it to the worker. A reviewer runs with `-c project_doc_max_bytes=0` and
+loads none: its prompt carries the repo's docs.
 
 Every unpinned Codex launch uses Garden's harness default of
 `gpt-6-astra` with `high` reasoning. The launch-plan boundary applies that

@@ -310,12 +310,27 @@ describe("codex adapter dialect", () => {
     // result file is stdout-only (not 2>&1) with stderr to a sidecar.
     expect(cmd).toBe(
       "GARDEN_REVIEWER=1 codex exec --dangerously-bypass-approvals-and-sandbox -m gpt-5-codex"
-      + " -c model_reasoning_effort=max"
+      + " -c model_reasoning_effort=max -c project_doc_max_bytes=0"
       + " < /tmp/p.txt > /tmp/r.txt 2> /tmp/r.txt.stderr",
     );
     // A headless reviewer must NOT bypass hook trust — it wants Codex to skip
     // the worktree's untrusted hooks so it fires no relay of its own.
     expect(cmd).not.toContain("--dangerously-bypass-hook-trust");
+  });
+
+  it("keeps the worker's rules file from a reviewer, but not from a resolver or CI-fix run", async () => {
+    // In a Codex worker's worktree the instruction file Codex reads is
+    // AGENTS.override.md: garden's worker rules above the repo's AGENTS.md. A
+    // review prompt carries the repo's docs itself; resolver and CI-fix prompts
+    // carry none, so those runs still read the repo's AGENTS.md through it.
+    const { getHarnessCore } = await importCore();
+    const command = (role: HeadlessRole) => getHarnessCore("codex").buildHeadlessCommand({
+      promptFile: "/tmp/p.txt", resultFile: "/tmp/r.txt",
+      launchPlan: headlessPlan("codex", role), inlineEnv: "", settingsFile: "/ignored",
+    });
+    expect(command("reviewer")).toContain(" -c project_doc_max_bytes=0 <");
+    expect(command("resolver")).not.toContain("project_doc_max_bytes");
+    expect(command("ciFix")).not.toContain("project_doc_max_bytes");
   });
 
   it("builds the interactive launch: no --session-id, hook-trust bypass on, real workspace-write sandbox", async () => {
