@@ -127,7 +127,8 @@ Before merging, the queue rebases onto the current `origin/<base>` through
 the base tip, uses `--rebase-merges` when a genuinely behind branch contains
 merge commits, and uses a plain rebase for an ordinary linear branch. Reviewer
 prompts apply the same selection; resolver prompts preserve merge topology when
-re-attempting a conflicted rebase.
+re-attempting a conflicted rebase, then have the resolver run the project's checks
+on the result, since a project without a CI gate otherwise merges it untested.
 
 Per-phase review sees only one delta against base, so when a multi-phase **default** worker reaches `done` having merged `>= 2` times, the poller interposes ONE final review of the whole-task cumulative diff for cross-phase coherence defects before the worker truly finishes. This is NOT a spawned worker: it reuses the headless reviewer flow (`launchHeadlessAgent` + `resolveReviewRole`, so a Codex reviewer works) on the worker's own branch, re-opening `done` → `reviewing`. Gated per-project by `holisticReview: off|shadow|fix` (default `fix` — `DEFAULT_HOLISTIC_REVIEW` in `config.ts`; `shadow` reports findings as an alert, `fix` fixes cross-phase defects directly and rides the normal CI/merge gate — the deliberate-decision guardrail is folded into the reviewer prompt; a project opts out with an explicit `off`/`shadow`). Spec: `WORKFLOWS.md` § "Holistic-review workflow"; `garden dashboard _holistic-backtest` replays it read-only against a past worker.
 

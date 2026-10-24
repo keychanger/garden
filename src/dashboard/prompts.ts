@@ -395,6 +395,7 @@ export const resolveCommitsSection: PromptSection = {
 export const resolveStepsSection: PromptSection = {
   name: "resolve-steps",
   render(ctx) {
+    const checks = ctx.data.checksCommand;
     return [
       "## Steps",
       "",
@@ -418,20 +419,46 @@ export const resolveStepsSection: PromptSection = {
       `4. When the rebase is complete, confirm with \`git status\` (should say clean) and`,
       `   \`git log --oneline ${remoteBranchRef(ctx.baseBranch)}..HEAD\` (should list your branch's commits).`,
       "",
-      "5. Do **not** push. The poller handles the push after verifying your work.",
+      ...(checks ? resolveChecksStep(ctx.projectName, checks) : []),
+      `${checks ? 6 : 5}. Do **not** push. The poller handles the push after verifying your work.`,
     ].join("\n");
   },
 };
 
+// The review that cleared this branch ran the checks before the base moved, and
+// the poller verifies only that the rebase landed. A project with no CI gate
+// (requireCiSuccess off, or no CI) then merges the resolved tip untested, so
+// the resolver runs the checks on it before reporting DONE.
+function resolveChecksStep(projectName: string, checksCommand: string): string[] {
+  return [
+    `5. Run \`garden checks ${projectName}\` on the rebased branch. It runs \`${checksCommand}\``,
+    "   under a machine-wide slot gate; a \"waiting for a free checks slot\" line means queued,",
+    "   not hung. Run it in the FOREGROUND and wait for it, however long it takes — never",
+    "   background it (see the output-format note).",
+    "   If checks fail, the two sides do not yet work together: fix only what their combination",
+    "   broke (for example, a call to something the base renamed), commit the fix with a message",
+    "   prefixed \"resolve: \", and re-run until they pass. If you cannot make them pass, revert",
+    "   your uncommitted edits so `git status` is clean, then output `FAILED`.",
+    "",
+  ];
+}
+
 export const resolveVerdictFormatSection: PromptSection = {
   name: "resolve-verdict-format",
-  render: () => [
+  render: (ctx) => [
     "## Output format",
     "",
     "Your LAST line of output must be exactly one of:",
     "",
-    "- `DONE` — the rebase completed cleanly and HEAD is ready for merge.",
-    "- `FAILED` — the conflict is unresolvable or you could not complete the rebase.",
+    ...(ctx.data.checksCommand
+      ? [
+          "- `DONE` — the rebase completed cleanly, the checks pass, and HEAD is ready for merge.",
+          "- `FAILED` — the conflict is unresolvable, you could not complete the rebase, or the checks fail and you could not fix them.",
+        ]
+      : [
+          "- `DONE` — the rebase completed cleanly and HEAD is ready for merge.",
+          "- `FAILED` — the conflict is unresolvable or you could not complete the rebase.",
+        ]),
     "",
     "Write a brief summary of what you did above the verdict line.",
     "",
@@ -807,8 +834,9 @@ export function buildCiFixPrompt(
 }
 
 // Resolver context: minimal I/O — only the commits the resolver needs to
-// frame the merge attempt. The other PromptData fields are unused by the
-// resolve sections and stay at their empty defaults.
+// frame the merge attempt, and the project's checks command to verify the
+// result with. The other PromptData fields are unused by the resolve sections
+// and stay at their empty defaults.
 export function buildResolvePrompt(
   projectName: string,
   projectPath: string,
@@ -877,7 +905,7 @@ function makeResolveContext(
     commitSummary,
     branchName,
     rules: "",
-    checksCommand: undefined,
+    checksCommand: tryGetProject(projectName)?.checks,
     changedFiles: [],
     docSections: [],
     testSections: [],

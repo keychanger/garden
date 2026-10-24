@@ -372,6 +372,29 @@ describe("buildResolvePrompt", () => {
     expect(result).toContain("rebase in progress");
     expect(result).toContain("git rebase --abort");
   });
+
+  // The review that cleared the branch ran the checks before the base moved,
+  // and a project without a CI gate (wolf: requireCiSuccess off) merges the
+  // resolved tip with nothing else run on it.
+  it("runs the project's checks on the rebased result, failing when they stay red", () => {
+    vi.mocked(tryGetProject).mockReturnValue(
+      { path: "/repo/myproject", checks: "npm test" } as ReturnType<typeof tryGetProject>,
+    );
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+    const checksAt = result.indexOf("`garden checks myproject`");
+    expect(checksAt).toBeGreaterThan(result.indexOf("When the rebase is complete"));
+    expect(checksAt).toBeLessThan(result.indexOf("Do **not** push"));
+    expect(result).toContain("`npm test`");
+    expect(result).toContain("FOREGROUND");
+    expect(result).toMatch(/cannot make them pass[\s\S]*output `FAILED`/);
+    expect(result).toMatch(/`FAILED` — [^\n]*checks fail/);
+  });
+
+  it("adds no checks step when the project configures no checks command", () => {
+    const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry())!;
+    expect(result).not.toContain("garden checks");
+    expect(result).toContain("5. Do **not** push.");
+  });
 });
 
 describe("findSpecFiles", () => {
