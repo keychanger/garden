@@ -353,8 +353,16 @@ export function handleCiFixing(
   // not a genuine ci-fix failure. The resolver never pushes, so poller-resolve.ts
   // detects this with an early return before its ledger write; the ci-fix agent
   // DOES push, so the worker push is only distinguishable after verification.
+  // Even then the ref alone cannot say who pushed. Counting every moved ref as
+  // the worker's meant an agent that pushed and then reported FAILED, or no
+  // verdict, reset the budget and re-armed a review, so a failure it could not
+  // fix looped with no bound. A worker push takes a worker turn, whose hooks
+  // stamp lastEventAt; the agent's hooks never do (GARDEN_REVIEWER=1).
+  // reviewStartedAt is this attempt's launch.
   // Compute it once so the ledger below and the reset branch below agree.
-  const workerPushInterruption = !verificationPassed
+  const workerActive = entry.reviewStartedAt === undefined
+    || (entry.lastEventAt ?? 0) > entry.reviewStartedAt;
+  const workerPushInterruption = !verificationPassed && workerActive
     && !!remoteHeadSha && !!entry.lastSeenSha && remoteHeadSha !== entry.lastSeenSha;
 
   // Ledger the ci-fix outcome at the single point a genuine outcome is known,

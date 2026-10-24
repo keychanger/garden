@@ -5523,6 +5523,46 @@ describe("poll — ci-fixing state", () => {
     // ledgered as a failure (mirrors the resolver, which omits it too).
     expect(recordCiFixOutcome).not.toHaveBeenCalled();
   });
+
+  it("still resets when the worker's hooks fired after the attempt launched", () => {
+    setupCiFix({ reviewStartedAt: Date.now() - 60_000, lastEventAt: Date.now() - 1_000 });
+    vi.mocked(fs.readFileSync).mockImplementation(p =>
+      String(p).includes("ci-fix-result") ? "Could not fix.\nFAILED" : "{}");
+    vi.mocked(getBranchHeadSha).mockReturnValue("worker-pushed-sha");
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("worker-pushed-sha");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
+      prState: "working", ciFixAttempts: 0, pendingReviewAt: expect.any(Number),
+    }));
+    expect(recordCiFixOutcome).not.toHaveBeenCalled();
+  });
+
+  // The agent pushes too. Read as a worker push, an agent that pushed and then
+  // ended without FIXED reset the budget and re-armed a review, so a failure it
+  // could not fix cycled review -> CI red -> ci-fix with no bound.
+  it.each([
+    [1, "Pushed a guess; this looks CI-specific.\nFAILED", "ci-fixing"],
+    [1, "Pushed a tweak, see the commit.", "ci-fixing"],
+    [3, "Pushed a guess; this looks CI-specific.\nFAILED", "failing"],
+  ])("counts attempt %i against the budget when the agent pushes then ends with %j", (attempts, output, next) => {
+    // The worker has been idle since before the agent launched.
+    setupCiFix({ ciFixAttempts: attempts, reviewStartedAt: Date.now() - 60_000, lastEventAt: Date.now() - 120_000 });
+    vi.mocked(fs.readFileSync).mockImplementation(p => String(p).includes("ci-fix-result") ? output : "{}");
+    vi.mocked(getBranchHeadSha).mockReturnValue("agent-pushed-sha");
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("agent-pushed-sha");
+
+    poll("myproject");
+
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "working" }));
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining(
+      next === "failing" ? { prState: "failing", failingReason: "ci" } : { prState: "ci-fixing", ciFixAttempts: 2 },
+    ));
+    expect(recordCiFixOutcome).toHaveBeenCalledWith("myproject", "bold-ash", undefined, "default",
+      expect.objectContaining({ verificationPassed: false }));
+  });
 });
 
 describe("poll — reviewer prompt", () => {
