@@ -846,9 +846,10 @@ function invalidEntryField(e: unknown): string | null {
   return null;
 }
 
-// Project keys and names of a failed entry may be worker-written, and alert
-// text reaches the terminal unescaped, so only a plain label is echoed; anything
-// else is named by its position in the project's list.
+// Project keys and names of a failed entry may be worker-written, so only a
+// plain label is echoed: the alert views strip control sequences, but other
+// text in a forged name could still pass for garden's own. Anything else is
+// named by its position in the project's list.
 const PLAIN_LABEL = /^[\w.-]{1,64}$/;
 
 // Removes the entries that fail invalidEntryField, in place, and a project

@@ -15,6 +15,7 @@ import { SESSIONS_DIR, getLogsMode, setLogsMode, loadConfig, logColorKeyForProje
 import { logColorAnsi, ASSIGNABLE_LOG_COLOR_KEYS, RESERVED_LOG_COLOR_KEY } from "../log-palette.js";
 import { isTTY } from "../output.js";
 import { atomicWriteFile } from "../dashboard/atomic-write.js";
+import { stripControlSequences } from "../dashboard/tmux.js";
 
 const LOG_FILE = path.join(SESSIONS_DIR, "dashboard.log");
 export const LOGS_FILTER_FILE = path.join(SESSIONS_DIR, "logs.filter.json");
@@ -415,10 +416,15 @@ const BORING_DATA_KEYS = new Set([
 // newlines from the child's stderr; left raw they break out of the indented
 // detail column and render at column 0, mangling the layout. Collapse every
 // whitespace run — newlines, tabs, repeated spaces — to one space so each
-// value stays one logical line in both the pretty and raw renderers.
+// value stays one logical line in both the pretty and raw renderers. Terminal
+// control sequences are dropped first: a logged message or value can carry text
+// a worker controls (every alert is logged, and an alert can splice in an epic
+// title or a reviewer's reply), and printed raw a CSI or OSC sequence in it
+// would clear or restyle the pane. The pretty headline is rendered through here
+// too.
 export function renderDataValue(v: unknown): string {
   const s = typeof v === "string" ? v : JSON.stringify(v);
-  return s.replace(/\s+/g, " ").trim();
+  return stripControlSequences(s).replace(/\s+/g, " ").trim();
 }
 
 function compactDataLines(data: Record<string, unknown>): string[] {
@@ -527,7 +533,12 @@ function formatRawEntry(entry: LogEntry, useRelativeTime: boolean): string {
     ? `  ${color.dim}${Object.entries(entry.data).map(([k, v]) =>
         `${k}=${renderDataValue(v)}`).join(" ")}${color.reset}`
     : "";
-  return `${color.dim}${ts}${color.reset} ${levelColor}${symbol} ${level}${color.reset} ${color.cyan}${src}${color.reset} ${workerStr}${entry.msg}${dataStr}`;
+  // Raw mode keeps the message's own whitespace but not its control sequences,
+  // for the reason renderDataValue gives. String() keeps the template's
+  // rendering of a line whose msg is not a string, since nothing validates a
+  // parsed line.
+  const msg = stripControlSequences(String(entry.msg));
+  return `${color.dim}${ts}${color.reset} ${levelColor}${symbol} ${level}${color.reset} ${color.cyan}${src}${color.reset} ${workerStr}${msg}${dataStr}`;
 }
 
 function projectColumnName(project: string | null): string {

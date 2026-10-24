@@ -492,3 +492,35 @@ describe("no rendered row overruns the pane", () => {
     expect(Math.max(...printed.map(l => l.length))).toBeLessThanOrEqual(97);
   });
 });
+
+// Every alert is logged with its message, and an alert can splice in text a
+// worker controls (an epic title from the .beads store, a reviewer's reply).
+describe("control sequences in logged text", () => {
+  const hostile = entry({
+    msg: "Epic e-1 (\x1b[2J\x1b]0;pwned\x07Ship it) hit its session budget",
+    data: { error: "git said \x1b[1Afatal" },
+  });
+  const HOSTILE = /\x1b\[(?:2J|1A)|\x1b\]/;
+
+  it("drops them from a pretty headline and its details", () => {
+    const rendered = formatPrettyEntry(hostile, false);
+    expect(rendered).not.toMatch(HOSTILE);
+    expect(strip(rendered)).toContain("Epic e-1 (Ship it) hit its session budget");
+    expect(strip(rendered)).toContain("error=git said fatal");
+  });
+
+  it("drops them from a raw message and its data values", async () => {
+    logContent = JSON.stringify(hostile);
+    const printed: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation(line => { printed.push(String(line)); });
+    try {
+      await logs(["--raw"]);
+    } finally {
+      spy.mockRestore();
+    }
+    const out = printed.join("\n");
+    expect(out).not.toMatch(HOSTILE);
+    expect(strip(out)).toContain("Epic e-1 (Ship it) hit its session budget");
+    expect(strip(out)).toContain("error=git said fatal");
+  });
+});

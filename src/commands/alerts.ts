@@ -4,6 +4,7 @@
 // ⌥a view from the same data and formatter (the status-pane precedent:
 // renderQuickStatus in status.ts).
 import { readAlerts, clearAlerts, type Alert } from "../dashboard/alerts.js";
+import { stripControlSequences } from "../dashboard/tmux.js";
 import { output, isTTY } from "../output.js";
 import { wrapDetail } from "./logs.js";
 
@@ -93,9 +94,14 @@ const PANE_MAX_MESSAGE_LINES = 3;
 // intact). wrapDetail measures columns but does not touch newlines, so those
 // embedded breaks escaped the gutter and rendered at column 0, and the markdown
 // syntax read as litter. Flatten to a single prose line here, at the display
-// layer — the store and `garden logs` keep the message verbatim.
+// layer — the store keeps the message verbatim and `garden logs --raw` prints
+// it uncondensed. Terminal control sequences go first: a message can carry text
+// a worker controls (an epic title from the sandbox-writable .beads store, a
+// reviewer's reply to worker-authored code), and a CSI or OSC sequence in it
+// would clear or restyle the pane, or reach the outer terminal when `garden
+// alerts` runs outside tmux.
 export function condenseMessage(message: string): string {
-  return message
+  return stripControlSequences(message)
     .replace(/```[\s\S]*?```/g, " ")     // fenced code blocks carry no gist
     .replace(/^\s*#{1,6}\s+/gm, "")      // markdown headings
     .replace(/\*\*|__|`/g, "")           // bold/code emphasis markers

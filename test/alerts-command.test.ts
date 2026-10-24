@@ -108,6 +108,18 @@ describe("garden alerts", () => {
     expect(row).not.toContain("\n");
   });
 
+  // The intake budget alert names an epic by its title, read from the
+  // sandbox-writable .beads store, so a worker chooses those bytes.
+  it("prints no control sequence a message carries", async () => {
+    h.store = { lastSeenAt: undefined, alerts: [
+      a({ message: "Epic e-1 (\x1b[2J\x1b]0;pwned\x07Ship it) hit its session budget" }),
+    ] };
+    const raw = (await captureConsoleLog(() => alerts([]))).join("\n");
+    expect(raw).not.toContain("\x1b[2J");
+    expect(raw).not.toContain("\x1b]");
+    expect(strip(raw)).toContain("Epic e-1 (Ship it) hit its session budget");
+  });
+
   it("leaves a read alert's message undimmed, styling only its gutter", async () => {
     h.store = {
       lastSeenAt: "2026-01-01T12:00:00Z",
@@ -251,6 +263,19 @@ describe("renderAlertsPane", () => {
     expect(out).not.toMatch(/[#*`]/);
   });
 
+  // The reviewer alert splices in a model's reply to worker-authored code.
+  it("paints no control sequence a message carries", () => {
+    h.store = {
+      lastSeenAt: undefined,
+      alerts: [at("2026-07-17T11:00:00Z", {
+        message: "Reviewer could not fix issues: \x1b[1A\x1b[2K\x1b]8;;https://x\x1b\\overwrote the row",
+      })],
+    };
+    const out = renderAlertsPane(78, null, NOW);
+    expect(out).not.toMatch(/\x1b\[(?:1A|2K)|\x1b\]/);
+    expect(strip(out)).toContain("Reviewer could not fix issues: overwrote the row");
+  });
+
   it("caps an overlong message so one alert cannot dominate the pane", () => {
     h.store = {
       lastSeenAt: undefined,
@@ -295,5 +320,10 @@ describe("condenseMessage", () => {
 
   it("leaves an ordinary single-line message untouched", () => {
     expect(condenseMessage("Reviewer could not fix issues")).toBe("Reviewer could not fix issues");
+  });
+
+  it("removes terminal control sequences, keeping the text around them", () => {
+    expect(condenseMessage("Epic e-1 (\x1b[2J\x1b]0;pwned\x07Ship it\x1b) hit its budget"))
+      .toBe("Epic e-1 (Ship it) hit its budget");
   });
 });
