@@ -180,6 +180,7 @@ export const reviewCodeReviewStepSection: PromptSection = {
       "update docs as needed. Make focused, minimal fixes — do not refactor or improve code",
       "beyond what the review requires. Commit your fixes with a clear message prefixed with",
       '"review: " (e.g., "review: add missing tests for error handling").',
+      "Do **not** push. The poller handles the push after reading your verdict.",
       ...nonBlockingNotesFor(ctx.data),
     ].join("\n");
   },
@@ -691,6 +692,7 @@ export const holisticActionSection: PromptSection = {
         `If you find a genuine defect, fix it MINIMALLY and commit with a message prefixed "review: "`,
         `naming the cross-phase defect. If the assembled task is coherent (the common outcome), change`,
         `NOTHING and do not commit.`,
+        `Do **not** push. The poller handles the push after reading your verdict.`,
         ...nonBlockingNotesFor(ctx.data),
       );
       if (ctx.data.checksCommand) {

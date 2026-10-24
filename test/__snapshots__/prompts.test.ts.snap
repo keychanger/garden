@@ -187,6 +187,7 @@ If you find issues, fix them directly in the worktree. Edit files, update tests,
 update docs as needed. Make focused, minimal fixes — do not refactor or improve code
 beyond what the review requires. Commit your fixes with a clear message prefixed with
 "review: " (e.g., "review: add missing tests for error handling").
+Do **not** push. The poller handles the push after reading your verdict.
 
 ## Branch: bold-ash
 
@@ -327,6 +328,7 @@ If you find issues, fix them directly in the worktree. Edit files, update tests,
 update docs as needed. Make focused, minimal fixes — do not refactor or improve code
 beyond what the review requires. Commit your fixes with a clear message prefixed with
 "review: " (e.g., "review: add missing tests for error handling").
+Do **not** push. The poller handles the push after reading your verdict.
 
 ## Branch: bold-ash
 
@@ -479,6 +481,7 @@ If you find issues, fix them directly in the worktree. Edit files, update tests,
 update docs as needed. Make focused, minimal fixes — do not refactor or improve code
 beyond what the review requires. Commit your fixes with a clear message prefixed with
 "review: " (e.g., "review: add missing tests for error handling").
+Do **not** push. The poller handles the push after reading your verdict.
 
 ## Branch: bold-ash
 
@@ -602,6 +605,7 @@ If you find issues, fix them directly in the worktree. Edit files, update tests,
 update docs as needed. Make focused, minimal fixes — do not refactor or improve code
 beyond what the review requires. Commit your fixes with a clear message prefixed with
 "review: " (e.g., "review: add missing tests for error handling").
+Do **not** push. The poller handles the push after reading your verdict.
 
 ## Branch: bold-ash
 

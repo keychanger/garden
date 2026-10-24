@@ -102,6 +102,13 @@ describe("buildReviewPrompt — initial review", () => {
     expect(result).toContain("Verify these are still accurate after the diff above");
   });
 
+  it("leaves the push to the poller", () => {
+    // The Project Rules section quotes the workers' "push your branch" rule;
+    // reviewers acted on it and retried refused pushes outside the sandbox.
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry());
+    expect(result).toContain("Do **not** push. The poller handles the push after reading your verdict.");
+  });
+
   it("includes test verification text", () => {
     vi.mocked(fs.readFileSync).mockImplementation(((p: string) => {
       if (String(p).includes("test/")) return "test file content";

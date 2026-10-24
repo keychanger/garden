@@ -125,6 +125,7 @@ describe("holistic final-review prompt", () => {
 
   it("fix mode: fix + commit, CLEAN/FIXED/FAILED verdict, references garden checks", () => {
     expect(fix).toContain('commit with a message prefixed "review: "');
+    expect(fix).toContain("Do **not** push. The poller handles the push after reading your verdict.");
     expect(fix).toContain("garden checks proj");
     expect(fix).toContain("`FIXED`");
     expect(fix).not.toContain("ANALYSIS-ONLY");
