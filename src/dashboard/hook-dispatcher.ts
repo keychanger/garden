@@ -57,8 +57,9 @@ export function handleClaudeHook(event: string): void {
 // command strings) translate to garden's normalized lifecycle methods here.
 // This switch IS the Claude Code adapter's event translation; a future
 // harness adapter supplies its own mapping onto the same handler interface
-// (docs/MULTI-MODEL.md "Layer 2").
-function pickHookMethod(handlers: WorkflowHookHandlers, event: string): HookMethod | null {
+// (docs/MULTI-MODEL.md "Layer 2"). Exported for the test that holds every
+// registration in harness/claude-code-hooks.ts to a route mapped here.
+export function pickHookMethod(handlers: WorkflowHookHandlers, event: string): HookMethod | null {
   switch (event) {
     case "sessionstart": return handlers.onSessionStart;
     case "prompt":       return handlers.onPromptSubmitted;

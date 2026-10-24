@@ -37,6 +37,7 @@ const HOOK_BUNDLE_CEILING_BYTES = 144 * 1024;
 const SKILLS_BYTES_CEILING = 2 * 1024;
 const POLLER_MODULE_RE = /dashboard\/poller(?:-[^/]+)?\.ts$/;
 const ALLOWED_POLLER_LEAF = "src/dashboard/poller-fifo.ts";
+const HOOK_EVENT_TABLE = "src/dashboard/harness/claude-code-hooks.ts";
 
 describe("hook bundle size guard (real esbuild)", () => {
   it("keeps dist/hook.js lean and poller handlers out", () => {
@@ -67,6 +68,11 @@ describe("hook bundle size guard (real esbuild)", () => {
       const retainedPollerModules = Object.keys(inputs)
         .filter(k => POLLER_MODULE_RE.test(k) && k !== ALLOWED_POLLER_LEAF);
       expect(retainedPollerModules).toEqual([]);
+
+      // The dispatcher keys on wire routes and never reads the Claude Code
+      // hook-event table. Retained, its reasons added 5.7KB to the bundle
+      // (measured when the table was added), text no hook fire uses.
+      expect(Object.keys(inputs).filter(k => k.endsWith(HOOK_EVENT_TABLE))).toEqual([]);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

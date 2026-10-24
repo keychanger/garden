@@ -27,6 +27,7 @@ import { buildSandboxConfig, type SandboxConfig } from "../sandbox.js";
 import { shellEscape } from "../tmux.js";
 import { installClaudeSkills } from "../skills.js";
 import { claudeCodeCore } from "./claude-code-core.js";
+import { CLAUDE_HOOK_EVENTS } from "./claude-code-hooks.js";
 import { retireUnanchoredCodexExcludes } from "./codex.js";
 import type { HarnessAdapter, RuntimeInstallOptions } from "./types.js";
 
@@ -88,8 +89,9 @@ export function buildSettingsJson(
   // Code as shell commands. The hook runner targets the minimal dist/hook.js
   // bundle (resolveHookRunner) so each per-tool-call fire parses only the
   // dispatcher's closure, not the whole CLI. Already pre-escaped per token, so
-  // it interpolates safely without re-wrapping. The event name is appended by
-  // each hook entry below; hook-entry.ts reads it from process.argv[2].
+  // it interpolates safely without re-wrapping. Each command ends in its
+  // registration's wire route (CLAUDE_HOOK_EVENTS); hook-entry.ts reads it from
+  // process.argv[2].
   //
   // Prefix a NODE_COMPILE_CACHE assignment so each cold-started hook process
   // reuses the cached V8 bytecode of the hook.js bundle (~8% faster cold start,
@@ -101,64 +103,12 @@ export function buildSettingsJson(
   // runs on most tool calls. While the marker is present the shell drains its
   // input and exits instead of starting node: Claude Code reports a hook that
   // exits with its input unread as failed, once the input outgrows the pipe.
-  const toolstartGate = opts.unwatchedMarker
+  const unwatchedGate = opts.unwatchedMarker
     ? `[ -e ${shellEscape(opts.unwatchedMarker)} ] && exec cat >/dev/null; `
     : "";
   return JSON.stringify({
     // undefined drops the key.
-    hooks: opts.omitHooks ? undefined : {
-      SessionStart: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} sessionstart`, timeout: 5 }],
-      }],
-      UserPromptSubmit: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} prompt`, timeout: 5 }],
-      }],
-      Stop: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} stop`, timeout: 5 }],
-      }],
-      // A turn that dies on an API error (usage limit, expired login, dropped
-      // connection) fires StopFailure instead of Stop. The turn is just as
-      // over, so it takes the same route; without it the worker read
-      // `working` until the operator typed into the pane (39h once).
-      StopFailure: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} stop`, timeout: 5 }],
-      }],
-      PreToolUse: [{
-        matcher: "AskUserQuestion",
-        hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
-      }, {
-        matcher: "ExitPlanMode",
-        hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
-      }, {
-        // Records the worktree before a Bash call during review, so a
-        // read-only command does not cancel it (hooks/default.ts).
-        matcher: "Bash",
-        hooks: [{ type: "command", command: `${toolstartGate}${hookCmd} toolstart`, timeout: 10 }],
-      }],
-      PermissionRequest: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} pretooluse`, timeout: 5 }],
-      }],
-      PostToolUse: [{
-        // Catch-all: auto-mode escalates any tool the classifier flags (Write,
-        // Edit, Read, Bash, WebFetch, ...), not just Bash — so we need to see
-        // every tool completion to clear "asking" after the operator approves.
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
-      }],
-      // PostToolUse fires only for a tool that succeeded. A failed one (a Bash
-      // edit chained to a failing `npm test`, an approved tool that errors) is
-      // the same activity: it clears `asking`, and it can rewrite the tree a
-      // reviewer is certifying.
-      PostToolUseFailure: [{
-        matcher: "",
-        hooks: [{ type: "command", command: `${hookCmd} posttooluse`, timeout: 5 }],
-      }],
-    },
+    hooks: opts.omitHooks ? undefined : settingsHooks(hookCmd, unwatchedGate),
     sandbox,
     statusLine: { type: "command", command: statusLineCmd },
     // The classic renderer repaints only the visible rows when the pane is
@@ -182,6 +132,25 @@ export function buildSettingsJson(
       ],
     },
   }, null, 2);
+}
+
+// One matcher group per registration in CLAUDE_HOOK_EVENTS, in table order.
+// An event the table leaves unregistered gets no key, and nothing here may add
+// a hook the table does not name: the table is where each event is decided.
+function settingsHooks(hookCmd: string, unwatchedGate: string): Record<string, unknown> {
+  const hooks: Record<string, unknown> = {};
+  for (const [event, disposition] of Object.entries(CLAUDE_HOOK_EVENTS)) {
+    if (!("register" in disposition)) continue;
+    hooks[event] = disposition.register.map(({ matcher, route, timeout, skipWhileUnwatched }) => ({
+      matcher,
+      hooks: [{
+        type: "command",
+        command: `${skipWhileUnwatched ? unwatchedGate : ""}${hookCmd} ${route}`,
+        timeout,
+      }],
+    }));
+  }
+  return hooks;
 }
 
 // Build the sandbox config for a Claude session rooted at targetDir. The

@@ -54,7 +54,7 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `handoff-dispatch.ts` — `garden handoff` request IPC, claim/receipt reconciliation, callbacks (DESIGN.md "Auto-Continue Across the Merge Boundary")
   - `workflows/` — poller workflow registry: `default`, `grow`, `designer`, `planner` (WORKFLOWS.md)
   - `launch-plan.ts` — fail-closed launch identity for workers and headless roles; harness tuning defaults (DESIGN.md "Project Configuration")
-  - `harness/` — harness adapters: `core.ts` (hook-bundle safe) vs `index.ts` (CLI only), `claude-code*`, `codex*`, `agents-md.ts`, `vocabulary.ts` (each build member's model/effort names) (docs/MULTI-MODEL.md "Layer 3")
+  - `harness/` — harness adapters: `core.ts` (hook-bundle safe) vs `index.ts` (CLI only), `claude-code*` (`claude-code-hooks.ts`: every Claude Code hook event, registered or with its reason; CLI only), `codex*`, `agents-md.ts`, `vocabulary.ts` (each build member's model/effort names) (docs/MULTI-MODEL.md "Layer 3")
   - `hooks/default.ts` + `hook-dispatcher.ts` — shared lifecycle hooks and wire-event routing; never import the workflow registry
   - `crew.ts` + `crew-picker.ts` + `crew-draft.ts` — crews, the `⌥⇧C` picker/composer and its draft
   - `menu.ts` + `worker-menu.ts` + `project-menu.ts` + `garden-menu.ts` + `project-config-mutate.ts` — tmux menus (`⌥i`, `⌥,`, `⌥;`) and the one config writer (DESIGN.md "Hotkeys", "Project Configuration")
