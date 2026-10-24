@@ -1081,6 +1081,60 @@ describe("poll — working state", () => {
     );
   });
 
+  // grow.iteration counts working -> reviewing transitions (WORKFLOWS.md "Grow
+  // workflow"). A launch that never reached `reviewing` is not one, and the
+  // watchdog re-pokes a working worker with a review armed every few minutes,
+  // so counting each attempt ended the loop early once a review finally ran.
+  describe("grow iteration counter", () => {
+    const growWorker = () => makeWorker({
+      name: "tall-fern", branchName: "tall-fern", worktreePath: "/tmp/wt/myproject/tall-fern",
+      prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(),
+      workflow: "grow", grow: { seed: "harden auth", iteration: 2, maxIterations: 5 },
+    });
+    const iterationWrites = () => vi.mocked(updateWorkerFields).mock.calls.filter(
+      c => c[1] === "tall-fern" && (c[2] as { grow?: { iteration?: number } }).grow?.iteration !== undefined,
+    );
+
+    it("advances once when the review launches", () => {
+      registryMock._setEntries("myproject", [growWorker()]);
+
+      poll("myproject");
+
+      expect(iterationWrites().map(c => c[2])).toEqual([{ grow: { iteration: 3 } }]);
+      expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "tall-fern",
+        expect.objectContaining({ prState: "reviewing" }));
+    });
+
+    it("does not advance when the review prompt cannot be built", () => {
+      registryMock._setEntries("myproject", [growWorker()]);
+      vi.mocked(getDiffAgainstBase).mockImplementation(() => { throw new Error("spawnSync git ETIMEDOUT"); });
+
+      poll("myproject");
+
+      expect(iterationWrites()).toEqual([]);
+    });
+
+    it("does not advance when the reviewer window cannot be opened", () => {
+      registryMock._setEntries("myproject", [growWorker()]);
+      vi.mocked(newDashboardWindow).mockImplementation(() => { throw new Error("fork failed: Device not configured"); });
+
+      poll("myproject");
+
+      expect(iterationWrites()).toEqual([]);
+    });
+
+    it("does not advance when the prompt is over the ceiling and the worker parks", () => {
+      registryMock._setEntries("myproject", [growWorker()]);
+      vi.mocked(buildRulesContext).mockReturnValue("r".repeat(MAX_REVIEW_PROMPT_BYTES + 1));
+
+      poll("myproject");
+
+      expect(iterationWrites()).toEqual([]);
+      expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "tall-fern",
+        expect.objectContaining({ prState: "failing", failingReason: "oversized-diff" }));
+    });
+  });
+
   it("allows multiple workers to transition independently", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ name: "calm-bay", prState: "reviewing", agentStatus: "idle",

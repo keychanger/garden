@@ -1648,16 +1648,6 @@ function launchReview(
     || (entry.unparseableRetryCount ?? 0) > 0
     || entry.reviewFallbackHarness !== undefined;
 
-  // Grow workflow: increment iteration counter before dispatch. No budget
-  // check at preflight — grow's terminal-on-budget is `done`, fired
-  // post-merge in maybeAutoContinue. The increment goes through the shared
-  // loop primitive (persistIteration) and growLoopHooks.
-  if (isGrow && !isRetryRelaunch) {
-    const state = growLoopHooks.readIteration(entry);
-    const nextIter = (state?.iteration ?? 0) + 1;
-    persistIteration(projectName, entry.name, entry, growLoopHooks, nextIter);
-  }
-
   // Fetch latest base branch so the reviewer can rebase onto it
   try {
     fetchBaseBranch(wtPath, baseBranch);
@@ -1766,6 +1756,18 @@ function launchReview(
     signalFifo: signalFifoPath(projectName),
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
   });
+
+  // Grow workflow: count the iteration now that its review has launched. A
+  // launch that stopped above (no prompt, an oversized one, a window tmux
+  // would not open) never reached `reviewing`, so it is not an iteration. No
+  // budget check here: grow's terminal-on-budget is `done`, fired post-merge
+  // in maybeAutoContinue. The increment goes through the shared loop
+  // primitive (persistIteration) and growLoopHooks.
+  if (isGrow && !isRetryRelaunch) {
+    const state = growLoopHooks.readIteration(entry);
+    const nextIter = (state?.iteration ?? 0) + 1;
+    persistIteration(projectName, entry.name, entry, growLoopHooks, nextIter);
+  }
 
   // Capture the remote tracking SHA at launch time. handleReviewing compares
   // origin/<branch> against this baseline to detect mid-review pushes. We use

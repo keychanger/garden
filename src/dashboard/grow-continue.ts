@@ -89,7 +89,7 @@ export function growAutoContinueAfterMerge(
   if (!project) return;
 
   // The upcoming iteration index: launchReview will increment to this value
-  // before dispatching the next review (preflight semantics). Read it from the
+  // when it launches the next review. Read it from the
   // entry so the system prompt and the continue
   // prompt agree on the iteration number.
   const upcoming = (entry.grow?.iteration ?? 0) + 1;
