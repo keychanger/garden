@@ -5,6 +5,7 @@ vi.mock("../src/dashboard/registry.js", () => {
   const entries: Record<string, import("../src/dashboard/registry.js").WorkerEntry[]> = {};
   return {
     readRegistry: vi.fn(() => ({ workers: entries })),
+    findWorkerByName: vi.fn((project: string, name: string) => entries[project]?.find(e => e.name === name)),
     updateWorkerFields: vi.fn(),
     _setEntries: (project: string, list: import("../src/dashboard/registry.js").WorkerEntry[]) => {
       entries[project] = list;
@@ -17,6 +18,12 @@ vi.mock("../src/dashboard/registry.js", () => {
 
 vi.mock("../src/dashboard/poller.js", () => ({
   triggerProjectPoll: vi.fn(),
+}));
+
+// The compare-and-set itself is covered against a real registry in
+// test/poller-state.test.ts; here it is the boundary kick hands its move to.
+vi.mock("../src/dashboard/poller-state.js", () => ({
+  transitionState: vi.fn(() => true),
 }));
 
 vi.mock("../src/dashboard/git.js", () => ({
@@ -39,6 +46,7 @@ vi.mock("../src/dashboard/telemetry.js", () => ({
 
 import { kick } from "../src/commands/kick.js";
 import { updateWorkerFields } from "../src/dashboard/registry.js";
+import { transitionState } from "../src/dashboard/poller-state.js";
 import { triggerProjectPoll } from "../src/dashboard/poller.js";
 import { getCommitSummary } from "../src/dashboard/git.js";
 import { recordOperatorAction } from "../src/dashboard/telemetry.js";
@@ -65,6 +73,7 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
 beforeEach(() => {
   vi.resetAllMocks();
   registryMock._clear();
+  vi.mocked(transitionState).mockReturnValue(true);
   vi.mocked(getCommitSummary).mockReturnValue("abc123 some commit");
   vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject" } as ReturnType<typeof tryGetProject>);
 });
@@ -164,11 +173,11 @@ describe("kick command", () => {
 
     const lines = await captureConsoleLog(() => kick(["bold-ash"]));
 
-    expect(updateWorkerFields).toHaveBeenCalledWith(
+    expect(transitionState).toHaveBeenCalledWith(
       "myproject",
-      "bold-ash",
+      expect.objectContaining({ name: "bold-ash", prState: "failing" }),
+      "working",
       expect.objectContaining({
-        prState: "working",
         pendingReviewAt: expect.any(Number),
         failingReason: undefined,
         failingSha: undefined,
@@ -196,7 +205,7 @@ describe("kick command", () => {
 
     await captureConsoleLog(() => kick(["bold-ash"]));
 
-    const fields = vi.mocked(updateWorkerFields).mock.calls[0][2] as Record<string, unknown>;
+    const fields = vi.mocked(transitionState).mock.calls[0][3] as Record<string, unknown>;
     for (const field of [
       "reviewRetryCount", "unparseableRetryCount", "quotaRetryCount",
       "reviewFallbackHarness", "reviewRetryAt", "unparseableReviewAt",
@@ -219,11 +228,11 @@ describe("kick command", () => {
 
     const lines = await captureConsoleLog(() => kick(["bold-ash"]));
 
-    expect(updateWorkerFields).toHaveBeenCalledWith(
+    expect(transitionState).toHaveBeenCalledWith(
       "myproject",
-      "bold-ash",
+      expect.objectContaining({ name: "bold-ash", prState: "failing" }),
+      "working",
       expect.objectContaining({
-        prState: "working",
         pendingReviewAt: expect.any(Number),
         failingReason: undefined,
         failingSha: undefined,
@@ -251,11 +260,11 @@ describe("kick command", () => {
 
     const lines = await captureConsoleLog(() => kick(["bold-ash"]));
 
-    expect(updateWorkerFields).toHaveBeenCalledWith(
+    expect(transitionState).toHaveBeenCalledWith(
       "myproject",
-      "bold-ash",
+      expect.objectContaining({ name: "bold-ash", prState: "failing" }),
+      "working",
       expect.objectContaining({
-        prState: "working",
         pendingReviewAt: expect.any(Number),
         failingReason: undefined,
         failingSha: undefined,
@@ -282,11 +291,11 @@ describe("kick command", () => {
 
     const lines = await captureConsoleLog(() => kick(["bold-ash"]));
 
-    expect(updateWorkerFields).toHaveBeenCalledWith(
+    expect(transitionState).toHaveBeenCalledWith(
       "myproject",
-      "bold-ash",
+      expect.objectContaining({ name: "bold-ash", prState: "failing" }),
+      "working",
       expect.objectContaining({
-        prState: "working",
         pendingReviewAt: expect.any(Number),
         failingReason: undefined,
         failingSha: undefined,
@@ -309,6 +318,7 @@ describe("kick command", () => {
 
     await expect(kick(["bold-ash"])).rejects.toThrow(/is in state 'failing'.*failingReason='code'/s);
     expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(transitionState).not.toHaveBeenCalled();
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
@@ -318,12 +328,15 @@ describe("kick command", () => {
       lastReview: { verdict: "failed", at: 1, body: "Tests blocked by sandbox", tipSha: "abc123" },
     })]);
     await captureConsoleLog(() => kick(["bold-ash", "--retry-review"]));
-    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
-      prState: "working", failingSha: undefined, pendingReviewAt: expect.any(Number),
-    }));
-    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash", expect.objectContaining({
-      lastReview: expect.anything(),
-    }));
+    expect(transitionState).toHaveBeenCalledWith(
+      "myproject", expect.objectContaining({ name: "bold-ash", prState: "failing" }), "working",
+      expect.objectContaining({ failingSha: undefined, pendingReviewAt: expect.any(Number) }),
+    );
+    expect(transitionState).not.toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), expect.anything(),
+      expect.objectContaining({ lastReview: expect.anything() }),
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalled();
     expect(triggerProjectPoll).toHaveBeenCalledOnce();
   });
 
@@ -343,6 +356,7 @@ describe("kick command", () => {
     })]);
     await expect(kick(["bold-ash", "--retry-review"])).rejects.toThrow();
     expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(transitionState).not.toHaveBeenCalled();
     expect(triggerProjectPoll).not.toHaveBeenCalled();
   });
 
@@ -369,11 +383,11 @@ describe("kick command", () => {
 
     await captureConsoleLog(() => kick(["bold-ash"]));
 
-    expect(updateWorkerFields).toHaveBeenCalledWith(
+    expect(transitionState).toHaveBeenCalledWith(
       "myproject",
-      "bold-ash",
+      expect.objectContaining({ name: "bold-ash", prState: "failing" }),
+      "working",
       expect.objectContaining({
-        prState: "working",
         pendingReviewAt: expect.any(Number),
         failingReason: undefined,
       }),
@@ -419,6 +433,58 @@ describe("kick command", () => {
     registryMock._setEntries("myproject", [makeWorker({ prState: "reviewing" })]);
 
     await expect(kick(["bold-ash"])).rejects.toThrow(/is in state 'reviewing'/);
+    expect(recordOperatorAction).not.toHaveBeenCalled();
+  });
+
+  // The guards judge the entry as kick read it, and the commit check between
+  // that read and the write is a git call. A worker that left `failing` in
+  // between (the poller's debounce took a pushed fix back to working) is not
+  // moved on that reading, and the operator is told where it is.
+  it("changes nothing when the worker left failing after the kick read it", async () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "failing", failingReason: "transient-review", failingSha: "abc123" }),
+    ]);
+    vi.mocked(transitionState).mockImplementation(() => {
+      registryMock._setEntries("myproject", [makeWorker({ prState: "reviewing" })]);
+      return false;
+    });
+
+    await expect(kick(["bold-ash"])).rejects.toThrow(
+      "Worker myproject/bold-ash moved from 'failing' to 'reviewing' while the kick ran; nothing was changed.",
+    );
+    expect(updateWorkerFields).not.toHaveBeenCalled();
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+    expect(recordOperatorAction).not.toHaveBeenCalled();
+  });
+
+  // The registry is worker-writable, so the state it names reaches the
+  // operator's terminal only as text.
+  it("prints the state the worker moved to without terminal control sequences", async () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "failing", failingReason: "transient-review", failingSha: "abc123" }),
+    ]);
+    vi.mocked(transitionState).mockImplementation(() => {
+      registryMock._setEntries("myproject", [
+        makeWorker({ prState: "\x1b]2;owned\x07reviewing" as WorkerEntry["prState"] }),
+      ]);
+      return false;
+    });
+
+    await expect(kick(["bold-ash"])).rejects.toThrow(
+      "Worker myproject/bold-ash moved from 'failing' to 'reviewing' while the kick ran; nothing was changed.",
+    );
+  });
+
+  it("says so when the worker was removed before the kick could move it", async () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "failing", failingReason: "quota", failingSha: "abc123" }),
+    ]);
+    vi.mocked(transitionState).mockImplementation(() => {
+      registryMock._clear();
+      return false;
+    });
+
+    await expect(kick(["bold-ash"])).rejects.toThrow("Worker myproject/bold-ash was removed while the kick ran.");
     expect(recordOperatorAction).not.toHaveBeenCalled();
   });
 });

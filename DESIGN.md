@@ -842,6 +842,9 @@ garden kick <worker> [--retry-review] # Re-arm a stranded 'working' worker for r
                                    # --retry-review explicitly requeues a failed default review after
                                    # its environment is repaired; requires a matching failing SHA and
                                    # no active worker turn. Retains the FAILED report; never passes checks.
+                                   # The move out of `failing` goes through transitionState from the
+                                   # entry the kick judged: a worker that moved meanwhile is left as it
+                                   # is, and the kick fails naming the state it is in now.
 garden redraw                      # Rebuild the passive panes (status/usage/history/alerts): re-bake
                                    # content, respawn each repaint loop — recovers a frozen/garbled pane
 garden bounce <worker>             # Restart a worker's Claude process (preserves session history)

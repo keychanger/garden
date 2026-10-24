@@ -1,7 +1,9 @@
-import { updateWorkerFields, type FailingReason } from "../dashboard/registry.js";
+import { findWorkerByName, updateWorkerFields, type FailingReason } from "../dashboard/registry.js";
 import { FRESH_REVIEW_CYCLE } from "../dashboard/cycle-resets.js";
 import { triggerProjectPoll } from "../dashboard/poller.js";
+import { transitionState } from "../dashboard/poller-state.js";
 import { getCommitSummary, getWorkerBaseBranch } from "../dashboard/git.js";
+import { stripControlSequences } from "../dashboard/tmux.js";
 import { recordOperatorAction } from "../dashboard/telemetry.js";
 import { tryGetProject } from "../config.js";
 import { output } from "../output.js";
@@ -87,21 +89,26 @@ export async function kick(args: string[]): Promise<void> {
     }
   }
 
-  // Past every guard — the kick will take effect on one of the two branches
-  // below. Ledger the operator intervention once here so both paths are covered.
-  recordOperatorAction(project, workerName, entry.createdAt, entry.workflow ?? "default", "kick");
-
   if (isReviewSideFailure || retryReview) {
     // Clear the failing pin and the retry state so handleWorking launches a
-    // fresh review on the next poll. prState moves failing → working via the
-    // workflow's valid-transitions map.
-    updateWorkerFields(project, workerName, {
-      prState: "working",
+    // fresh review on the next poll. The guards above judged the entry as it
+    // was read, so the move is made only while the worker is still in that
+    // `failing`: one that left it since (a pushed fix the poller already took
+    // back to working, a second kick) is not moved on a stale reading.
+    const moved = transitionState(project, entry, "working", {
       pendingReviewAt: Date.now(),
       failingReason: undefined,
       failingSha: undefined,
       ...FRESH_REVIEW_CYCLE,
     });
+    if (!moved) {
+      const current = findWorkerByName(project, workerName);
+      throw new Error(current
+        ? `Worker ${project}/${workerName} moved from 'failing' to '${stripControlSequences(current.prState ?? "working")}' `
+          + `while the kick ran; nothing was changed.`
+        : `Worker ${project}/${workerName} was removed while the kick ran.`);
+    }
+    recordOperatorAction(project, workerName, entry.createdAt, entry.workflow ?? "default", "kick");
     triggerProjectPoll(project);
     const recoveredFrom = failingReason ?? "code";
     output({ project, worker: workerName, reviewQueued: true, recoveredFrom },
@@ -110,6 +117,7 @@ export async function kick(args: string[]): Promise<void> {
   }
 
   updateWorkerFields(project, workerName, { pendingReviewAt: Date.now() });
+  recordOperatorAction(project, workerName, entry.createdAt, entry.workflow ?? "default", "kick");
   triggerProjectPoll(project);
   output({ project, worker: workerName, reviewQueued: true },
     () => `Kicked ${project}/${workerName} — review queued.`);
