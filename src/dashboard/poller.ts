@@ -18,6 +18,7 @@ import {
 } from "./registry.js";
 import { tryGetProject, loadConfig } from "../config.js";
 import { DASHBOARD_SESSION } from "../session.js";
+import { addAlert } from "./alerts.js";
 import { getWorkerBaseBranch } from "./git.js";
 import { healStatusPane, sweepGhostEntries } from "./validate.js";
 import { refreshDashboard } from "./header.js";
@@ -155,6 +156,31 @@ function pollWorker(
       worker: entry.name,
       data: { project: projectName, workflow: workflow.name, prState: state },
     });
+    return false;
+  }
+  // Every handler runs its git, and launches its agents, in the worker's
+  // worktree. Without a path to it (validate.ts clears the field once the
+  // directory is gone) they fell back to the project checkout: the operator's
+  // own working directory, where the merge queue runs `git checkout -- .`,
+  // rebases, and force-pushes. This is the only way into the handlers, so the
+  // refusal lives here rather than at each of their fallbacks.
+  if (!entry.worktreePath) {
+    // Say so only when the entry has pipeline work waiting. An idle or
+    // finished one has none, and the alert would otherwise repeat every hour
+    // for as long as the entry stays registered.
+    if (entry.pendingReviewAt !== undefined || !["working", "merged", "done"].includes(state)) {
+      addAlert({
+        level: "warn",
+        source: "poller",
+        project: projectName,
+        worker: entry.name,
+        message: `Worker ${entry.name} has no worktree path in the registry, so garden is not reviewing `
+          + `or merging it, rather than doing that in the project checkout. Its branch is untouched. `
+          + `\`garden workers stop ${entry.name}\` removes it, and \`garden resurrect ${entry.name}\` `
+          + `can then rebuild it.`,
+        dedupKey: `worktree-missing:${projectName}:${entry.name}`,
+      });
+    }
     return false;
   }
   return workflow.stateHandlers[state](projectName, projectPath, baseBranch, entry);

@@ -549,6 +549,21 @@ describe("respawnWorkerWindow capability gate", () => {
     expect(newDashboardWindow).not.toHaveBeenCalled();
   });
 
+  // validate.ts clears worktreePath once the worktree directory is gone, and
+  // the resume then fell back to the project checkout: the operator's working
+  // directory, where the resumed agent gets write access.
+  it("does not resume a worker with no worktree path in the project checkout", () => {
+    const result = respawnWorkerWindow(
+      "myproject",
+      { name: "myproject", path: "/repo/myproject" },
+      { name: "bold-ash", sessionId: "session-1", task: "", branchName: "bold-ash", workflow: "default" },
+      null,
+    );
+
+    expect(result).toBeNull();
+    expect(newDashboardWindow).not.toHaveBeenCalled();
+  });
+
   // The attach-time resume loop calls this before keybindings, the pollers,
   // and the watchdog are started, so an escaping launch error takes the whole
   // dashboard down with it — dead hotkeys and no review pipeline for every
@@ -566,7 +581,10 @@ describe("respawnWorkerWindow capability gate", () => {
       const result = respawnWorkerWindow(
         "myproject",
         { name: "myproject", path: "/repo/myproject", provider: "deepseek" },
-        { name: "bold-ash", sessionId: "session-1", task: "", workflow: "default" },
+        {
+          name: "bold-ash", sessionId: "session-1", task: "", workflow: "default",
+          branchName: "bold-ash", worktreePath: "/wt/myproject/bold-ash",
+        },
         null,
       );
 

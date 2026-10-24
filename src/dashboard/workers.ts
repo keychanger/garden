@@ -1170,6 +1170,15 @@ export function bounceWorker(projectName: string, workerName: string): void {
       `It may pre-date the worktree workflow; kill and recreate it instead.`,
     );
   }
+  // validate.ts clears worktreePath once the worktree directory is gone, and
+  // the resume below would then run the agent in the operator's project checkout.
+  if (!entry.worktreePath) {
+    throw new Error(
+      `Worker ${projectName}/${workerName} has no worktree path in the registry, so it cannot be ` +
+      `resumed in its own worktree. garden workers stop ${workerName} removes it; ` +
+      `garden resurrect ${workerName} can then rebuild it.`,
+    );
+  }
 
   const paneId = resolveWorkerPaneId(projectName, workerName);
   if (!paneId) {
@@ -1244,9 +1253,7 @@ export function bounceWorker(projectName: string, workerName: string): void {
   const resumeStatus = resolveResumeAgentStatus(entry);
   const wasWorking = resumeStatus === "ready";
 
-  const cwd = entry.worktreePath ?? projectInfo?.path;
-  const respawnArgs = ["respawn-pane", "-k"];
-  if (cwd) respawnArgs.push("-c", cwd);
+  const respawnArgs = ["respawn-pane", "-k", "-c", entry.worktreePath];
   respawnArgs.push("-t", paneId, "sh", "-c", resumeCmd);
   tmuxWorkerCommand(
     launchPlan,

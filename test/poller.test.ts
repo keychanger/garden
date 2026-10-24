@@ -5655,6 +5655,55 @@ describe("poll — prState this build does not know", () => {
   });
 });
 
+describe("poll — worker with no worktree on record", () => {
+  // validate.ts clears worktreePath once the worktree directory is gone, and
+  // every lifecycle handler then ran its git in the project checkout instead:
+  // the operator's own working directory, where the merge queue runs
+  // `git checkout -- .`, rebases, and force-pushes.
+  it("keeps the merge queue out of the project checkout", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending", worktreePath: undefined,
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(cleanWorktree).not.toHaveBeenCalled();
+    expect(rebaseBranch).not.toHaveBeenCalled();
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("merge-pending");
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn", worker: "bold-ash", dedupKey: "worktree-missing:myproject:bold-ash",
+    }));
+  });
+
+  it("does not launch a reviewer in the project checkout", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", worktreePath: undefined, pendingReviewAt: Date.now() }),
+    ]);
+
+    poll("myproject");
+
+    expect(newDashboardWindow).not.toHaveBeenCalled();
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("working");
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      dedupKey: "worktree-missing:myproject:bold-ash",
+    }));
+  });
+
+  it("stays quiet for a finished worker with no worktree, which has nothing waiting", () => {
+    registryMock._setEntries("myproject", [makeWorker({ prState: "done", worktreePath: undefined })]);
+
+    poll("myproject");
+
+    expect(addAlert).not.toHaveBeenCalled();
+  });
+});
+
 describe("poll — merged state", () => {
   // The merged handler is two-legged: resume-on-new-commits recovery, then
   // the gate-reopen sweep (replay of the post-merge auto-continue decision

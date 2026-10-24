@@ -116,6 +116,10 @@ existed carry none and merge as before. A `reviewInterruptedAt` mark sends it ba
 the worker has not committed and one landed while the verdict poll was still dispatching, whose stamp can name the
 worker's own commit.
 
+A registry entry with no worktree path (`validate.ts` clears it once the directory is gone) gets no lifecycle work: the
+poller skips it, with a warn alert when it has pipeline work waiting, and attach and bounce do not resume it, rather
+than fall back to the project checkout, the operator's own working directory.
+
 Before merging, the queue rebases onto the current `origin/<base>` through
 `rebaseBranch` (`git.ts`). It skips the rebase when the branch already contains
 the base tip, uses `--rebase-merges` when a genuinely behind branch contains

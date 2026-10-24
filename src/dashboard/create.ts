@@ -1213,10 +1213,20 @@ export function respawnWorkerWindow(
     });
     return null;
   }
+  // A worker resumes in its own worktree. Without a path to it (validate.ts
+  // clears the field once the directory is gone) this resumed the agent in the
+  // project checkout, the operator's working directory, with write access there.
+  if (!entry.worktreePath) {
+    log.warn("workers", "worker not resumed: no worktree path", {
+      worker: entry.name,
+      data: { project: projectName },
+    });
+    return null;
+  }
   // Per-worker base: honors entry.baseBranch pinned at creation, falls
   // back to current-checkout resolution for legacy entries.
   const baseBranch = getWorkerBaseBranch(entry, projectConfig.path);
-  const workerCwd = entry.worktreePath ?? projectConfig.path;
+  const workerCwd = entry.worktreePath;
   const resumeOpts: WorktreeCommandOptions = { launchPlan, worktreePath: entry.worktreePath };
   if (entry.workflow === "grow" && entry.grow) {
     resumeOpts.grow = {

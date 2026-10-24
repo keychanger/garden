@@ -2467,6 +2467,17 @@ describe("bounceWorker", () => {
     ]));
   });
 
+  // validate.ts clears worktreePath once the worktree directory is gone; the
+  // bounce then resumed the agent in the operator's project checkout.
+  it("refuses to bounce a worker with no worktree path", () => {
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "sess-abc", task: "", branchName: "swift-oak",
+    });
+
+    expect(() => bounceWorker("myproject", "swift-oak")).toThrow(/no worktree path/);
+    expect(vi.mocked(tmux).mock.calls.find(c => c[0] === "respawn-pane")).toBeUndefined();
+  });
+
   it("refuses a bounce after the worker's harness/provider pair becomes incompatible", () => {
     vi.mocked(findWorkerByName).mockReturnValue({
       name: "swift-oak",
