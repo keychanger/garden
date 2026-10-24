@@ -251,22 +251,14 @@ function formatPlotSegment(name: string, isActive: boolean, status: PlotState): 
   return `#[${style}]${circle} ${icon} ${name}#[default]`;
 }
 
-// Short-circuit when the template hasn't changed since the last write. The
-// plot strip mutates only on plot add/remove/focus events; in steady state
-// every refreshDashboard re-computes the same template. Skipping the
-// atomicWriteFile (a write+rename pair of syscalls) when content is
-// identity-equal to the last write keeps the per-hook cascade off disk.
-let lastWrittenPlotStripTemplate: string | null = null;
-
+// Short-circuit when the file already holds this template. The plot strip
+// mutates only on plot add/remove/focus events; in steady state every
+// refreshDashboard re-computes the same template. Skipping the atomicWriteFile
+// (a write+rename pair of syscalls) keeps the per-hook cascade off disk.
 function writePlotStripTemplate(template: string): void {
-  if (template === lastWrittenPlotStripTemplate) return;
-  if (renderedFileUnchanged(PLOT_STRIP_TEMPLATE_FILE, template)) {
-    lastWrittenPlotStripTemplate = template;
-    return;
-  }
+  if (renderedFileUnchanged(PLOT_STRIP_TEMPLATE_FILE, template)) return;
   try {
     atomicWriteFile(PLOT_STRIP_TEMPLATE_FILE, template, { durable: false });
-    lastWrittenPlotStripTemplate = template;
   } catch { /* sessions dir not yet created; best effort */ }
 }
 
@@ -740,8 +732,9 @@ export function refreshDashboardCycle(opts?: RefreshOptions): void {
 // list-windows — so the 60s re-bake doesn't re-read the registry and fork
 // git/tmux once per project. Deliberately status-only: it must not drive the
 // header/usage/tasks tmux work on a fixed cadence. writeQuickStatus's content
-// dedup (in-process cache + on-disk byte-compare) suppresses the write+signal
-// when the baked text is byte-identical. The `working` spinner frame is baked
+// dedup (a byte-compare against the file) suppresses the write+signal when the
+// baked text is byte-identical, and repaints when another process left the
+// file holding something else. The `working` spinner frame is baked
 // FIXED (status.ts iconFor) and animated locally by the pane, so a busy fleet's
 // bytes stay stable too — only a row whose time-in-state suffix ticks over
 // (`reviewing 12m` -> `13m`) actually repaints on a given tick; a fleet with
@@ -767,13 +760,9 @@ export function refreshStatusElapsed(): void {
 // production code shouldn't call this — caches reset naturally when the
 // dashboard process restarts.
 export function _resetHeaderCachesForTest(): void {
-  lastWrittenPlotStripTemplate = null;
-  lastWrittenQuickStatus = null;
-  lastWrittenUsageRendered = null;
-  lastWrittenHistory = null;
-  lastWrittenAlerts = null;
   lastBarLeft = null;
   lastBarRight = null;
+  lastBarStyle = null;
   cachedStatusWidth = null;
 }
 
@@ -888,24 +877,19 @@ function statusPaneFloorLines(
   } catch { return 0; }
 }
 
-// Short-circuit caches for the rendered files. When the renderer produces the
-// same string as the last write, both the atomicWriteFile (write+rename
-// syscalls) and the signalPane SIGUSR1 are wasteful — the pane already shows
-// this content. Steady-state hooks (PostToolUse storms, repeated Stop events)
-// often regenerate identical output; this keeps the per-hook cascade quiet.
-let lastWrittenQuickStatus: string | null = null;
-let lastWrittenUsageRendered: string | null = null;
-
-// Cross-process arm of the short-circuit. The lastWritten* caches above are
-// module-level, so they are permanently cold in the one-shot hook.js / cli.js
-// processes that drive most repaints — every hook fire would re-write and
-// re-signal even when the content is byte-identical to what the pane already
-// shows. Comparing the freshly rendered bytes against the on-disk file (a
-// ~0.05ms read) recovers the skip across processes, avoiding the write+rename
-// and, more importantly, the SIGUSR1 (signalPane forks tmux for the pane pid).
-// The pane's own loop re-reads the file each cycle, so a skipped signal never
-// leaves it stale for long. Returns false on a missing/unreadable file so the
-// first write of a session still lands.
+// Short-circuit for the baked pane files. When the renderer produces exactly
+// what the file already holds, both the atomicWriteFile (write+rename
+// syscalls) and the SIGUSR1 (signalPane forks tmux for the pane pid) are
+// wasted — the pane already shows this content. Steady-state hooks
+// (PostToolUse storms, repeated Stop events) often regenerate identical
+// output; this keeps the per-hook cascade quiet. The comparison is against the
+// file (a ~0.05ms read), never against what this process wrote last: the
+// watchdog and the usage poller are long-lived, and every other garden process
+// rewrites the same files between their calls, so their own last write says
+// nothing about what the pane shows. An idle pane blocks until it is signalled,
+// so a skip taken on a stale belief would leave the pane wrong until some
+// unrelated change. Returns false on a missing/unreadable file so the first
+// write of a session still lands.
 function renderedFileUnchanged(file: string, content: string): boolean {
   try {
     return fs.readFileSync(file, "utf-8") === content;
@@ -941,13 +925,8 @@ function writeQuickStatus(opts?: RefreshOptions): void {
     const rendered = renderQuickStatus(
       state, opts?.windowNames, opts?.config, opts?.registry, width,
     );
-    if (rendered === lastWrittenQuickStatus) return;
-    if (renderedFileUnchanged(STATUS_RENDERED_FILE, rendered)) {
-      lastWrittenQuickStatus = rendered;
-      return;
-    }
+    if (renderedFileUnchanged(STATUS_RENDERED_FILE, rendered)) return;
     atomicWriteFile(STATUS_RENDERED_FILE, rendered, { durable: false });
-    lastWrittenQuickStatus = rendered;
     if (state.statusPaneId) {
       // +1 for the pane-border-status top row, which is included in pane_height
       // but not in the rendered line count. Height is read fresh here (past the
@@ -959,9 +938,6 @@ function writeQuickStatus(opts?: RefreshOptions): void {
     }
   } catch { /* best effort */ }
 }
-
-let lastWrittenHistory: string | null = null;
-let lastWrittenAlerts: string | null = null;
 
 // Repaint the history pane (bottom-left ⌥h mode) for the worker currently
 // focused in the right slot. A cheap no-op unless history is the active garden
@@ -975,13 +951,8 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     const size = getPaneSize(state.gardenShellPaneId);
     const width = size?.width ?? 60;
     const rendered = renderHistoryContent(state, width, opts?.registry);
-    if (rendered === lastWrittenHistory) return;
-    if (renderedFileUnchanged(HISTORY_RENDERED_FILE, rendered)) {
-      lastWrittenHistory = rendered;
-      return;
-    }
+    if (renderedFileUnchanged(HISTORY_RENDERED_FILE, rendered)) return;
     atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
-    lastWrittenHistory = rendered;
     signalPane(state.gardenShellPaneId);
   } catch { /* best effort */ }
 }
@@ -1008,13 +979,8 @@ export function writeAlertsRendered(opts?: RefreshOptions): void {
     if (state.gardenPaneType !== "alerts" || !state.gardenShellPaneId) return;
     const width = getPaneSize(state.gardenShellPaneId)?.width ?? 60;
     const rendered = renderAlertsPane(width, state.alertsSeenMark, Date.now());
-    if (rendered === lastWrittenAlerts) return;
-    if (renderedFileUnchanged(ALERTS_RENDERED_FILE, rendered)) {
-      lastWrittenAlerts = rendered;
-      return;
-    }
+    if (renderedFileUnchanged(ALERTS_RENDERED_FILE, rendered)) return;
     atomicWriteFile(ALERTS_RENDERED_FILE, rendered, { durable: false });
-    lastWrittenAlerts = rendered;
     signalPane(state.gardenShellPaneId);
   } catch { /* best effort */ }
 }
@@ -1068,13 +1034,8 @@ function writeUsageRendered(opts?: RefreshOptions): void {
     const state = opts?.state ?? readDashState();
     const cur = state.usagePaneId ? getPaneSize(state.usagePaneId) : null;
     const rendered = renderUsagePane(Date.now(), cur?.width);
-    if (rendered === lastWrittenUsageRendered) return;
-    if (renderedFileUnchanged(USAGE_RENDERED_FILE, rendered)) {
-      lastWrittenUsageRendered = rendered;
-      return;
-    }
+    if (renderedFileUnchanged(USAGE_RENDERED_FILE, rendered)) return;
     atomicWriteFile(USAGE_RENDERED_FILE, rendered, { durable: false });
-    lastWrittenUsageRendered = rendered;
     if (state.usagePaneId) {
       // +1 for the pane-border-status top row.
       const h = rendered.split("\n").length + 1;

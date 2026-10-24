@@ -190,6 +190,29 @@ function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   };
 }
 
+// The disk side of the baked pane files, for tests of the content dedup:
+// atomicWriteFile writes a temp file and renames it into place, and the dedup
+// reads the destination back. Returns the destination → content map, which a
+// test edits to stand in for another process rewriting a file.
+function trackBakedFiles(): Map<string, string> {
+  const files = new Map<string, string>();
+  const pending = new Map<string, string>();
+  vi.mocked(fs.writeFileSync).mockImplementation(((p: unknown, data: unknown) => {
+    pending.set(String(p), String(data));
+  }) as never);
+  vi.mocked(fs.renameSync).mockImplementation(((from: unknown, to: unknown) => {
+    const data = pending.get(String(from));
+    if (data !== undefined) files.set(String(to), data);
+  }) as never);
+  vi.mocked(fs.readFileSync).mockImplementation(((p: unknown) => {
+    const data = files.get(String(p));
+    if (data !== undefined) return data;
+    if (/\.(rendered|template)$/.test(String(p))) throw new Error("ENOENT");
+    return "{}";
+  }) as never);
+  return files;
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   // Re-apply default mock return values after resetAllMocks clears them
@@ -1127,6 +1150,7 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
   });
 
   it("refreshStatusElapsed suppresses the write when content is unchanged", () => {
+    trackBakedFiles();
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
     vi.mocked(renderQuickStatus).mockReturnValue("reviewing 12m");
 
@@ -1137,11 +1161,10 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
     expect(vi.mocked(fs.renameSync).mock.calls.length).toBe(0);
   });
 
-  it("suppresses the write and SIGUSR1 when the on-disk file already matches, even with a cold in-process cache", () => {
-    // A fresh hook/hotkey process has an empty lastWritten* cache, so the
-    // in-process dedup can't fire. The cross-process file-compare must still
-    // skip the write + the signal when status.rendered already holds this exact
-    // content — the common case under the hook firehose.
+  it("suppresses the write and SIGUSR1 when the on-disk file already matches, in a fresh process", () => {
+    // A fresh hook/hotkey process has written nothing yet. The file-compare
+    // must still skip the write + the signal when status.rendered already holds
+    // this exact content — the common case under the hook firehose.
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
     vi.mocked(renderQuickStatus).mockReturnValue("reviewing 12m");
     vi.mocked(getPanePid).mockReturnValue("999"); // a signal WOULD fire if not skipped
@@ -1149,7 +1172,6 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
     vi.mocked(fs.readFileSync).mockImplementation(
       ((p: unknown) => (String(p).includes("status.rendered") ? "reviewing 12m" : "{}")) as never,
     );
-    _resetHeaderCachesForTest(); // cold in-process cache, like a fresh hook process
 
     refreshStatusElapsed();
 
@@ -1749,6 +1771,7 @@ describe("refreshDashboard", () => {
   });
 
   it("skips writeQuickStatus / writeUsageRendered atomic writes when rendered content is unchanged", () => {
+    trackBakedFiles();
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%5", usagePaneId: "%6" }));
     vi.mocked(renderQuickStatus).mockReturnValue("steady-state status");
 
@@ -1802,5 +1825,106 @@ describe("refreshDashboard", () => {
       c => c[0] === "set-option" && c[3] === "window-status-format",
     ).length;
     expect(sweepCalls).toBe(0);
+  });
+});
+
+// The watchdog and the usage poller are long-lived processes that re-bake the
+// same files every other garden process writes. What one of them last wrote is
+// not what the file holds once a hook or hotkey process has rewritten it, so a
+// render equal to its own last write is no reason to skip: only the file says
+// what the pane is showing.
+describe("baked pane files after another process rewrote them", () => {
+  const SIGNALED_PID = 999;
+  let killSpy: ReturnType<typeof vi.spyOn>;
+  let files: Map<string, string>;
+
+  beforeEach(() => {
+    files = trackBakedFiles();
+    vi.mocked(getPanePid).mockReturnValue(String(SIGNALED_PID));
+    killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+  });
+
+  afterEach(() => killSpy.mockRestore());
+
+  function bakedPath(name: string): string {
+    const found = [...files.keys()].find(k => k.endsWith(`/${name}`));
+    expect(found, name).toBeDefined();
+    return found!;
+  }
+
+  function rewrites(name: string): number {
+    return vi.mocked(fs.renameSync).mock.calls.filter(c => String(c[1]).endsWith(`/${name}`)).length;
+  }
+
+  // Bake once, let another process replace the file, bake the same render again.
+  function bakeAfterForeignRewrite(name: string, bake: () => void): void {
+    bake();
+    files.set(bakedPath(name), "written by another process");
+    vi.mocked(fs.renameSync).mockClear();
+    killSpy.mockClear();
+    bake();
+  }
+
+  it("re-bakes and signals the status pane", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("garden ⚠1");
+
+    bakeAfterForeignRewrite("status.rendered", () => refreshStatusElapsed());
+
+    expect(rewrites("status.rendered")).toBe(1);
+    expect(files.get(bakedPath("status.rendered"))).toBe("garden ⚠1");
+    expect(killSpy).toHaveBeenCalledWith(SIGNALED_PID, "SIGUSR1");
+  });
+
+  it("re-bakes and signals the usage pane", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ usagePaneId: "%6" }));
+
+    bakeAfterForeignRewrite("usage.rendered", () => refreshDashboard());
+
+    expect(rewrites("usage.rendered")).toBe(1);
+    expect(killSpy).toHaveBeenCalledWith(SIGNALED_PID, "SIGUSR1");
+  });
+
+  it("re-bakes and signals the history view", () => {
+    vi.mocked(readDashState).mockReturnValue(
+      makeState({ gardenPaneType: "history", gardenShellPaneId: "%9" }),
+    );
+
+    bakeAfterForeignRewrite("history.rendered", () => refreshDashboard());
+
+    expect(rewrites("history.rendered")).toBe(1);
+    expect(killSpy).toHaveBeenCalledWith(SIGNALED_PID, "SIGUSR1");
+  });
+
+  it("re-bakes and signals the alerts view", () => {
+    vi.mocked(readDashState).mockReturnValue(
+      makeState({ gardenPaneType: "alerts", gardenShellPaneId: "%9" }),
+    );
+
+    bakeAfterForeignRewrite("alerts.rendered", () => refreshStatusElapsed());
+
+    expect(rewrites("alerts.rendered")).toBe(1);
+    expect(killSpy).toHaveBeenCalledWith(SIGNALED_PID, "SIGUSR1");
+  });
+
+  it("re-bakes the plot-strip template the status pane's animation reads", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0", activePlot: "all" }));
+
+    bakeAfterForeignRewrite("plot-strip.template", () => refreshDashboard());
+
+    expect(rewrites("plot-strip.template")).toBe(1);
+  });
+
+  it("still skips the write and the signal when the file already holds the render", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
+    vi.mocked(renderQuickStatus).mockReturnValue("reviewing 12m");
+
+    refreshStatusElapsed();
+    vi.mocked(fs.renameSync).mockClear();
+    killSpy.mockClear();
+    refreshStatusElapsed();
+
+    expect(rewrites("status.rendered")).toBe(0);
+    expect(killSpy).not.toHaveBeenCalled();
   });
 });
