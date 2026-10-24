@@ -906,6 +906,7 @@ All read commands detect whether stdout is a TTY:
     node-compile/         # V8 compile cache for the per-tool-call hook bundle (NODE_COMPILE_CACHE; the hook runs unsandboxed)
     claude-settings/
       <sha256-of-runtime-dir>.json  # Claude hooks/sandbox/status line per worktree or checkout, passed with --settings; swept once its worker and project are gone
+      <sha256-of-runtime-dir>.unwatched  # Present while that worker has no review or merge in flight; its Bash PreToolUse hook then exits without starting node (same sweep)
       statusline.mjs                # The status-line script every worker's settings run (Claude Code runs it outside the sandbox)
     contexts/
       <sha256-of-runtime-dir>.context  # System-prompt rules per worktree or checkout (--append-system-prompt-file; a Codex worker's AGENTS.override.md); same keep-set as the settings
