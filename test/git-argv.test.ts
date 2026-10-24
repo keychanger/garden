@@ -556,6 +556,32 @@ describe("rebaseBranch", () => {
     );
   });
 
+  // The merge queue hands it the tip origin reported. Every probe and the
+  // rebase itself must use that commit, never the tracking ref.
+  it("replays onto the commit it is given rather than the tracking ref", () => {
+    stubBranch({ merges: ["deadbee"] });
+    const tip = "0123456789abcdef0123456789abcdef01234567";
+    expect(rebaseBranch("/tmp/wt", "main", tip)).toEqual({ kind: "ok" });
+    expect(mockExec).toHaveBeenCalledWith(
+      "git", safe("merge-base", "--is-ancestor", "--end-of-options", tip, "HEAD"), expect.anything(),
+    );
+    expect(mockExec).toHaveBeenCalledWith(
+      "git", safe("rev-list", "--merges", "--end-of-options", `${tip}..HEAD`), expect.anything(),
+    );
+    expect(mockExec).toHaveBeenCalledWith(
+      "git", safe("rebase", "--rebase-merges", "--end-of-options", tip), expect.objectContaining({ cwd: "/tmp/wt" }),
+    );
+    for (const [, args] of mockExec.mock.calls) {
+      expect((args as string[]).join(" ")).not.toContain("refs/remotes/origin/main");
+    }
+  });
+
+  it("refuses a target that is not a commit SHA or full ref, without throwing", () => {
+    stubBranch({});
+    expect(rebaseBranch("/tmp/wt", "main", "main")).toMatchObject({ kind: "error" });
+    expect(mockExec).not.toHaveBeenCalled();
+  });
+
   it("returns 'conflict' when rebase has merge conflicts", () => {
     stubBranch({ rebaseFails: "CONFLICT (content): Merge conflict in file.ts" });
     expect(rebaseBranch("/tmp/wt", "main")).toEqual({ kind: "conflict" });

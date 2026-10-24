@@ -22,10 +22,10 @@ import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentine
 import { dispatchDelayedGrowContinue } from "./grow-continue.js";
 import { resolveGardenRunner } from "./runner.js";
 import {
-  abortRebase, cleanWorktree, deleteRemoteBranch, ensureNoRebaseInProgress,
+  abortRebase, cleanWorktree, commitExists, deleteRemoteBranch, ensureNoRebaseInProgress,
   fastForwardBase, fetchBaseBranch, forcePushBranch, getBranchHeadSha, getChangedFiles,
   getChangedFilesBetween, getCommitSummary, getHeadSubject, getWorkerBaseBranch, isAncestor, listModifiedTrackedFiles,
-  mergeToBase, rebaseBranch, revertChurn, syncWorktreeToRemote,
+  mergeToBase, rebaseBranch, remoteTipSha, revertChurn, syncWorktreeToRemote,
 } from "./git.js";
 import { remoteBranchRef } from "./git-refs.js";
 import { gitTimedOut } from "./git-exec.js";
@@ -209,6 +209,20 @@ export function handleMergePending(
 
   const wtPath = entry.worktreePath ?? projectPath;
 
+  // The base tip the rebase below replays onto, asked of origin before the
+  // fetch so that the fetch brings it in, as mergeToBase does. Not read from
+  // refs/remotes/origin/<base>: that ref is in the shared git dir every worker
+  // sandbox can write, and a forged base committed on top of origin's real tip
+  // passes mergeToBase's fast-forward check, so the commits under it were
+  // replayed beneath the reviewed ones and pushed to the base with them.
+  let originBase: string | null = null;
+  let originBaseError: string | undefined;
+  try {
+    originBase = remoteTipSha(projectPath, baseBranch);
+  } catch (err) {
+    originBaseError = String(err);
+  }
+
   // Fetch latest base branch (before the CI gate and the resume check, both
   // of which read origin/<base>).
   try {
@@ -294,9 +308,20 @@ export function handleMergePending(
   // By this point all meaningful changes are committed — anything left is noise.
   cleanWorktree(wtPath, { project: projectName, worker: entry.name });
 
-  // Rebase onto current base branch
-  const rebaseResult = rebaseBranch(wtPath, baseBranch);
-  if (rebaseResult.kind === "conflict") {
+  // Rebase onto the tip origin named above, which the fetch brought in. With
+  // no such tip here, nothing local names the base that a worker could not
+  // have written, so the branch goes ahead as reviewed: mergeToBase asks
+  // origin again and refuses anything but a fast-forward of its tip, which
+  // sends a branch the base has moved past back through review.
+  const onto = originBase !== null && commitExists(wtPath, originBase) ? originBase : null;
+  if (onto === null) {
+    log.warn("poller", "origin base tip unknown; rebase skipped", {
+      worker: entry.name,
+      data: { project: projectName, originBase, error: originBaseError },
+    });
+  }
+  const rebaseResult = onto === null ? null : rebaseBranch(wtPath, baseBranch, onto);
+  if (rebaseResult?.kind === "conflict") {
     abortRebase(wtPath);
     // Direct call into poller-resolve, intentionally — not a workflow
     // dispatch. handleResolving's contract assumes the resolver is already
@@ -309,7 +334,7 @@ export function handleMergePending(
     // see WORKFLOWS.md "Limitations and future extension points".
     return launchResolver(projectName, projectPath, baseBranch, entry);
   }
-  if (rebaseResult.kind === "error") {
+  if (rebaseResult?.kind === "error") {
     abortRebase(wtPath);
     const detail = rebaseResult.error.slice(0, 300);
     addAlert({

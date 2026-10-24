@@ -224,6 +224,10 @@ vi.mock("../src/dashboard/git.js", () => ({
   forcePushBranch: vi.fn(),
   mergeToBase: vi.fn(),
   rebaseBranch: vi.fn(() => ({ kind: "ok" })),
+  // The base tip the merge queue asks origin for, and whether the fetch
+  // brought that commit in.
+  remoteTipSha: vi.fn(() => "base000"),
+  commitExists: vi.fn(() => true),
   abortRebase: vi.fn(),
   cleanWorktree: vi.fn(),
   deleteRemoteBranch: vi.fn(),
@@ -339,6 +343,7 @@ import {
   listModifiedTrackedFiles, revertChurn,
   syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
+  remoteTipSha, commitExists,
 } from "../src/dashboard/git.js";
 import { tmuxOutput, newDashboardWindow, newDashboardWindowPaned, setPaneVar, paneRunningOnlyShell, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
@@ -410,6 +415,8 @@ beforeEach(() => {
   vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
   vi.mocked(getRemoteTrackingSha).mockReturnValue("abc123");
   vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+  vi.mocked(remoteTipSha).mockReturnValue("base000");
+  vi.mocked(commitExists).mockReturnValue(true);
   vi.mocked(hasRebaseInProgress).mockReturnValue(false);
   vi.mocked(isAncestor).mockImplementation((_wt, _ancestor, descendant) =>
     !String(descendant).startsWith("refs/remotes/origin/"));
@@ -3420,7 +3427,9 @@ describe("poll — merge-pending state", () => {
 
     poll("myproject");
 
-    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "main");
+    // Onto the tip origin reported, not a tracking ref a worker can rewrite.
+    expect(remoteTipSha).toHaveBeenCalledWith("/repo/myproject", "main");
+    expect(rebaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "main", "base000");
     expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main", { project: "myproject", worker: "bold-ash" });
     expect(deleteRemoteBranch).toHaveBeenCalledWith("/repo/myproject", "bold-ash", { project: "myproject", worker: "bold-ash" });
@@ -3538,6 +3547,31 @@ describe("poll — merge-pending state", () => {
     expect(fetchBaseBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "main");
     expect(log.warn).toHaveBeenCalledWith("poller", "fetch before merge timed out", expect.anything());
     // A failed fetch is not fatal: the merge proceeds on the base it has.
+    expect(mergeToBase).toHaveBeenCalled();
+  });
+
+  // Without a tip from origin that the fetch brought in, nothing local names
+  // the base that a worker could not have written. The queue then does not
+  // rebase at all, and mergeToBase's own fast-forward check against origin
+  // decides whether the branch can land.
+  it.each([
+    ["origin does not answer", () => vi.mocked(remoteTipSha).mockImplementation(() => {
+      throw new Error("fatal: unable to access origin");
+    })],
+    ["origin has no base branch", () => vi.mocked(remoteTipSha).mockReturnValue(null)],
+    ["the fetch did not bring origin's tip in", () => vi.mocked(commitExists).mockReturnValue(false)],
+  ])("skips the rebase, not the merge, when %s", (_label, arrange) => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "merge-pending", mergePendingAt: new Date(Date.now() - 1000).toISOString() }),
+    ]);
+    arrange();
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(rebaseBranch).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith("poller", "origin base tip unknown; rebase skipped", expect.anything());
+    expect(forcePushBranch).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash", "bold-ash");
     expect(mergeToBase).toHaveBeenCalled();
   });
 

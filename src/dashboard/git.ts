@@ -10,7 +10,9 @@ import { DISCARDED_PATCH_PREFIX, discardedChangesPath } from "./headless-paths.j
 import { isGeneratedWorkerName } from "./names.js";
 import { log } from "./log.js";
 import { runGit, runGitBytes } from "./git-exec.js";
-import { assertBranchName, assertRevision, branchRef, isCommitSha, isValidBranchName, remoteBranchRef } from "./git-refs.js";
+import {
+  assertBranchName, assertRevision, branchRef, isCommitSha, isSafeRevision, isValidBranchName, remoteBranchRef,
+} from "./git-refs.js";
 
 const WORKTREE_BASE = path.join(
   process.env.HOME ?? "",
@@ -495,20 +497,38 @@ export type RebaseResult =
   | { kind: "conflict" }
   | { kind: "error"; error: string };
 
-// Merge commits in `origin/<base>..HEAD`. A plain `git rebase` drops these and
-// linearizes their commits; when the merged side came from the base, that can
-// also replay commits onto a tree that already contains their content. Used to
-// pick the rebase mode below.
-export function branchMergeCommits(worktreePath: string, baseBranch: string): string[] {
+// Merge commits in `<onto>..HEAD`, by default `origin/<base>..HEAD`. A plain
+// `git rebase` drops these and linearizes their commits; when the merged side
+// came from the base, that can also replay commits onto a tree that already
+// contains their content. Used to pick the rebase mode below.
+export function branchMergeCommits(
+  worktreePath: string,
+  baseBranch: string,
+  onto: string = remoteBranchRef(baseBranch),
+): string[] {
   try {
-    const out = git(worktreePath, "rev-list", "--merges", "--end-of-options", `${remoteBranchRef(baseBranch)}..HEAD`);
+    const out = git(worktreePath, "rev-list", "--merges", "--end-of-options", `${assertRevision(onto)}..HEAD`);
     return out.split("\n").filter(Boolean);
   } catch {
     return [];
   }
 }
 
-export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseResult {
+// `onto` is the commit the branch is replayed onto. The merge queue passes the
+// base tip origin reported (remoteTipSha), since what it rebases onto is pushed
+// to the base branch with the branch; the tracking-ref default is for callers
+// whose result decides nothing that is pushed.
+export function rebaseBranch(
+  worktreePath: string,
+  baseBranch: string,
+  onto: string = remoteBranchRef(baseBranch),
+): RebaseResult {
+  // Checked without throwing: this runs inside a poll pass, where a throw
+  // would stop every worker in the project.
+  const base = onto;
+  if (!isSafeRevision(base)) {
+    return { kind: "error", error: `not a commit SHA, HEAD or full ref: ${JSON.stringify(base)}` };
+  }
   // Fast-forward short-circuit. When the base tip is already an ancestor of
   // HEAD the branch sits strictly on top of the base and merging it is a pure
   // fast-forward — but `git rebase` does NOT no-op here if the branch carries a
@@ -516,7 +536,6 @@ export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseRe
   // the merge and replays the merged side's commits, which then conflict
   // against content the tree already has. That is unwinnable for the resolver,
   // so skip the rebase entirely: there is nothing to replay.
-  const base = remoteBranchRef(baseBranch);
   if (isAncestor(worktreePath, base, "HEAD")) {
     log.info("git", "branch already contains the base tip; skipping rebase", {
       data: { worktreePath, baseBranch },
@@ -526,7 +545,7 @@ export function rebaseBranch(worktreePath: string, baseBranch: string): RebaseRe
   // The base advanced, so the branch really must be replayed. Preserve merge
   // topology when it has any — `--rebase-merges` recreates the merge commits
   // instead of flattening them.
-  const merges = branchMergeCommits(worktreePath, baseBranch);
+  const merges = branchMergeCommits(worktreePath, baseBranch, base);
   const args = merges.length > 0
     ? ["rebase", "--rebase-merges", "--end-of-options", base]
     : ["rebase", "--end-of-options", base];

@@ -272,15 +272,23 @@ reads or runs.
   branch. A worker can still rewrite `refs/remotes/origin/<base>` itself in the window
   between a fetch and the read that follows, and that read decides more than which diff
   review sees.
-  The two reads that put unreviewed code in front of the operator are closed. The merge
-  queue now asks origin for both tips (`remoteTipSha`, over `git ls-remote`) rather than
-  reading the refs its own fetch just wrote, so the commit pushed to the base branch is
-  the one origin actually carries; and the fast-forward that advances the operator's
-  checkout — what a configured `postMerge` then builds and installs — advances to that
-  same reading. Both functions already contact origin for their own fetch, so this costs
-  a round-trip rather than a new dependency, and the remote URL comes from the shared
-  `.git/config`, which no sandbox grants.
-  The two install paths are closed the same way **for a claude-code worker**. The
+  The merge queue asks origin for both tips (`remoteTipSha`, over `git ls-remote`) rather
+  than reading the refs its own fetch just wrote, so the commit pushed to the base branch
+  is the one origin carries for the worker's branch, and the fast-forward that advances the
+  operator's checkout — what a configured `postMerge` then builds and installs — advances
+  to origin's reading of the base. Both functions already contact origin for their own
+  fetch, so this costs a round-trip rather than a new dependency, and the remote URL comes
+  from the shared `.git/config`, which no sandbox grants. Those reads alone do not keep
+  unreviewed commits off the base: `mergeToBase` checks only that the branch tip descends
+  from origin's base tip, and a forged base committed on top of that tip passes. The
+  queue's own rebase (`rebaseBranch`) took its target from the tracking ref after its
+  fetch, so a forged base written in that window was replayed beneath the reviewed
+  commits, force-pushed with them, and pushed to the base (reproduced with real git,
+  2026-10-24). The queue now asks origin for the base tip before that fetch and rebases
+  onto it, and when origin does not answer or the fetch did not bring that commit in, it
+  skips the rebase rather than falling back to the ref (`handleMergePending`,
+  `poller-merge.ts`).
+  The two install paths ask origin the same way **for a claude-code worker**. The
   new-worker bootstrap resolves the base commit from origin (`baseShaStep`, `create.ts`)
   and uses that SHA for both the main-checkout fast-forward and the `worktree add` whose
   dependencies it then installs with package scripts, aborting the spawn rather than
@@ -293,11 +301,27 @@ reads or runs.
   chose. Both restore the branch's upstream explicitly, since a SHA
   start point carries none and garden's own worker rules have every worker check
   `git log @{u}..HEAD`.
-  Still open: `rebaseBranch` takes its rebase target from the ref. That one cannot put
-  unreviewed code on the base by itself — the merge queue re-verifies ancestry against
-  origin's own tips — so it is a correctness and review-integrity gap rather than an
-  execution one. The reads that only decide what review *sees* (diffs, commit counts,
-  prompt text) are lower-stakes and unchanged.
+  Still open, and not lower-stakes: what review *sees* comes from the same ref. The review
+  prompt's diff and the reviewer's own rebase (`git rebase refs/remotes/origin/<base>`, per
+  its prompt) read it after the review launch's fetch, and the resolver's rebase and the
+  poller's check of it read it too. A base forged in either window puts its commits inside
+  the branch that is then pushed, under a diff that does not show them, and the queue lands
+  them with the reviewed work: it skips the rebase when the branch already contains
+  origin's tip, and replays them with the reviewed commits when origin has moved on (both
+  reproduced). Closing that needs the poller to pin each review's base from origin, hand
+  that SHA to the reviewer and resolver, and refuse at merge any commit between origin's
+  tip and HEAD outside the reviewed range, a record that cannot live in the worker-writable
+  registry. Registry forgery ("Skip review", above) reaches the same end more simply.
+  Also open: every SHA read above trusts git to read the commit that SHA names, and git
+  reads the object `refs/replace/<sha>` points at in its place unless run with
+  `--no-replace-objects`, which garden's git does not pass. Reproduced against a scratch
+  repository on 2026-10-24, with a replacement for origin's tip written from a worktree:
+  `fastForwardBase` left the operator checkout's `HEAD` at origin's SHA with the
+  replacement's files in its working tree and a clean status, `createWorktree` at that SHA
+  checked out the replacement's files, and a rebase onto it built commits whose trees
+  carried them, which the queue's fast-forward check let onto the base. The bootstrap's
+  `worktree add` is the same command. Until garden's git passes that flag, asking origin
+  closes only the ref-rewrite route.
 - **Other state in the sessions dir is still trusted.** Besides the registry, garden
   keeps files there that sandboxed `garden` commands write: the dashboard state file,
   alerts, the pre-rendered pane files the status, usage, history and alerts panes replay,
