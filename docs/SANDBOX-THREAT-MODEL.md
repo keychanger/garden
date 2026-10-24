@@ -307,7 +307,15 @@ reads or runs.
   registry, reports it. The check is the foreground process's cwd, so a sibling whose
   shell has moved out of its worktree, or whose cwd tmux will not report, is not
   detected; garden's own infrastructure windows are excluded, since they never hold a
-  worker. A session that cannot be enumerated defers rather than proceeding.
+  worker. A session that cannot be enumerated defers rather than proceeding. A link the
+  removed worker plants at its own worktree path is unlinked instead of followed: neither
+  the reap nor `git worktree remove`, which resolves the path once the worker's admin
+  entry is gone, runs on it (`unlinkNonDirectory`, `worker-cleanup.ts`), and the reap
+  resolves only the path's parent, so a link to `/` no longer aims it at every process the
+  operator owns. Both checks look at the path before git does, so a process that keeps
+  swapping a link and a directory there can race the window between the executor's last
+  check and git's own resolution, and have git remove the worktree the link points at;
+  closing it needs the executor to move the entry out of the worker's grant first.
   Garden refuses what it can recognize without trusting a file's contents. The pokers
   never block on the poll FIFO and write it only after confirming the descriptor they
   opened is a FIFO, so a link or file planted there takes no write (a shell cannot open

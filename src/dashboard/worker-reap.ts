@@ -169,11 +169,15 @@ export function reapWorktreeProcesses(
   // symlinked component anywhere above the worktree (`/var` → `/private/var` on
   // macOS, or a symlinked HOME) would otherwise match nothing and reap nothing,
   // silently — the sweep would look like it ran and found the tree empty.
+  // Only the parent is resolved, never the worktree's own name: that entry is
+  // inside the removed worker's write grant, and a link planted there would
+  // aim the sweep at its target, every process the operator owns for a link
+  // to /.
   let resolved = root;
   try {
-    resolved = fs.realpathSync(root);
+    resolved = path.join(fs.realpathSync(path.dirname(root)), path.basename(root));
   } catch {
-    // Already removed: fall back to the literal path. A husk recreated under
+    // Parent gone too: fall back to the literal path. A husk recreated under
     // an unresolved path still matches when no component is a symlink.
   }
 

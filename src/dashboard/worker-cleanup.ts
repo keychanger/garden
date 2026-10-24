@@ -420,6 +420,38 @@ function gitNoLongerTracksTree(err: string, worktreePath: string): boolean {
     diagnostic === `fatal: validation failed, cannot remove working tree: '${p}/.git' does not exist`);
 }
 
+// Unlink whatever sits at the canonical worktree path when it is not a
+// directory, judged by lstat so a link is seen as itself, then prune the admin
+// entry that leaves without a tree. True when such an entry was there, whether
+// or not it could be removed; false for a directory or for nothing at all.
+function unlinkNonDirectory(
+  req: WorkerCleanupRequest,
+  repoPath: string,
+  worktreePath: string,
+  failures: string[],
+): boolean {
+  let entry: fs.Stats;
+  try {
+    entry = fs.lstatSync(worktreePath);
+  } catch {
+    return false;
+  }
+  if (entry.isDirectory()) return false;
+  try {
+    fs.unlinkSync(worktreePath);
+  } catch (err) {
+    failures.push(`unlink non-directory at worktree path: ${String(err)}`);
+    return true;
+  }
+  log.warn("cleanup", "unlinked a non-directory at the worktree path", {
+    worker: req.worker,
+    data: { project: req.project, worktree: worktreePath, symlink: entry.isSymbolicLink() },
+  });
+  const pruneErr = gitCleanupStep(repoPath, ["worktree", "prune"]);
+  if (pruneErr) failures.push(`worktree prune: ${pruneErr}`);
+  return true;
+}
+
 function executeWorkerCleanup(req: WorkerCleanupRequest): void {
   const { project, worker } = req;
   const configured = tryGetProject(project);
@@ -441,17 +473,29 @@ function executeWorkerCleanup(req: WorkerCleanupRequest): void {
     : undefined;
   const branchName = req.branchName ? worker : undefined;
 
+  // Garden only ever creates a directory at the canonical path, but the entry
+  // itself is inside the removed worker's write grant, so a process that
+  // outlived it can plant a link there once git has removed the tree. The reap
+  // would sweep the link's target, and `worktree remove` resolves the path and
+  // removes whatever worktree the link lands on. Anything other than a
+  // directory there is unlinked instead, which never touches a link's target,
+  // and neither step runs on it.
+  let planted = worktreePath !== undefined
+    && unlinkNonDirectory(req, repoPath, worktreePath, failures);
+
   // Kill anything still living in the worktree before git deletes it. A worker
   // that daemonized a dev server leaves it running past the pane, and its next
   // write recreates the directory git just removed — so removing without
   // reaping produces an orphan husk instead of a clean removal. Runs whether or
   // not the directory currently exists: on the watchdog's retry the husk IS the
   // resurrection, and its author is still holding it.
-  if (worktreePath) {
+  if (worktreePath && !planted) {
     reapAndLog(project, worker, worktreePath, new Set(req.protectedPids));
+    // Looked at again: the reap's TERM grace is time enough to swap one in.
+    planted = unlinkNonDirectory(req, repoPath, worktreePath, failures);
   }
 
-  if (worktreePath && fs.existsSync(worktreePath)) {
+  if (worktreePath && !planted && fs.existsSync(worktreePath)) {
     const err = gitCleanupStep(repoPath, ["worktree", "remove", worktreePath, "--force"]);
     if (err !== null && gitNoLongerTracksTree(err, worktreePath)) {
       try {
@@ -464,7 +508,7 @@ function executeWorkerCleanup(req: WorkerCleanupRequest): void {
     } else if (err) {
       failures.push(`worktree remove: ${err}`);
     }
-  } else if (worktreePath) {
+  } else if (worktreePath && !planted) {
     // The directory is gone but git's admin entry under .git/worktrees may not
     // be — an operator `rm -rf`, or a removal that got half way. Left in place
     // it still claims the branch is checked out, so the `branch -D` below

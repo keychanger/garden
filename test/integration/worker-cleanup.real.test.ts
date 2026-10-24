@@ -27,14 +27,16 @@ vi.mock("../../src/session.js", async (orig) => ({
     : { state: tmuxView.dashboard ? "present" : "absent" },
 }));
 // Passes through to the real reap, so the daemon-kill case below still
-// exercises it, while recording whether it was reached at all.
-const reaped = vi.hoisted(() => ({ worktrees: [] as string[] }));
+// exercises it, while recording whether it was reached at all. `during` runs
+// in its place in time, for a test that changes the tree while it reaps.
+const reaped = vi.hoisted(() => ({ worktrees: [] as string[], during: undefined as undefined | (() => void) }));
 vi.mock("../../src/dashboard/worker-reap.js", async (orig) => {
   const actual = await orig<typeof import("../../src/dashboard/worker-reap.js")>();
   return {
     ...actual,
     reapAndLog: (...args: Parameters<typeof actual.reapAndLog>) => {
       reaped.worktrees.push(args[2]);
+      reaped.during?.();
       return actual.reapAndLog(...args);
     },
   };
@@ -88,6 +90,7 @@ beforeEach(() => {
   tmuxView.unreachable = false;
   tmuxView.panes = [];
   reaped.worktrees = [];
+  reaped.during = undefined;
   // No origin remote: there is no remote branch to delete, so local cleanup
   // succeeds without turning the intentional absence into a retry.
   wtPath = path.join(
@@ -372,6 +375,59 @@ describe("runWorkerCleanup (real git)", () => {
       }
     },
   );
+
+  // A removed worker's daemon can put a link where its tree was and forge a
+  // request for itself. Once the worker's own admin entry is gone, git
+  // resolves the path it is given, so `worktree remove --force` removed
+  // whatever worktree the link pointed at, uncommitted work included.
+  describe("a link planted at the worktree path", () => {
+    function sibling(): string {
+      const tree = path.join(path.dirname(wtPath), "tame-blue-fox");
+      git(env.repoPath, "worktree", "add", "-q", "-b", "tame-blue-fox", tree);
+      fs.writeFileSync(path.join(tree, "precious.txt"), "uncommitted");
+      return tree;
+    }
+
+    it("is unlinked, leaving the worktree it points at", async () => {
+      const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+      const target = sibling();
+      git(env.repoPath, "worktree", "remove", "--force", wtPath);
+      fs.symlinkSync(target, wtPath);
+      const file = await seed();
+
+      runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+      expect(fs.readFileSync(path.join(target, "precious.txt"), "utf8")).toBe("uncommitted");
+      expect(git(target, "rev-parse", "--is-inside-work-tree")).toBe("true");
+      expect(fs.existsSync(path.join(env.repoPath, ".git", "worktrees", "tame-blue-fox"))).toBe(true);
+      expect(() => fs.lstatSync(wtPath)).toThrow();
+      // The reap is skipped too: it would sweep the link's target.
+      expect(reaped.worktrees).toEqual([]);
+      expect(branches(env.repoPath)).not.toContain("numb-clear-vow");
+      expect(fs.existsSync(file)).toBe(false);
+    });
+
+    it("is caught when it is swapped in while the reap runs", async () => {
+      const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
+      const target = sibling();
+      // A husk: the admin entry is gone and the directory is back.
+      git(env.repoPath, "worktree", "remove", "--force", wtPath);
+      fs.mkdirSync(wtPath);
+      reaped.during = () => {
+        fs.rmdirSync(wtPath);
+        fs.symlinkSync(target, wtPath);
+      };
+      const file = await seed();
+
+      runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+
+      expect(reaped.worktrees).toEqual([wtPath]);
+      expect(fs.readFileSync(path.join(target, "precious.txt"), "utf8")).toBe("uncommitted");
+      expect(fs.existsSync(path.join(env.repoPath, ".git", "worktrees", "tame-blue-fox"))).toBe(true);
+      expect(() => fs.lstatSync(wtPath)).toThrow();
+      expect(fs.existsSync(file)).toBe(false);
+    });
+  });
 
   it("deletes origin's branch, not a tag that shares its name", async () => {
     const { runWorkerCleanup } = await import("../../src/dashboard/worker-cleanup.js");
