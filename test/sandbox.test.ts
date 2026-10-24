@@ -115,6 +115,29 @@ describe("buildSandboxConfig", () => {
     expect(shared.filesystem.allowWrite).not.toContain("/repo/.beads");
   });
 
+  // A hand-edited config.yml must not widen the sandbox through beadsDir: the
+  // store is re-checked like sandboxWriteRoots at every settings write,
+  // headless launches included.
+  it("refuses a too-broad configured beads store on a beadIntake project", () => {
+    expect(() => buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo", beadIntake: true, beadsDir: process.env.HOME! },
+      remoteHost: null,
+    })).toThrow(/beadsDir: .*contains the home directory/);
+    expect(() => buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo", beadIntake: true, beadsDir: "/Users" },
+      remoteHost: null,
+    })).toThrow(/top-level directory/);
+    // Without intake the store is never granted, so there is nothing to refuse.
+    const off = buildSandboxConfig({
+      worktreePath: "/wt/alpha",
+      project: { path: "/repo", beadsDir: process.env.HOME! },
+      remoteHost: null,
+    });
+    expect(off.filesystem.allowWrite).not.toContain(process.env.HOME);
+  });
+
   it("grants no extra write roots unless the project configures them", () => {
     const cfg = buildSandboxConfig({
       worktreePath: "/wt/alpha",

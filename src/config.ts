@@ -335,6 +335,21 @@ export function resolveSandboxWriteRoots(project: Pick<ProjectConfig, "sandboxWr
   return [...new Set((project.sandboxWriteRoots ?? []).map(normalizeSandboxWriteRoot))];
 }
 
+// The beads store as a bead-intake project's worker sandbox grants it. A
+// configured beadsDir is a second route into the same write grant as
+// sandboxWriteRoots, so it gets the same refusals and canonical form, here at
+// every launch and in `garden config`. The default store sits inside the
+// project checkout and is granted as resolved.
+export function resolveBeadsWriteRoot(project: Pick<ProjectConfig, "path" | "beadsDir">): string {
+  const store = resolveBeadsDir(project);
+  if (!project.beadsDir) return store;
+  try {
+    return normalizeSandboxWriteRoot(store);
+  } catch (err) {
+    throw new Error(`beadsDir: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 export interface PlotConfig {
   projects: string[];
   focused?: boolean;

@@ -1,4 +1,5 @@
 import {
+  resolveBeadsWriteRoot,
   resolveProvider,
   resolveSandboxWriteRoots,
   type GardenConfig,
@@ -74,6 +75,11 @@ export function resolveWorkerLaunchPlan(
   const runtimeProject = {
     ...workerProject(input.project, input.provider),
     sandboxWriteRoots: resolveSandboxWriteRoots(input.project),
+    // An intake project's store is a write root too. Codex grants whatever
+    // this carries, so it carries the checked, canonical form.
+    ...(input.project.beadIntake && input.project.beadsDir
+      ? { beadsDir: resolveBeadsWriteRoot(input.project) }
+      : {}),
   };
   // resolveProvider is intentionally strict: a present-but-unknown backend is
   // a configuration error, never permission to change vendor/account.

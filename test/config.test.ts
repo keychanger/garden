@@ -1141,6 +1141,29 @@ describe("bead intake project config keys", () => {
     await expect(config(["garden", "beadsDir", "board/.beads"]))
       .rejects.toThrow(/absolute path/);
   });
+
+  // On a bead-intake project the store becomes a worker sandbox write root, so
+  // it is held to the same refusals as sandboxWriteRoots.
+  it("refuses a beadsDir too broad to grant workers as a write root", async () => {
+    const { config, loadConfig } = await setup();
+    const { CONTROL_DIR } = await import("../src/paths.js");
+    const cases: Array<[string, RegExp]> = [
+      ["/Users", /top-level directory/],
+      [tmpHome, /contains the home directory/],
+      [path.join(tmpHome, ".garden"), /control plane/],
+      [CONTROL_DIR, /control plane/],
+    ];
+    for (const [dir, reason] of cases) {
+      await expect(config(["garden", "beadsDir", dir])).rejects.toThrow(reason);
+    }
+    expect(loadConfig().projects.garden.beadsDir).toBeUndefined();
+  });
+
+  it("stores beadsDir normalized", async () => {
+    const { config, loadConfig } = await setup();
+    await config(["garden", "beadsDir", "/board/.beads/../.beads/"]);
+    expect(loadConfig().projects.garden.beadsDir).toBe("/board/.beads");
+  });
 });
 
 // The one store-resolution rule + its dangling-store check (src/config.ts).

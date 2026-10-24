@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   mutateConfig, beadsStoreError, DEFAULT_HOLISTIC_REVIEW, REVIEW_EFFORT_LEVELS,
-  isValidReviewEffort, expandHome, normalizeSandboxWriteRoot,
+  isValidReviewEffort, expandHome, normalizeSandboxWriteRoot, resolveBeadsWriteRoot,
   type GardenConfig, type ResolvedProvider,
 } from "../config.js";
 import { syncProviderTokenToVault } from "./claude-env.js";
@@ -275,10 +275,12 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
         delete project.beadsDir;
         message = `Cleared ${key} for ${projectName} (bd resolves the checkout's own .beads)`;
       } else {
-        const dir = value.trim();
-        if (!path.isAbsolute(dir)) {
+        if (!path.isAbsolute(value.trim())) {
           throw new Error(`beadsDir must be an absolute path to a .beads directory, got '${value}'`);
         }
+        // An intake project's workers may write the store, so it is refused
+        // and stored on the same terms as a sandboxWriteRoots entry.
+        const dir = resolveBeadsWriteRoot({ path: project.path, beadsDir: value.trim() });
         project.beadsDir = dir;
         message = `Set ${key} = ${dir} for ${projectName} (intake and worker bd calls resolve this store; applies to newly created or bounced workers)`;
         // Soft notes only (mirroring baseBranch's origin note): the intake

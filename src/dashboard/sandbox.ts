@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
-  tryResolveProvider, resolveBeadsDir, resolveSandboxWriteRoots, type ProjectConfig,
+  tryResolveProvider, resolveBeadsWriteRoot, resolveSandboxWriteRoots, type ProjectConfig,
 } from "../config.js";
 import { getGitCommonDir } from "./git.js";
 
@@ -117,9 +117,10 @@ export function buildSandboxConfig(opts: {
   // Bead-intake projects: workers run bd against the project's resolved
   // canonical .beads store (BEADS_DIR points there — the worktree copy has no
   // database; a configured beadsDir names a shared store instead), and every
-  // bd invocation takes a write lock inside that dir.
+  // bd invocation takes a write lock inside that dir. A configured store is
+  // re-checked here like the write roots below, headless launches included.
   if (opts.project.beadIntake) {
-    allowWrite.add(resolveBeadsDir(opts.project));
+    allowWrite.add(resolveBeadsWriteRoot(opts.project));
   }
 
   for (const root of resolveSandboxWriteRoots(opts.project)) allowWrite.add(root);

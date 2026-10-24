@@ -6,6 +6,7 @@ import {
   resolveHeadlessLaunchPlan,
   resolveWorkerLaunchPlan,
 } from "../src/dashboard/launch-plan.js";
+import { getHarnessCore } from "../src/dashboard/harness/core.js";
 
 const DEEPSEEK = {
   baseUrl: "https://api.deepseek.com/anthropic",
@@ -37,6 +38,35 @@ describe("resolveWorkerLaunchPlan", () => {
         project: project({ sandboxWriteRoots: ["~"] }), harness, workflow: "default", resume,
       }, config)).toThrow(/contains the home directory/);
     }
+  });
+
+  // The store is a write root on an intake project; the Codex launch grants
+  // runtimeProject's spelling of it, so the plan carries the checked one.
+  it("validates a bead-intake store before a codex launch and grants its canonical form", () => {
+    const home = process.env.HOME!;
+    const plan = resolveWorkerLaunchPlan({
+      project: project({ beadIntake: true, beadsDir: `${home}/board/.beads/../.beads` }),
+      harness: "codex", workflow: "default", resume: false,
+    }, config);
+    const canonical = path.join(fs.realpathSync(home), "board", ".beads");
+    expect(plan.runtimeProject.beadsDir).toBe(canonical);
+    const command = getHarnessCore("codex").buildAgentCommand({
+      sessionId: "", resume: false, contextFile: "/ignored", settingsFile: "/ignored",
+      launchPlan: plan,
+    });
+    expect(command).toContain(JSON.stringify(canonical));
+    expect(command).not.toContain("/../");
+
+    for (const resume of [false, true]) {
+      expect(() => resolveWorkerLaunchPlan({
+        project: project({ beadIntake: true, beadsDir: home }),
+        harness: "codex", workflow: "default", resume,
+      }, config)).toThrow(/beadsDir: .*contains the home directory/);
+    }
+    // Never granted without intake, so never refused either.
+    expect(() => resolveWorkerLaunchPlan({
+      project: project({ beadsDir: home }), harness: "codex", workflow: "default", resume: false,
+    }, config)).not.toThrow();
   });
 
   it("binds backend, credential reference, tuning, policy, and requirements together", () => {
