@@ -35,7 +35,7 @@ import {
   findWorkerByName, getWorkers, updateWorkerFields,
   type PrState, type WorkerEntry,
 } from "./registry.js";
-import { tmux, getFirstPaneId, windowExists } from "./tmux.js";
+import { tmux, getFirstPaneId, paneRunningOnlyShell, windowExists } from "./tmux.js";
 import { getHarnessCore } from "./harness/core.js";
 import { readUsageSnapshot, snapshotMeters } from "./usage.js";
 import { workerWindowName } from "./window-names.js";
@@ -1344,6 +1344,19 @@ function notifySiblingWorkers(
     // marked exited is dead — skip.
     if (sibling.agentStatus === "exited") {
       log.info("poller", "skipping dead sibling", {
+        worker: sibling.name,
+        data: { project: projectName, mergedWorker: mergedEntry.name },
+      });
+      continue;
+    }
+
+    // A clean agent exit `exec $SHELL`s the launch wrapper without firing
+    // pane-died, so agentStatus can still read idle while the pane is the
+    // operator's unsandboxed shell. The paste would run there as commands, and
+    // the notice quotes a commit subject and file names workers wrote.
+    // continueWorker skips the same pane for the same reason.
+    if (paneRunningOnlyShell(paneId)) {
+      log.info("poller", "skipped sibling merge notice: pane is a bare shell", {
         worker: sibling.name,
         data: { project: projectName, mergedWorker: mergedEntry.name },
       });

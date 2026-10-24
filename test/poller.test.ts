@@ -327,7 +327,7 @@ import {
   syncWorktreeToRemote,
   ensureNoRebaseInProgress, hasRebaseInProgress, isAncestor, getUnmergedFiles,
 } from "../src/dashboard/git.js";
-import { tmux, tmuxOutput, newDashboardWindow, newDashboardWindowPaned, setPaneVar, paneRunningOnlyShell, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName, listAllWindowNames } from "../src/dashboard/tmux.js";
+import { tmuxOutput, newDashboardWindow, newDashboardWindowPaned, setPaneVar, paneRunningOnlyShell, pasteAndSubmit, windowExists, windowIndices, dedupeWindows, getFirstPaneId, killWindowSafe, killWindowsByName, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { log } from "../src/dashboard/log.js";
 import { dispatchDelayedAutoContinue, isAwaitingInput, isDoneSet, setDoneSentinel, workerInputBlocker } from "../src/dashboard/continue.js";
@@ -6090,6 +6090,18 @@ describe("poll — sibling merge notification", () => {
       expect.stringContaining("just merged into main: abc1234 fix the parser"));
   });
 
+  // getHeadSubject answers "" when git cannot read the worktree, and a `??`
+  // fallback keeps that empty string: the notice read "just merged into main: ".
+  it("falls back to the worker name when the merged commit is unreadable", () => {
+    overlappingSibling({});
+    vi.mocked(getHeadSubject).mockReturnValue("");
+
+    poll("myproject");
+
+    expect(pasteAndSubmit).toHaveBeenCalledWith("%5",
+      expect.stringContaining("just merged into main: worker bold-ash\n"));
+  });
+
   // The notice is pasted with Enter. In a waiting pane that picks a menu
   // option, resumes a hold, clears a `garden blocked` question as if
   // answered (seen 2026-10-07), or submits the operator's half-typed draft.
@@ -6106,6 +6118,21 @@ describe("poll — sibling merge notification", () => {
 
     expect(mergeToBase).toHaveBeenCalled();
     expect(pasteAndSubmit).not.toHaveBeenCalled();
+  });
+
+  // A clean agent exit `exec $SHELL`s the launch wrapper without firing
+  // pane-died, so agentStatus still reads idle while the pane is the
+  // operator's own shell. Pasted there with Enter, the notice runs as
+  // commands, and it quotes a commit subject and file names workers wrote.
+  it("does not paste into a sibling whose agent exited to a bare shell", () => {
+    overlappingSibling({});
+    vi.mocked(paneRunningOnlyShell).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    expect(paneRunningOnlyShell).toHaveBeenCalledWith("%5");
   });
 
   // For a sibling on another base, that base's whole divergence reads as
@@ -6147,10 +6174,7 @@ describe("poll — sibling merge notification", () => {
     poll("myproject");
 
     expect(mergeToBase).toHaveBeenCalled();
-    const sendKeyCalls = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "send-keys" && typeof c[3] === "string" && c[3].includes("overlap"),
-    );
-    expect(sendKeyCalls).toHaveLength(0);
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 
   it("skips dead sibling (agentStatus=exited)", () => {
@@ -6181,11 +6205,8 @@ describe("poll — sibling merge notification", () => {
 
     poll("myproject");
 
-    // Should NOT have sent any send-keys to the dead sibling
-    const sendKeyCalls = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "send-keys",
-    );
-    expect(sendKeyCalls).toHaveLength(0);
+    expect(mergeToBase).toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 
   it("skips sibling whose .garden-done sentinel is set", () => {
@@ -6219,10 +6240,8 @@ describe("poll — sibling merge notification", () => {
 
     poll("myproject");
 
-    const sendKeyCalls = vi.mocked(tmux).mock.calls.filter(
-      c => c[0] === "send-keys",
-    );
-    expect(sendKeyCalls).toHaveLength(0);
+    expect(mergeToBase).toHaveBeenCalled();
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
   });
 
   it("skips notification for workers in merged state", () => {
