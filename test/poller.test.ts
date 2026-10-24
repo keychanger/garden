@@ -25,6 +25,9 @@ vi.mock("node:child_process", () => ({
 // the marker outlives the per-poll process, which is the whole point of it
 // being on disk rather than in a module Map.
 const fsMtimes = vi.hoisted(() => new Map<string, number>());
+// Contents too, for the state a poll reads back from disk (the base checkout's
+// last fast-forward outcome).
+const fsContents = vi.hoisted(() => new Map<string, string>());
 
 vi.mock("node:fs", () => ({
   default: {
@@ -33,14 +36,20 @@ vi.mock("node:fs", () => ({
     openSync: vi.fn(() => 3),
     writeSync: vi.fn(),
     closeSync: vi.fn(),
-    unlinkSync: vi.fn((p: string) => { fsMtimes.delete(p); }),
-    rmSync: vi.fn((p: string) => { fsMtimes.delete(p); }),
+    unlinkSync: vi.fn((p: string) => { fsMtimes.delete(p); fsContents.delete(p); }),
+    rmSync: vi.fn((p: string) => { fsMtimes.delete(p); fsContents.delete(p); }),
     mkdirSync: vi.fn(),
-    readFileSync: vi.fn(() => "{}"),
-    writeFileSync: vi.fn((p: string) => { fsMtimes.set(p, Date.now()); }),
+    readFileSync: vi.fn((p: string) => fsContents.get(p) ?? "{}"),
+    writeFileSync: vi.fn((p: string, data?: unknown) => {
+      fsMtimes.set(p, Date.now());
+      if (typeof data === "string") fsContents.set(p, data);
+    }),
     renameSync: vi.fn((from: string, to: string) => {
       fsMtimes.set(to, fsMtimes.get(from) ?? Date.now());
       fsMtimes.delete(from);
+      const content = fsContents.get(from);
+      if (content !== undefined) fsContents.set(to, content);
+      fsContents.delete(from);
     }),
     readdirSync: vi.fn(() => []),
     constants: { O_CREAT: 0, O_EXCL: 0, O_WRONLY: 0 },
@@ -313,7 +322,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { poll, postPush, restartLongLivedPollers, startProjectPoller, stopProjectPoller } from "../src/dashboard/poller.js";
 import {
-  __resetFfStateForTest, __simulatePollerRestartForTest, _resetGateBlockThrottleForTest,
+  __simulatePollerRestartForTest, _resetGateBlockThrottleForTest,
 } from "../src/dashboard/poller-merge.js";
 import { tryGetProject, getAutoContinueConfig, getMaxConcurrentReviews, workerUsageGateExempt } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
@@ -367,7 +376,7 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
 beforeEach(() => {
   vi.resetAllMocks();
   registryMock._clear();
-  __resetFfStateForTest();
+  fsContents.clear();
   // The CI recheck-poke dedup marker is a real file under SESSIONS_DIR (it has
   // to outlive the poll process). Clear it so each test starts unarmed.
   try { fs.rmSync("/tmp/fake-sessions/ci-recheck-myproject"); } catch { /* not armed */ }
@@ -4286,6 +4295,39 @@ describe("poll — merge-pending state", () => {
         message: expect.stringMatching(/merged to origin\/develop.*diverged from origin \(3 ahead, 2 behind\)/),
       }),
     );
+  });
+
+  // Each poll is a fresh process, so "entered the state" has to be read back
+  // from disk: a checkout that stays diverged across merges alerts once.
+  it("alerts once while the base checkout stays diverged across merges, and again after it recovers", () => {
+    const mergeOne = (name: string) => {
+      registryMock._setEntries("myproject", [
+        makeWorker({
+          name, branchName: name, prState: "merge-pending",
+          mergePendingAt: new Date(Date.now() - 1000).toISOString(), baseBranch: "develop",
+        }),
+      ]);
+      poll("myproject");
+      __simulatePollerRestartForTest();
+    };
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject", checks: undefined,
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    const diverged = { ok: false as const, reason: "diverged" as const, currentBranch: "develop", ahead: 1, behind: 1 };
+    const divergedAlerts = () => vi.mocked(addAlert).mock.calls
+      .filter(([a]) => /diverged from origin/.test(a.message)).length;
+
+    vi.mocked(fastForwardBase).mockReturnValue(diverged);
+    mergeOne("bold-ash");
+    mergeOne("calm-elm");
+    expect(divergedAlerts()).toBe(1);
+
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "ref" });
+    mergeOne("dry-fern");
+    vi.mocked(fastForwardBase).mockReturnValue(diverged);
+    mergeOne("wet-moss");
+    expect(divergedAlerts()).toBe(2);
   });
 
   it("warns (not errors) and names the worktree when the base is checked out elsewhere", () => {

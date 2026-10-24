@@ -6,6 +6,7 @@
 // mid-turn proceeds) lives here. When a rebase conflict appears, control
 // transfers to the resolver lifecycle in poller-resolve.ts.
 import { execSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -58,18 +59,30 @@ const AUTO_CONTINUE_DEBOUNCE_MS = 10_000;
 // Keyed by project:base (not worker) because a stuck checkout affects every
 // worker's merge — the operator wants one alert, not one each.
 //
-// CAVEAT: the poller execs a fresh process per poll, so this Map is empty at
-// the top of every poll and the enters-a-bad-state edge detection does not
-// actually fire — every merge re-alerts. What bounds it in practice is
-// addAlert's own 1-hour identical-key dedup, so a stuck checkout surfaces
-// hourly rather than once. Log-only, so it is left as-is; the durable fix is
-// the same one WorkerEntry.ciNoRuns got (see the CI grace stamp above).
-const lastFfState = new Map<string, string>();
+// The base checkout's last fast-forward outcome per project and base, so a
+// merge alerts when the checkout enters an un-advanceable state rather than on
+// every merge while it stays there. On disk because the poller execs a fresh
+// process per poll (see WorkerEntry.ciNoRuns): as a module Map it was empty at
+// every poll, every merge read as an entry, and only addAlert's hourly dedup
+// bounded the repeats. Keyed by a hash because a branch name can hold `/`.
+function ffStatePath(projectName: string, baseBranch: string): string {
+  const key = createHash("sha256").update(`${projectName}\0${baseBranch}`).digest("hex").slice(0, 16);
+  return path.join(CONTROL_DIR, `ff-state-${key}`);
+}
 
-// Test seam: clear the entry-tracking map so each test starts from a clean
-// "never seen" state and its single poll() counts as an entry.
-export function __resetFfStateForTest(): void {
-  lastFfState.clear();
+function readFfState(projectName: string, baseBranch: string): string | undefined {
+  try {
+    return fs.readFileSync(ffStatePath(projectName, baseBranch), "utf-8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// An unwritten outcome only costs one repeated alert at the next merge.
+function recordFfState(projectName: string, baseBranch: string, state: string): void {
+  try {
+    atomicWriteFile(ffStatePath(projectName, baseBranch), state);
+  } catch { /* see above */ }
 }
 
 // Test seam marking the process boundary the poller crosses between every
@@ -763,10 +776,9 @@ function notifyPostMerge(
   // failure modes). A diverged/dirty checkout stays that way, so re-alerting on
   // every merge cycle is noise — origin already has the work; the operator
   // reconciles once. Recovery resets the memory so the next break re-alerts.
-  const ffStateKey = `${projectName}:${baseBranch}`;
-  const prevFfState = lastFfState.get(ffStateKey);
+  const prevFfState = readFfState(projectName, baseBranch);
   const currFfState = ffResult.ok ? "ok" : ffResult.reason;
-  lastFfState.set(ffStateKey, currFfState);
+  if (currFfState !== prevFfState) recordFfState(projectName, baseBranch, currFfState);
 
   if (ffResult.ok) {
     // Run postMerge only when the working tree itself advanced. An off-base
@@ -1021,8 +1033,7 @@ export function handleMerged(
 // worker per hour instead of one per poke. Cleared when the worker's gate opens
 // again (see below) — a fresh strand after that logs immediately.
 //
-// CAVEAT: as with lastFfState above, the poller's fresh-process-per-poll model
-// empties this Map every poll, so the throttle does not actually fire and the
+// CAVEAT: the poller's fresh-process-per-poll model empties this Map every poll, so the throttle does not actually fire and the
 // line logs once per poke after all. Log-only; the durable fix is a marker file
 // or an entry field (see WorkerEntry.ciNoRuns).
 const GATE_BLOCK_LOG_WINDOW_MS = 60 * 60 * 1000;
