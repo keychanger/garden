@@ -61,7 +61,7 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-vi.mock("../src/dashboard/poller.js", () => ({
+vi.mock("../src/dashboard/poller-window.js", () => ({
   startProjectPoller: vi.fn(),
   projectPollerRunning: vi.fn(() => true),
 }));

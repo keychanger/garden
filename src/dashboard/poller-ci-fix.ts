@@ -33,6 +33,7 @@ import {
   signalFifoPath, scheduleDelayedPoke, isWorkerClaudeWorking,
 } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
+import { cleanCiFixFiles } from "./poller-window.js";
 import { recordCiFixOutcome } from "./telemetry.js";
 import {
   ciFixPromptPath,
@@ -45,6 +46,7 @@ import {
 export const CI_FIX_BUDGET = 3;
 
 export { ciFixPromptPath, ciFixResultPath } from "./headless-paths.js";
+export { cleanCiFixFiles, killCiFixWindow } from "./poller-window.js";
 
 const CI_FIX_VERDICT_VOCAB = ["FIXED", "FAILED"] as const;
 
@@ -535,24 +537,4 @@ function readCiFixResult(
     });
     return null;
   }
-}
-
-// The ci-fix analogue of killReviewWindow, for the worker-removal tail. The
-// ci-fix agent runs in its own window, so killing the review window leaves it
-// running on a worker that no longer exists: its 2h timeout is enforced
-// through the registry entry removal just deleted, and it can still push to
-// the branch. Its pane also holds the worktree, which now defers the cleanup
-// that used to reap it.
-export function killCiFixWindow(projectName: string, workerName: string): void {
-  const cfWindow = ciFixWindowName(projectName, workerName);
-  if (windowExists(cfWindow)) killWindowSafe(cfWindow);
-  cleanCiFixFiles(projectName, workerName);
-}
-
-export function cleanCiFixFiles(projectName: string, workerName: string): void {
-  const resultFile = ciFixResultPath(projectName, workerName);
-  try { fs.unlinkSync(resultFile); } catch { /* ignore */ }
-  // A codex-routed ci-fix agent splits stderr into a sidecar (see cleanReviewFiles).
-  try { fs.unlinkSync(codexStderrSidecar(resultFile)); } catch { /* ignore */ }
-  try { fs.unlinkSync(ciFixPromptPath(projectName, workerName)); } catch { /* ignore */ }
 }

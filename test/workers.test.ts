@@ -221,7 +221,7 @@ vi.mock("../src/dashboard/beads.js", () => ({
   unassignBead: vi.fn(() => true),
 }));
 
-vi.mock("../src/dashboard/poller.js", () => ({
+vi.mock("../src/dashboard/poller-window.js", () => ({
   ensureProjectPoller: vi.fn(),
   killReviewWindow: vi.fn(),
   killCiFixWindow: vi.fn(),
@@ -280,7 +280,7 @@ import {
 import { addAlert } from "../src/dashboard/alerts.js";
 import { writeWorkerCleanupRequest, dispatchWorkerCleanup } from "../src/dashboard/worker-cleanup.js";
 import { recordWorkerCreated, recordWorkerRemoved } from "../src/dashboard/telemetry.js";
-import { ensureProjectPoller, killCiFixWindow, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller.js";
+import { ensureProjectPoller, killCiFixWindow, killReviewWindow, stopProjectPoller } from "../src/dashboard/poller-window.js";
 import { workerWindowName as workerWin, shellWindowName as shellWin, parseWorkerSuffix } from "../src/dashboard/window-names.js";
 import { getProject, tryGetProject, tryResolveProvider, loadConfig } from "../src/config.js";
 import { spawn } from "node:child_process";

@@ -162,9 +162,8 @@ vi.mock("../src/dashboard/validate.js", () => ({
   validateAndHeal: vi.fn((state: unknown) => state),
 }));
 
-vi.mock("../src/dashboard/poller.js", () => ({
+vi.mock("../src/dashboard/poller-window.js", () => ({
   startProjectPoller: vi.fn(),
-  signalFifoPath: vi.fn(() => "/tmp/fake-sessions/myproject-poll-signal"),
 }));
 
 vi.mock("../src/dashboard/git.js", () => ({

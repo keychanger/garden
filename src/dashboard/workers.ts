@@ -54,7 +54,7 @@ import { writeWorkerCleanupRequest, dispatchWorkerCleanup } from "./worker-clean
 import { captureAncestorPids } from "./worker-reap.js";
 import { addAlert } from "./alerts.js";
 import { showBeads, reopenBead, unassignBead } from "./beads.js";
-import { ensureProjectPoller, killCiFixWindow, killReviewWindow, stopProjectPoller } from "./poller.js";
+import { ensureProjectPoller, killCiFixWindow, killReviewWindow, stopProjectPoller } from "./poller-window.js";
 import {
   clearAwaitingInput, clearDoneSentinel, dispatchDelayedContinue, dispatchDelayedSeed,
   setAwaitingInput,

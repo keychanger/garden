@@ -40,6 +40,7 @@ import { growLoopHooks } from "./grow-continue.js";
 import { parseLastLineVerdict } from "./verdict.js";
 import { reviewWindowName } from "./window-names.js";
 import { signalFifoPath, scheduleDelayedPoke } from "./poller-fifo.js";
+import { cleanReviewFiles, killReviewWindow } from "./poller-window.js";
 import { transitionState } from "./poller-state.js";
 import { recordReviewVerdict } from "./telemetry.js";
 import { recordReviewNotes } from "./review-notes.js";
@@ -50,6 +51,7 @@ import {
 } from "./headless-paths.js";
 
 export { reviewPromptPath, reviewResultPath } from "./headless-paths.js";
+export { cleanReviewFiles, killReviewWindow } from "./poller-window.js";
 export { REVIEW_TIMEOUT_MS } from "./registry.js";
 
 // Cap on the reviewer body stored in the durable lastReview snapshot (registry
@@ -1860,21 +1862,6 @@ function parseReviewResult(output: string, workerName: string, projectName: stri
   }
   const body = parsed.body || "No additional comments.";
   return { verdict: parsed.verdict.toLowerCase() as ReviewResult["verdict"], body };
-}
-
-export function killReviewWindow(projectName: string, workerName: string): void {
-  const revWindow = reviewWindowName(projectName, workerName);
-  if (windowExists(revWindow)) {
-    killWindowSafe(revWindow);
-  }
-  cleanReviewFiles(projectName, workerName);
-}
-
-export function cleanReviewFiles(projectName: string, workerName: string): void {
-  const resultFile = reviewResultPath(projectName, workerName);
-  try { fs.unlinkSync(resultFile); } catch { /* ignore */ }
-  try { fs.unlinkSync(codexStderrSidecar(resultFile)); } catch { /* ignore */ }
-  try { fs.unlinkSync(reviewPromptPath(projectName, workerName)); } catch { /* ignore */ }
 }
 
 // The stderr sidecar written by a non-claude headless reviewer (Codex sends

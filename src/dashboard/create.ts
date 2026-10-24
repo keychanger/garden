@@ -24,8 +24,8 @@ import {
 import { readRegistry, updateWorkerFields, resolveResumeAgentStatus, type WorkerEntry } from "./registry.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
-import { startProjectPoller, signalFifoPath, restartLongLivedPollers } from "./poller.js";
-import { fifoPokeShell } from "./poller-fifo.js";
+import { startProjectPoller, restartLongLivedPollers } from "./poller-window.js";
+import { fifoPokeShell, signalFifoPath } from "./poller-fifo.js";
 import { startUsagePoller } from "./usage-poller.js";
 import { startWatchdog } from "./watchdog.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost, getGitCommonDir, getWorktreeAdminDir, worktreePath } from "./git.js";

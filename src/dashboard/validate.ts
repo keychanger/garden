@@ -7,7 +7,7 @@ import { isTaintedRegistry, mutateRegistry, PR_STATE_KIND, readRegistry, type Wo
 import { paneExists, windowExists, getFirstPaneId, listHiddenWorkerWindows, listSessionPanes, killWindowSafe, tmuxSplit, paneRunningOnlyShell, type SessionPane, setPaneTitle, setPaneLabel, tmux, disablePaneInput, lockPaneMouse, renameWindow } from "./tmux.js";
 import { log } from "./log.js";
 import { worktreeExists, removeWorktree, pruneWorktrees, worktreePath } from "./git.js";
-import { startProjectPoller, projectPollerRunning } from "./poller.js";
+import { startProjectPoller, projectPollerRunning } from "./poller-window.js";
 import { createGardenGrowhouseWindow, createShellWindow, USAGE_PANE_HEIGHT } from "./create.js";
 import { resolveGardenRunner } from "./runner.js";
 import { gardenWindowName, workerWindowName, parkingWindowName, shellWindowName } from "./window-names.js";
