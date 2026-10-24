@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { useTmpHome } from "./helpers.js";
 
 // Replace the credentials module with controllable stubs so we can drive
@@ -20,6 +20,33 @@ vi.mock("../src/dashboard/credentials.js", async (importOriginal) => {
     refreshOAuthToken: (rt: string) => mockState.refreshOAuthToken(rt),
     persistCredential: (...args: unknown[]) => mockState.persistCredential(...args),
   };
+});
+
+// A stand-in for api.anthropic.com, so a refresh can run end to end with no
+// network: records each request's path and answers it from `respond`. Only the
+// tests below that set an env token ever reach it.
+const mockHttps = {
+  paths: [] as string[],
+  respond: (_path: string): { status: number; headers?: Record<string, string>; body?: string } => ({ status: 500 }),
+};
+vi.mock("node:https", async () => {
+  const { EventEmitter } = await import("node:events");
+  const request = (opts: { path: string }, onResponse: (res: InstanceType<typeof EventEmitter>) => void) =>
+    Object.assign(new EventEmitter(), {
+      write: () => {},
+      destroy: () => {},
+      end: () => {
+        mockHttps.paths.push(opts.path);
+        const answer = mockHttps.respond(opts.path);
+        const res = Object.assign(new EventEmitter(), { statusCode: answer.status, headers: answer.headers ?? {} });
+        setImmediate(() => {
+          onResponse(res);
+          res.emit("data", answer.body ?? "");
+          res.emit("end");
+        });
+      },
+    });
+  return { default: { request }, request };
 });
 
 describe("resolveCredential", () => {
@@ -240,6 +267,67 @@ describe("refreshUsage — force bypasses the auth backoff but not the rate limi
     expect(forced.fetchedAt).toBe(new Date(now - 30_000).toISOString());
     expect(forced.error).toBe("rate-limited");
     expect(mockState.readPersonalCredential).not.toHaveBeenCalled();
+  });
+});
+
+// `garden usage refresh` and `garden login` force a refresh. The primary probe
+// is generously limited; the scoped (Fable) bar's endpoint is not: it answers a
+// 429 with Retry-After: 3600, and its per-token budget is shared with the probe.
+describe("refreshUsage — force skips the scoped cadence but not a scoped 429's hold", () => {
+  const env = useTmpHome();
+  const SCOPED_PATH = "/api/oauth/usage";
+
+  beforeEach(() => {
+    vi.resetModules();
+    mockHttps.paths.length = 0;
+    const reset = String(Math.floor(Date.now() / 1000) + 3600);
+    mockHttps.respond = (p) => p === SCOPED_PATH
+      ? { status: 200, body: JSON.stringify({ five_hour: null, seven_day: null }) }
+      : {
+          status: 200,
+          headers: {
+            "anthropic-ratelimit-unified-5h-utilization": "0.4",
+            "anthropic-ratelimit-unified-5h-reset": reset,
+            "anthropic-ratelimit-unified-7d-utilization": "0.41",
+            "anthropic-ratelimit-unified-7d-reset": reset,
+          },
+        };
+    process.env.GARDEN_CLAUDE_SESSION_KEY = "sk-ant-test-token";
+  });
+  afterEach(() => {
+    delete process.env.GARDEN_CLAUDE_SESSION_KEY;
+  });
+
+  // No worker is registered, so the unforced cadence is the 12h idle keepalive.
+  function seedScoped429(attemptedAgoMs: number): void {
+    const now = Date.now();
+    fs.writeFileSync(path.join(env.controlDir, "claude-usage.json"), JSON.stringify({
+      fetchedAt: new Date(now - 60 * 60_000).toISOString(),
+      data: { scoped: [{ label: "Fable", pct: 30, resetsAt: new Date(now + 86_400_000).toISOString() }] },
+      scopedAttemptedAt: new Date(now - attemptedAgoMs).toISOString(),
+      scopedError: "rate-limited",
+    }));
+  }
+
+  it("refreshes the primary bars but holds the scoped endpoint inside a 429's hour", async () => {
+    seedScoped429(5 * 60_000);
+    const { refreshUsage } = await import("../src/dashboard/usage.js");
+
+    const snap = await refreshUsage(true);
+
+    expect(mockHttps.paths).toEqual(["/v1/messages"]);
+    expect(snap.data?.weekly?.pct).toBe(41);
+    expect(snap.scopedError).toBe("rate-limited");
+  });
+
+  it("still lets a forced refresh past the idle cadence once that hour is up", async () => {
+    seedScoped429(61 * 60_000);
+    const { refreshUsage } = await import("../src/dashboard/usage.js");
+
+    const snap = await refreshUsage(true);
+
+    expect(mockHttps.paths).toEqual(["/v1/messages", SCOPED_PATH]);
+    expect(snap.scopedError).toBeUndefined();
   });
 });
 

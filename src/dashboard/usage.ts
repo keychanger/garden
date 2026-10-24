@@ -826,6 +826,14 @@ export function rateLimitBackoff(
   return { backoffMs, streak };
 }
 
+// A scoped 429 holds every scoped attempt for the hourly backstop, forced ones
+// included: the endpoint answers it with Retry-After: 3600, so an attempt
+// inside that hour is one it has already refused.
+export function scopedRateLimitHeld(snap: UsageSnapshot | null | undefined, nowMs: number): boolean {
+  if (snap?.scopedError !== "rate-limited" || !snap.scopedAttemptedAt) return false;
+  return nowMs - Date.parse(snap.scopedAttemptedAt) < SCOPED_POLL_MS;
+}
+
 // Whether the secondary (oauth-endpoint) scoped fetch is due. Keys on the last
 // scoped *attempt* (success or failure), so a 429'd attempt still waits before
 // the next try instead of re-firing every poll. A snapshot that never attempted
@@ -860,9 +868,9 @@ export function scopedFetchDue(
   if (!Number.isFinite(attempted)) return true;
   const elapsed = nowMs - attempted;
   if (!active) return elapsed >= SCOPED_IDLE_POLL_MS;
-  // The endpoint's observed 429 carries Retry-After: 3600. Movement may arm a
-  // healthy fetch after ten minutes, but must not route around a known throttle.
-  if (snap?.scopedError === "rate-limited") return elapsed >= SCOPED_POLL_MS;
+  // Movement may arm a healthy fetch after ten minutes, but must not route
+  // around a known throttle.
+  if (scopedRateLimitHeld(snap, nowMs)) return false;
   if (elapsed >= SCOPED_POLL_MS) return true;
   if (elapsed < SCOPED_MIN_INTERVAL_MS) return false;
   return weeklyBarMoved(snap?.weeklyPctAtScoped, liveWeeklyPct);
@@ -1133,9 +1141,9 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
     // A forced refresh (manual `garden usage refresh`, post-login heal) bypasses
     // the auth and generic-error backoffs so a fresh login clears a stale "login
     // expired" snapshot immediately instead of echoing it for the next 30 min.
-    // It deliberately does NOT bypass a 429 `rate-limited` backoff — the usage
-    // endpoint is strictly rate-limited, so its retry-after is the one wait a
-    // human-initiated refresh must still honor.
+    // A server's 429 is the one wait it still honors, on each endpoint: here
+    // for the primary /v1/messages probe (`error`), and in fetchScopedIfDue for
+    // the strictly limited scoped endpoint (`scopedError`).
     const rateLimited = prior?.error === "rate-limited";
     const shouldRefresh = decision.shouldRefresh || (force && !rateLimited);
     if (!shouldRefresh && prior) {
@@ -1278,7 +1286,11 @@ async function fetchScopedIfDue(
   if (primary.error) return { fetched: false };
   const active = anyScopedModelWorkerActive(prior, Date.now());
   const liveWeeklyPct = primary.data?.weekly?.pct;
-  if (!force && !scopedFetchDue(prior, Date.now(), active, liveWeeklyPct)) return { fetched: false };
+  // Force skips the cadence, since the operator is asking, but not a 429's hold.
+  const due = force
+    ? !scopedRateLimitHeld(prior, Date.now())
+    : scopedFetchDue(prior, Date.now(), active, liveWeeklyPct);
+  if (!due) return { fetched: false };
   // A failure is only worth showing when the bar matters right now.
   const surface = (err: string): string | undefined => (active || force ? err : undefined);
   try {
