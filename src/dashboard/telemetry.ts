@@ -225,9 +225,10 @@ export function recordStateTransition(
 // single point where the verdict is known (poller-review.ts), so it captures
 // every clean/fixed/failed outcome. The signal the `state` event can't carry:
 // the verdict vocabulary, the review duration, and the reviewer's FIX MAGNITUDE
-// — the numstat of preReviewSha..tipSha, which is 0 on a CLEAN review and the
-// reviewer's edit size on a FIXED one (with the caveat that a mid-review rebase
-// onto a sibling merge also lands in that range). This is the headline quality
+// — the numstat of the reviewer's own commits since preReviewSha
+// (getReviewFixNumstat, which leaves out what a rebase onto an advanced base
+// brought in), 0 on a CLEAN review and the reviewer's edit size on a FIXED
+// one. This is the headline quality
 // metric: a "cheaper" worker that a reviewer must rewrite 40 lines per merge to
 // land is not actually cheaper.
 export interface ReviewVerdictFields {

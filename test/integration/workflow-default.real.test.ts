@@ -167,6 +167,59 @@ describe("default workflow — full state machine drive (real fs/git)", () => {
     expect(originMainSha).toBe(headSha);
   });
 
+  // The ledger's fix magnitude is the reviewer's own edit size. A reviewer that
+  // rebased onto a base a sibling merge advanced used to record that sibling's
+  // lines too, so a CLEAN review read as a large fix in `garden stats`.
+  describe("review.verdict fix magnitude after the reviewer rebased", () => {
+    async function reviewAfterSiblingMerge(reviewer: () => void, result: string) {
+      const { createWorktree } = await import("../../src/dashboard/git.js");
+      createWorktree(projectPath, worktreePath, WORKER);
+      fs.writeFileSync(path.join(worktreePath, "feature.txt"), "feature\n");
+      git(worktreePath, "add", "feature.txt");
+      git(worktreePath, "commit", "-m", "feature");
+      git(worktreePath, "push", "origin", WORKER);
+
+      // A sibling's 40-line change merges to main before the review launches;
+      // the launch's fetch brings it into origin/main.
+      fs.writeFileSync(path.join(projectPath, "sibling.txt"),
+        Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n") + "\n");
+      git(projectPath, "add", "sibling.txt");
+      git(projectPath, "commit", "-m", "sibling");
+      git(projectPath, "push", "origin", "main");
+
+      await makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() });
+      const { poll } = await import("../../src/dashboard/poller.js");
+      poll(PROJECT);
+
+      // The reviewer rebases onto the advanced base, as its prompt says.
+      git(worktreePath, "rebase", "refs/remotes/origin/main");
+      reviewer();
+      const { reviewResultPath } = await import("../../src/dashboard/poller-review.js");
+      const resultFile = reviewResultPath(PROJECT, WORKER);
+      fs.mkdirSync(path.dirname(resultFile), { recursive: true });
+      fs.writeFileSync(resultFile, result);
+      poll(PROJECT);
+
+      const { readTelemetryEvents } = await import("../../src/dashboard/telemetry.js");
+      const verdicts = readTelemetryEvents({ project: PROJECT }).filter(e => e.event === "review.verdict");
+      expect(verdicts).toHaveLength(1);
+      return verdicts[0];
+    }
+
+    it("records no fix for a CLEAN review", async () => {
+      const verdict = await reviewAfterSiblingMerge(() => {}, "No issues.\nCLEAN\n");
+      expect(verdict).toMatchObject({ verdict: "clean", fixFiles: 0, fixInsertions: 0, fixDeletions: 0 });
+    });
+
+    it("records only the reviewer's own commit for a FIXED review", async () => {
+      const verdict = await reviewAfterSiblingMerge(() => {
+        fs.writeFileSync(path.join(worktreePath, "feature.txt"), "feature\nguard\nnote\ntest\n");
+        git(worktreePath, "commit", "-am", "review: harden feature");
+      }, "Hardened the feature.\nFIXED\n");
+      expect(verdict).toMatchObject({ verdict: "fixed", fixFiles: 1, fixInsertions: 3, fixDeletions: 0 });
+    });
+  });
+
   it("legacy workers (workflow field absent) are dispatched through default", async () => {
     // Pre-refactor registry entries have no workflow field. The dispatcher
     // reads `entry.workflow ?? "default"`, so they walk the same lifecycle

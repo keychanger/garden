@@ -976,6 +976,48 @@ export function getDiffNumstat(
   }
 }
 
+// The reviewer's own edit size, for review.verdict's fix magnitude. Without a
+// rebase that is getDiffNumstat over fromSha..toSha. After a rebase onto an
+// advanced base, that tree diff also holds every commit the base gained, so a
+// CLEAN review recorded a sibling merge as its fix. Then only the commits the
+// reviewer added count: the rebased copies of the worker's commits drop out by
+// patch id (--cherry-pick against the pre-review side), and the base's own
+// commits by excluding origin/<base>. A file touched in several of those
+// commits counts once. All-zero on any git failure, like getDiffNumstat.
+export function getReviewFixNumstat(
+  wtPath: string,
+  fromSha: string,
+  toSha: string,
+  baseBranch: string,
+): DiffNumstat {
+  if (isAncestor(wtPath, fromSha, toSha)) return getDiffNumstat(wtPath, fromSha, toSha);
+  const total: DiffNumstat = { files: 0, insertions: 0, deletions: 0 };
+  try {
+    const out = git(
+      wtPath, "log", "--numstat", "--format=", "--no-merges", "--right-only", "--cherry-pick",
+      ...DIFF_SAFETY_ARGS, "--end-of-options", `${assertRevision(fromSha)}...${assertRevision(toSha)}`,
+      `^${assertRevision(remoteBranchRef(baseBranch))}`, "--",
+    );
+    const files = new Set<string>();
+    for (const line of out.split("\n")) {
+      const parts = line.split("\t");
+      if (parts.length < 3) continue;
+      files.add(parts.slice(2).join("\t"));
+      const added = parseInt(parts[0], 10);
+      const deleted = parseInt(parts[1], 10);
+      if (!Number.isNaN(added)) total.insertions += added;
+      if (!Number.isNaN(deleted)) total.deletions += deleted;
+    }
+    total.files = files.size;
+    return total;
+  } catch (err) {
+    log.warn("git", "getReviewFixNumstat failed", {
+      data: { fromSha, toSha, error: String(err) },
+    });
+    return total;
+  }
+}
+
 // Commit log across an arbitrary SHA range, optionally scoped to a file set.
 // The whole-task rationale source for holistic review: unlike getCommitSummary
 // (origin/<base>..HEAD, which is empty once the worktree is synced to the

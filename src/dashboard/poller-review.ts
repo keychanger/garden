@@ -19,7 +19,7 @@ import { getHarnessCore } from "./harness/core.js";
 import { setDoneSentinel } from "./continue.js";
 import {
   abortRebase, fetchBaseBranch, forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
-  getDiffNumstat, hasCommitsAhead, getChangedFiles, hasRebaseInProgress, isWorktreeDirty,
+  getReviewFixNumstat, hasCommitsAhead, getChangedFiles, hasRebaseInProgress, isWorktreeDirty,
 } from "./git.js";
 import { gitTimedOut } from "./git-exec.js";
 import { getWorkflow } from "./workflows/index.js";
@@ -720,10 +720,11 @@ function recordAndDispatchReview(
   });
 
   // Ledger the verdict with the signal the `state` event can't carry: review
-  // duration and the reviewer's fix magnitude (numstat of preReviewSha..tipSha
-  // — zero on CLEAN, the edit size on FIXED).
+  // duration and the reviewer's fix magnitude (its own commits since
+  // preReviewSha, leaving out what a rebase brought in — zero on CLEAN, the
+  // edit size on FIXED).
   const fix = entry.preReviewSha && tipSha
-    ? getDiffNumstat(wtPath, entry.preReviewSha, tipSha)
+    ? getReviewFixNumstat(wtPath, entry.preReviewSha, tipSha, baseBranch)
     : { files: 0, insertions: 0, deletions: 0 };
   recordReviewVerdict(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", {
     verdict: review.verdict,
