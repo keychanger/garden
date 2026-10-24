@@ -49,6 +49,7 @@ vi.mock("../src/dashboard/header.js", () => ({
   refreshStatusElapsed: vi.fn(),
   writeAlertsRendered: vi.fn(),
   setPaneProjectColor: vi.fn(),
+  projectPaneColor: vi.fn(() => "colour33"),
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({
@@ -61,6 +62,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   listHiddenWorkerWindows: vi.fn(() => []),
   setPaneLabel: vi.fn(),
   setPaneVar: vi.fn(),
+  setPaneVars: vi.fn(),
   getPaneVar: vi.fn(() => null),
   paneRunningEditor: vi.fn(() => true),
 }));
@@ -129,7 +131,7 @@ import { refreshDashboard, refreshDashboardPlotCycle, refreshStatusElapsed, setP
 import {
   tmux, tmuxDisplay, paneExists, windowExists, getFirstPaneId,
   listAllWindowNames, listHiddenWorkerWindows,
-  setPaneLabel, setPaneVar, getPaneVar, paneRunningEditor,
+  setPaneLabel, setPaneVar, setPaneVars, getPaneVar, paneRunningEditor,
 } from "../src/dashboard/tmux.js";
 import { findWorkerByName } from "../src/dashboard/registry.js";
 import { plotsMap, getFocusedProjectNames } from "../src/config.js";
@@ -339,8 +341,9 @@ describe("switchProject", () => {
 
     expect(state.activeProject).toBe("other");
     expect(state.activePaneType).toBe("worker");
-    expect(setPaneLabel).toHaveBeenCalledWith("%2", "calm-bay");
-    expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_task", "fix bug");
+    expect(setPaneVars).toHaveBeenCalledWith("%2", expect.arrayContaining([
+      ["garden_name", "calm-bay"], ["garden_task", "fix bug"],
+    ]));
   });
 });
 
@@ -433,12 +436,11 @@ describe("focusWorker", () => {
 
     focusWorker();
 
-    expect(setPaneLabel).toHaveBeenCalledWith("%2", "bold-ash");
-    expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_task", "do stuff");
-    // Worker panes get a wall clock in their border (gated on @garden_clock).
-    expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_clock", "1");
-    // ...and the project's log color (gated on @garden_color).
-    expect(setPaneProjectColor).toHaveBeenCalledWith("%2", "garden");
+    // Worker panes get a wall clock in their border (gated on @garden_clock)
+    // and the project's log color (gated on @garden_color).
+    expect(setPaneVars).toHaveBeenCalledWith("%2", [
+      ["garden_name", "bold-ash"], ["garden_clock", "1"], ["garden_color", "colour33"], ["garden_task", "do stuff"],
+    ]);
   });
 });
 
@@ -506,8 +508,7 @@ describe("focusShell", () => {
     expect(state.activeWindowName).toBe("_garden-shell");
     // The right-pane shell gets the wall clock too (gated on @garden_clock)
     // and the project's log color dot (gated on @garden_color).
-    expect(setPaneVar).toHaveBeenCalledWith("%2", "garden_clock", "1");
-    expect(setPaneProjectColor).toHaveBeenCalledWith("%2", "garden");
+    expect(setPaneVars).toHaveBeenCalledWith("%2", [["garden_clock", "1"], ["garden_color", "colour33"]]);
     expect(writeDashState).toHaveBeenCalledWith(state);
     expect(refreshDashboard).toHaveBeenCalledWith({ state });
   });
@@ -782,6 +783,27 @@ describe("cyclePane", () => {
     expect(swapDirect).not.toHaveBeenCalled();
     expect(swapToHidden).not.toHaveBeenCalled();
     expect(writeDashState).not.toHaveBeenCalled();
+  });
+
+  // Each tmux helper call is its own client process (~3 ms); this runs on every
+  // ⌥]/⌥[ press, inside the dashboard state lock.
+  it("restores the pane's border options in one tmux client call", () => {
+    const state = makeState({ activeWindowName: "_garden-worker-aaa", activePaneId: "%2" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_garden-worker-aaa"]);
+    vi.mocked(listHiddenWorkerWindows).mockReturnValue(["_garden-worker-bbb"]);
+    vi.mocked(findWorkerByName).mockReturnValue({ name: "bbb", sessionId: "s1", task: "fix bug" });
+
+    cyclePane(1);
+
+    const clientCalls = [setPaneLabel, setPaneVar, setPaneVars, setPaneProjectColor, tmux]
+      .reduce((n, fn) => n + vi.mocked(fn).mock.calls.length, 0);
+    expect(clientCalls).toBe(1);
+    // The task is the worker's own text, so it goes last: a value tmux rejects
+    // then costs only itself, not the label, clock and color before it.
+    expect(setPaneVars).toHaveBeenCalledWith("%2", [
+      ["garden_name", "bbb"], ["garden_clock", "1"], ["garden_color", "colour33"], ["garden_task", "fix bug"],
+    ]);
   });
 
   it("cycles forward to next worker", () => {

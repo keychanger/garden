@@ -109,9 +109,14 @@ export function setPaneProjectColor(
   project: string,
   config?: ReturnType<typeof loadConfig>,
 ): void {
-  const key = logColorKeyForProject(project, config);
-  const color = key ? logColorTmux(key) : null;
+  const color = projectPaneColor(project, config);
   if (color) setPaneVar(paneId, "garden_color", color);
+}
+
+// The @garden_color value for a project, or null when it has no log color.
+export function projectPaneColor(project: string, config?: ReturnType<typeof loadConfig>): string | null {
+  const key = logColorKeyForProject(project, config);
+  return key ? logColorTmux(key) : null;
 }
 
 // ---------------------------------------------------------------------------

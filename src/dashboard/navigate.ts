@@ -3,7 +3,7 @@ import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused
 import { readDashState, writeDashState, withStateLock, type DashboardState } from "./state.js";
 import { swapToHidden, swapDirect } from "./layout.js";
 import { gardenSwapToHidden } from "./layout.js";
-import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, refreshStatusElapsed, writeAlertsRendered, setPaneProjectColor } from "./header.js";
+import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, refreshStatusElapsed, writeAlertsRendered, projectPaneColor } from "./header.js";
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
@@ -11,7 +11,7 @@ import {
   listAllWindowNames,
   listHiddenWorkerWindows,
   setPaneLabel,
-  setPaneVar,
+  setPaneVars,
   getPaneVar,
   paneRunningEditor,
 } from "./tmux.js";
@@ -27,20 +27,27 @@ import { DASHBOARD_SESSION } from "../session.js";
 /**
  * Re-apply pane variables after a worker pane is swapped into the visible
  * slot. swap-pane does not carry pane-level user options (@garden_name,
- * @garden_task), so restore them from the window name and registry.
+ * @garden_task), so restore them from the window name and registry, in one
+ * tmux client: this runs on every pane-switch keypress, inside the state lock.
  */
 function restoreWorkerPaneVars(paneId: string, project: string, windowName: string): void {
   const workerLabel = parseWorkerSuffix(windowName);
   if (!workerLabel) return;
-  setPaneLabel(paneId, workerLabel);
-  // Worker panes show a wall clock in their top border's right corner; the
-  // pane-border-format gates it on @garden_clock (see setupStatusBar).
-  setPaneVar(paneId, "garden_clock", "1");
-  setPaneProjectColor(paneId, project);
   const entry = findWorkerByName(project, workerLabel);
-  if (entry?.task) {
-    setPaneVar(paneId, "garden_task", entry.task);
-  }
+  // Worker panes show a wall clock in their top border's right corner; the
+  // pane-border-format gates it on @garden_clock (see setupStatusBar). The
+  // task is the worker's own text, so it goes last (setPaneVars).
+  setPaneVars(paneId, [
+    ["garden_name", workerLabel],
+    ["garden_clock", "1"],
+    ...colorVar(project),
+    ...(entry?.task ? [["garden_task", entry.task] as const] : []),
+  ]);
+}
+
+function colorVar(project: string): Array<readonly [string, string]> {
+  const color = projectPaneColor(project);
+  return color ? [["garden_color", color]] : [];
 }
 
 /**
@@ -296,8 +303,7 @@ export function focusShell(): void {
     // The right-pane shell shows the same wall clock as worker panes
     // (gated on @garden_clock; see setupStatusBar).
     if (state.activePaneId) {
-      setPaneVar(state.activePaneId, "garden_clock", "1");
-      setPaneProjectColor(state.activePaneId, state.activeProject);
+      setPaneVars(state.activePaneId, [["garden_clock", "1"], ...colorVar(state.activeProject)]);
     }
 
     state.activePaneType = "shell";

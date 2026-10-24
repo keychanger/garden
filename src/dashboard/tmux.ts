@@ -443,6 +443,14 @@ export function setPaneVar(paneId: string, name: string, value: string): void {
   } catch { log.debug("tmux", "setPaneVar failed", { data: { paneId, name } }); }
 }
 
+// setPaneVar for several options in one tmux client (tmuxBatch). A value tmux
+// rejects stops the batch there, so put text garden did not write last.
+export function setPaneVars(paneId: string, vars: ReadonlyArray<readonly [string, string]>): void {
+  try {
+    tmuxBatch(...vars.map(([name, value]) => ["set-option", "-p", "-t", paneId, `@${name}`, value]));
+  } catch { log.debug("tmux", "setPaneVars failed", { data: { paneId } }); }
+}
+
 // Read back a pane-level user option set by setPaneVar/setPaneLabel. Returns
 // null when the option is unset or the pane is unreachable, so a caller cannot
 // tell "no value" from "no tmux" — only use it to ENRICH a decision, never as

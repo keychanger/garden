@@ -46,6 +46,7 @@ import {
   setPaneTitle,
   setPaneLabel,
   setPaneVar,
+  setPaneVars,
   getFirstPaneId,
   paneExists,
   windowExists,
@@ -651,6 +652,28 @@ describe("setPaneVar", () => {
     mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
     setPaneVar("%5", "garden_task", "x");
     expect(log.debug).toHaveBeenCalledWith("tmux", "setPaneVar failed", { data: { paneId: "%5", name: "garden_task" } });
+  });
+});
+
+describe("setPaneVars", () => {
+  it("sets every option in one tmux client, in the order given", () => {
+    mockExecFileSync.mockReturnValue(undefined);
+    setPaneVars("%5", [["garden_name", "bold-ash"], ["garden_task", "building"]]);
+    expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    expect(mockExecFileSync).toHaveBeenCalledWith(
+      "tmux",
+      [
+        "set-option", "-p", "-t", "%5", "@garden_name", "bold-ash",
+        ";", "set-option", "-p", "-t", "%5", "@garden_task", "building",
+      ],
+      { stdio: ["ignore", "ignore", "pipe"] },
+    );
+  });
+
+  it("logs debug on failure", () => {
+    mockExecFileSync.mockImplementation(() => { throw new Error("fail"); });
+    setPaneVars("%5", [["garden_clock", "1"]]);
+    expect(log.debug).toHaveBeenCalledWith("tmux", "setPaneVars failed", { data: { paneId: "%5" } });
   });
 });
 
