@@ -235,7 +235,8 @@ export interface WorkerEntry {
   // A main-thread tool call after it means the worker resumed, which clears the
   // block even when no prompt fired — see hooks/default.ts onToolActivity.
   blockedTurnEndedAt?: number;
-  // Epoch ms when a mutating tool call (Edit/Write) completed on the worker
+  // Epoch ms when a mutating tool call (an Edit/Write naming a file in the
+  // worktree, or a Bash command that changed it) completed on the worker
   // while its review was in flight (stamped by hooks/default.ts). The reviewer
   // shares the worker's worktree, so the tree under review is being rewritten;
   // handleReviewing cancels the pass and resets to working — the re-review

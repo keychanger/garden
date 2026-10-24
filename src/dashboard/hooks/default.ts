@@ -673,8 +673,9 @@ const onToolActivity: HookMethod = (ctx) => {
     fields.subagentActivityAt = Date.now();
   }
   applyAndLog(ctx, fields);
-  // Deliberately outside the guard: a subagent's Edit rewrites the same
-  // worktree the reviewer is certifying, so the cancel is owed either way.
+  // Deliberately outside the guard: a subagent's Edit to a file in the
+  // worktree rewrites the tree the reviewer is certifying, so the cancel is
+  // owed either way.
   markReviewInterrupted(ctx);
 };
 
@@ -689,7 +690,8 @@ function isOtherThread(ctx: HookContext): boolean {
     || isForeignSession(ctx);
 }
 
-// Tools that rewrite the worktree, from any thread.
+// Edit tools count from any thread, unless the file they name lies outside the
+// worktree (editsOutsideWorktree).
 const MUTATING_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 
 // Bash counts on the main thread only. The review launches on Stop, so
@@ -701,8 +703,48 @@ const MUTATING_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 // read-only answer leaves the review running. Subagents outlive Stop and
 // mostly read, so their Bash calls are left alone.
 function mutatesWorktree(ctx: HookContext, toolName: string): boolean {
-  if (MUTATING_TOOLS.has(toolName)) return true;
+  if (MUTATING_TOOLS.has(toolName)) return !editsOutsideWorktree(ctx, toolName);
   return toolName === "Bash" && !isOtherThread(ctx) && !bashLeftTreeUnchanged(ctx);
+}
+
+// True only when the file an edit tool names resolves outside the worktree: a
+// subagent's scratch copy, the memory directory or a temp file cannot change
+// what the reviewer certifies. Compared as written and through symlinks, so a
+// link outside the tree that points into it still counts. A call with no
+// path, an entry with no worktree, or a path that cannot be resolved counts.
+function editsOutsideWorktree(ctx: HookContext, toolName: string): boolean {
+  const root = ctx.workerInfo!.entry.worktreePath;
+  const toolInput = ctx.input.tool_input as Record<string, unknown> | undefined;
+  const named = toolInput?.[toolName === "NotebookEdit" ? "notebook_path" : "file_path"];
+  const cwd = typeof ctx.input.cwd === "string" ? ctx.input.cwd : "";
+  if (!root || typeof named !== "string" || !named) return false;
+  if (!path.isAbsolute(named) && !path.isAbsolute(cwd)) return false;
+  const target = path.resolve(cwd, named);
+  try {
+    return outside(root, target) && outside(fs.realpathSync.native(root), nearestRealpath(target));
+  } catch {
+    return false;
+  }
+}
+
+function outside(dir: string, p: string): boolean {
+  const rel = path.relative(dir, p);
+  return rel === ".." || rel.startsWith(`..${path.sep}`);
+}
+
+// The real path of p's nearest existing ancestor with the rest appended, since
+// a Write can create the file and its directories. config.ts's realSandboxPath
+// walks the same way with the JS realpath, which keeps the case it is given:
+// on a case-insensitive volume a variant spelling of the worktree would read
+// as outside it. The native call returns the case stored on disk.
+function nearestRealpath(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch (error) {
+    const parent = path.dirname(p);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === p) throw error;
+    return path.join(nearestRealpath(parent), path.basename(p));
+  }
 }
 
 // HEAD, every changed path's index state, and the mtime and size of each

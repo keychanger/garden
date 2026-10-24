@@ -1,9 +1,10 @@
 // The mid-review-edit marker: onToolActivity stamps reviewInterruptedAt when a
 // mutating tool completes while the worker's review is in flight (the poller
 // then cancels the pass — see poller.test.ts "cancels the in-flight review").
-// These tests pin the hook-side trigger conditions: mutating tools only, the
-// review, repair and merge-pending states only, stamped once.
-import { describe, it, expect, vi, beforeEach } from "vitest";
+// These tests pin the hook-side trigger conditions: mutating tools only (an
+// edit tool only for a file in the worktree), the review, repair and
+// merge-pending states only, stamped once.
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -190,6 +191,119 @@ describe("onToolActivity — mid-review-edit marker", () => {
       toolCtx({ prState: "reviewing" }, "Edit", "a6159cebbfb14984c"));
     expect(interruptStamps()).toHaveLength(1);
     expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+  });
+});
+
+// An edit tool counts only when the file it names is in the worktree: a
+// subagent editing its own scratch copy, the memory directory or a temp file
+// cannot change what the reviewer certifies (garden/long-grave-core,
+// 2026-10-24: a background workflow agent's Edit to its scratch copy cancelled
+// the review twice in twenty minutes). Runs against real directories, since
+// symlinks and paths not yet created are what the resolution must get right.
+describe("edit tools during review — only a file in the worktree counts", () => {
+  const subagent = "a6159cebbfb14984c";
+  let wt: string;
+  let elsewhere: string;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    wt = fs.mkdtempSync(path.join(os.tmpdir(), "garden-edit-wt-"));
+    elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "garden-edit-out-"));
+    fs.writeFileSync(path.join(wt, "a.ts"), "one\n");
+    fs.writeFileSync(path.join(elsewhere, "a.ts"), "one\n");
+  });
+
+  afterEach(() => {
+    fs.rmSync(wt, { recursive: true, force: true });
+    fs.rmSync(elsewhere, { recursive: true, force: true });
+  });
+
+  // The stamps one edit-tool call made while the worker's review runs.
+  function stampsFor(
+    tool: string,
+    toolInput: Record<string, unknown>,
+    opts: { agentId?: string; cwd?: string; entry?: Partial<WorkerEntry> } = {},
+  ): number {
+    const before = interruptStamps().length;
+    const ctx = toolCtx({ prState: "reviewing", worktreePath: wt, ...opts.entry }, tool, opts.agentId);
+    ctx.input.tool_input = toolInput;
+    if (opts.cwd !== undefined) ctx.input.cwd = opts.cwd;
+    workerHookHandlers.onToolActivity(ctx);
+    return interruptStamps().length - before;
+  }
+
+  it("leaves the review running for an edit outside the worktree, from a subagent or the main thread", () => {
+    const file_path = path.join(elsewhere, "a.ts");
+    expect(stampsFor("Edit", { file_path }, { agentId: subagent })).toBe(0);
+    expect(stampsFor("Edit", { file_path })).toBe(0);
+    expect(triggerProjectPoll).not.toHaveBeenCalled();
+  });
+
+  it("leaves the review running for a Write that creates a file and its directory outside the worktree", () => {
+    expect(stampsFor("Write", { file_path: path.join(elsewhere, "new", "dir", "c.ts") })).toBe(0);
+  });
+
+  it("treats a sibling whose name extends the worktree's as outside it", () => {
+    expect(stampsFor("Write", { file_path: `${wt}-2/a.ts` })).toBe(0);
+  });
+
+  it("cancels for an edit inside the worktree, from either thread", () => {
+    const file_path = path.join(wt, "a.ts");
+    expect(stampsFor("Edit", { file_path }, { agentId: subagent })).toBe(1);
+    expect(stampsFor("Edit", { file_path })).toBe(1);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
+  });
+
+  // Either spelling inside the tree is enough to count, which can only err
+  // toward a needless re-review.
+  it("cancels for a path named inside the worktree even when a symlink there leads out", () => {
+    fs.symlinkSync(elsewhere, path.join(wt, "out"));
+    expect(stampsFor("Edit", { file_path: path.join(wt, "out", "a.ts") })).toBe(1);
+  });
+
+  it("resolves a relative path against the hook input's cwd", () => {
+    expect(stampsFor("Edit", { file_path: "a.ts" }, { cwd: wt })).toBe(1);
+    expect(stampsFor("Edit", { file_path: "a.ts" }, { cwd: elsewhere })).toBe(0);
+  });
+
+  it("cancels for a Write that creates a file in a directory the worktree does not have yet", () => {
+    expect(stampsFor("Write", { file_path: path.join(wt, "new", "dir", "b.ts") })).toBe(1);
+  });
+
+  it("cancels for a path outside the worktree that reaches it through a symlink", () => {
+    fs.symlinkSync(wt, path.join(elsewhere, "link"));
+    expect(stampsFor("Edit", { file_path: path.join(elsewhere, "link", "a.ts") })).toBe(1);
+    // A file the Write has yet to create resolves through its nearest existing ancestor.
+    expect(stampsFor("Write", { file_path: path.join(elsewhere, "link", "new", "b.ts") })).toBe(1);
+  });
+
+  it("reads NotebookEdit's notebook_path", () => {
+    expect(stampsFor("NotebookEdit", { notebook_path: path.join(elsewhere, "n.ipynb") })).toBe(0);
+    expect(stampsFor("NotebookEdit", { notebook_path: path.join(wt, "n.ipynb") })).toBe(1);
+  });
+
+  it("cancels for an edit it cannot place outside the worktree", () => {
+    const outsideFile = path.join(elsewhere, "a.ts");
+    expect(stampsFor("Edit", {}), "no file_path").toBe(1);
+    expect(stampsFor("Write", { file_path: 42 }), "non-string file_path").toBe(1);
+    expect(stampsFor("Edit", { notebook_path: outsideFile }), "Edit reads file_path").toBe(1);
+    expect(stampsFor("Edit", { file_path: "a.ts" }), "relative path, no cwd").toBe(1);
+    expect(stampsFor("Edit", { file_path: outsideFile }, { entry: { worktreePath: undefined } }),
+      "no worktree recorded").toBe(1);
+    expect(stampsFor("Edit", { file_path: outsideFile }, { entry: { worktreePath: path.join(elsewhere, "gone") } }),
+      "worktree that does not resolve").toBe(1);
+    fs.symlinkSync("loop", path.join(elsewhere, "loop"));
+    expect(stampsFor("Edit", { file_path: path.join(elsewhere, "loop", "a.ts") }), "path that does not resolve")
+      .toBe(1);
+  });
+
+  // The JS realpath keeps the case it is given, so a variant spelling of the
+  // worktree would read as outside it; the native call returns the stored case.
+  // Only a case-insensitive volume (macOS's default) can show the difference.
+  const tmp = os.tmpdir();
+  const caseInsensitive = tmp !== tmp.toUpperCase() && fs.existsSync(tmp.toUpperCase());
+  it.skipIf(!caseInsensitive)("cancels for a case variant of a worktree path on a case-insensitive volume", () => {
+    expect(stampsFor("Edit", { file_path: path.join(wt, "a.ts").toUpperCase() })).toBe(1);
   });
 });
 
