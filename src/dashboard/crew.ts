@@ -313,8 +313,12 @@ export function deriveCrew(project: ProjectConfig, config: GardenConfig): string
 // True when a project's flat keys override a dimension its bound crew also
 // sets — the "adopted a crew, then tweaked it" state. Drives the `*` suffix on
 // the status-pane badge so an override is never invisible. `provider` is not an
-// override dimension: it is crew-managed by write-through (see applyCrew), so
-// it is always already in sync.
+// override dimension: applyCrew writes the crew's provider through to the flat
+// key, and `config <p> provider unset` refuses to clear one a bound crew's
+// builder supplies. Setting a different provider, or changing what a bound
+// crew resolves to afterwards (an edit, or a removal that unshadows a
+// builtin), rewrites nothing on the other side, so those paths can still
+// leave the two apart.
 export function crewOverridden(project: ProjectConfig, config: GardenConfig): boolean {
   const spec = resolveProjectCrew(project, config);
   if (!spec) return false;

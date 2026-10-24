@@ -345,6 +345,39 @@ describe("garden config provider key", () => {
     logSpy.mockRestore();
   });
 
+  // A bound crew's provider-backed builder supplies that provider to every new
+  // worker once the flat key is absent (workers.test: "pins a project-crew
+  // backend"), while the reviewer env, the usage gate and `provider list` read
+  // only the flat key. Clearing it would leave new workers on the provider
+  // under a confirmation that says they are back on first-party.
+  it("refuses to clear a provider the project's bound crew supplies", async () => {
+    const config = await setup();
+    config.saveConfig({
+      projects: { a: { path: "/a", crew: "deepseek-claude", provider: "deepseek" } },
+      providers: { deepseek: DEEPSEEK },
+    });
+    const { config: configCmd } = await import("../src/commands/config.js");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await expect(configCmd(["a", "provider", "unset"]))
+      .rejects.toThrow("bound to crew 'deepseek-claude', whose builder runs on provider 'deepseek'");
+    expect(logSpy).not.toHaveBeenCalled();
+    expect(config.loadConfig().projects.a.provider).toBe("deepseek");
+    logSpy.mockRestore();
+  });
+
+  it("still clears a provider set over a first-party crew", async () => {
+    const config = await setup();
+    config.saveConfig({
+      projects: { a: { path: "/a", crew: "all-claude", provider: "deepseek" } },
+      providers: { deepseek: DEEPSEEK },
+    });
+    const { config: configCmd } = await import("../src/commands/config.js");
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await configCmd(["a", "provider", "unset"]);
+    expect(config.loadConfig().projects.a.provider).toBeUndefined();
+    logSpy.mockRestore();
+  });
+
   it("rejects a provider on a project whose worker harness cannot consume provider profiles", async () => {
     const config = await setup();
     config.saveConfig({

@@ -153,6 +153,19 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
       }
     } else if (key === "provider") {
       if (value === "" || value === "unset" || value === "null") {
+        // With the flat key gone, newWorker falls back to the bound crew's
+        // builder, while the reviewer env, the usage gate and `provider list`
+        // read only the flat key. Clearing it under a provider-backed builder
+        // would keep new workers on that provider while every other reader,
+        // and the message below, says first-party.
+        const crew = resolveProjectCrew(project, cfg);
+        if (crew?.worker.provider) {
+          throw new Error(
+            `${projectName} is bound to crew '${crew.name}', whose builder runs on provider '${crew.worker.provider}'. `
+            + `Bind a first-party crew ('garden config ${projectName} crew <name>'), `
+            + `or unbind it ('garden config ${projectName} crew none') and clear the provider again.`,
+          );
+        }
         delete project.provider;
         message = `Cleared ${key} for ${projectName} (workers back on the first-party Anthropic path)`;
       } else {
