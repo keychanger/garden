@@ -354,3 +354,61 @@ describe("handleClaudeHook (real fs + real git)", () => {
     expect(w.agentStatus).toBe("working");
   });
 });
+
+// The watchdog's stand-in for a Stop that Codex did not fire. Codex fires Stop
+// on only some of a turn's task_complete events, so the commits that end a
+// turn often land after its last fired Stop, and only the heal sees the turn
+// end. Run from the watchdog, not the worktree, so nothing here chdirs.
+describe("Codex missed-Stop heal (real fs + real git)", () => {
+  const CODEX_WORKER = "burnt-mild-reed";
+  // Turn activity in the fixture precedes its final task_complete.
+  const TURN_ACTIVITY_AT = Date.parse("2026-08-09T09:36:43.187Z");
+
+  function seedCodexWorker(): string {
+    const wt = path.join(env.home, ".garden", "worktrees", PROJECT, CODEX_WORKER);
+    git(projectPath, "worktree", "add", wt, "-b", CODEX_WORKER);
+    fs.writeFileSync(path.join(env.sessionsDir, "dashboard.registry.json"), JSON.stringify({
+      workers: {
+        [PROJECT]: [{
+          name: CODEX_WORKER,
+          sessionId: "codex-thread-1",
+          task: "do the thing",
+          worktreePath: wt,
+          branchName: CODEX_WORKER,
+          baseBranch: "main",
+          harness: "codex",
+          agentStatus: "working",
+          lastEventAt: TURN_ACTIVITY_AT,
+          transcriptPath: path.resolve(__dirname, "../fixtures/codex/rollout-turn-complete.jsonl"),
+        }],
+      },
+    }));
+    return wt;
+  }
+
+  it("arms the review for commits the turn made after its last fired Stop", async () => {
+    const wt = seedCodexWorker();
+    fs.writeFileSync(path.join(wt, "ahead.txt"), "x\n");
+    git(wt, "add", "ahead.txt");
+    git(wt, "commit", "-m", "ahead");
+    const { reconcileCodexInputRequests } = await import("../../src/dashboard/codex-input.js");
+
+    expect(reconcileCodexInputRequests()).toBe(true);
+
+    const w = readRegistryFile().workers[PROJECT][0] as { agentStatus: string; pendingReviewAt?: number };
+    expect(w.agentStatus).toBe("idle");
+    expect(typeof w.pendingReviewAt).toBe("number");
+  });
+
+  it("marks a worker done when the turn ended on .garden-done with nothing ahead", async () => {
+    const wt = seedCodexWorker();
+    fs.writeFileSync(path.join(wt, ".garden-done"), "");
+    const { reconcileCodexInputRequests } = await import("../../src/dashboard/codex-input.js");
+
+    expect(reconcileCodexInputRequests()).toBe(true);
+
+    const w = readRegistryFile().workers[PROJECT][0] as { agentStatus: string; prState?: string };
+    expect(w.agentStatus).toBe("idle");
+    expect(w.prState).toBe("done");
+  });
+});

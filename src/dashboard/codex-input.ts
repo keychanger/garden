@@ -3,7 +3,10 @@ import path from "node:path";
 import { readRegistry, updateWorkerFieldsIf, type WorkerEntry } from "./registry.js";
 import { codexHome, readCodexInputRequestState, readCodexTurnState } from "./harness/codex-core.js";
 import { dispatchOwedHandoffCallbacks } from "./continue.js";
+import { worktreePath } from "./git.js";
+import { routeStopHookEnd } from "./hooks/default.js";
 import { log } from "./log.js";
+import { isGeneratedWorkerName } from "./names.js";
 import { triggerProjectPoll } from "./poller-fifo.js";
 
 const WATCH_DEBOUNCE_MS = 250;
@@ -101,6 +104,16 @@ export function reconcileCodexInputRequests(changedTranscriptPath?: string): boo
     if (update.to === "idle") {
       triggerProjectPoll(update.project);
       dispatchOwedHandoffCallbacks(update.project, update.workerName);
+      // A missed Stop is typically the turn's last one, after its final commit,
+      // and the Stop hook is what arms a review: handleWorking launches nothing
+      // without pendingReviewAt. So the heal owes the hook's turn-end duties
+      // too (arm the review, flag a dirty tree, apply .garden-done). This runs
+      // unsandboxed and the registry is worker-writable, so git runs in the
+      // canonical worktree of a name Garden generated, never a registry path.
+      if (isGeneratedWorkerName(update.workerName)) {
+        routeStopHookEnd(update.project, update.workerName,
+          worktreePath(update.project, update.workerName));
+      }
     }
     log.info("codex-input", update.to === "idle"
       ? "reconciled turn end missed by the Stop hook"

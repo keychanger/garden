@@ -49,6 +49,10 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   stripControlSequences: vi.fn((value: string) => value),
 }));
 
+vi.mock("../src/dashboard/hooks/default.js", () => ({
+  routeStopHookEnd: vi.fn(),
+}));
+
 import {
   reconcileCodexInputRequests,
   startCodexInputWatcher,
@@ -56,6 +60,7 @@ import {
 import { updateWorkerFieldsIf } from "../src/dashboard/registry.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import { dispatchOwedHandoffCallbacks } from "../src/dashboard/continue.js";
+import { routeStopHookEnd } from "../src/dashboard/hooks/default.js";
 
 const requestedAt = Date.parse("2026-08-07T23:35:24.483Z");
 const answeredAt = Date.parse("2026-08-07T23:36:04.112Z");
@@ -168,6 +173,60 @@ describe("reconcileCodexInputRequests", () => {
     // The heal stands in for the missed Stop, so it must also deliver any
     // handoff callback that reached this worker mid-turn.
     expect(dispatchOwedHandoffCallbacks).toHaveBeenCalledWith("garden", worker.name);
+  });
+
+  // The Stop hook is what arms a turn's review: handleWorking launches nothing
+  // without pendingReviewAt. A turn whose last commits landed after its last
+  // fired Stop was left unreviewed under a plain `idle` row, and a trailing
+  // .garden-done never became `done`, until the operator prompted the worker.
+  it("runs the Stop hook's turn-end routine in the worker's own worktree", () => {
+    const worker = entry({
+      name: "burnt-mild-reed",
+      lastEventAt: turnActivityAt,
+      transcriptPath: fixture("rollout-turn-complete.jsonl"),
+    });
+    workers.garden = [worker];
+
+    expect(reconcileCodexInputRequests()).toBe(true);
+    expect(routeStopHookEnd).toHaveBeenCalledTimes(1);
+    expect(routeStopHookEnd).toHaveBeenCalledWith(
+      "garden",
+      "burnt-mild-reed",
+      path.join(process.env.HOME ?? "", ".garden", "worktrees", "garden", "burnt-mild-reed"),
+    );
+  });
+
+  it("runs no turn-end routine for a reconcile that ended no turn", () => {
+    workers.garden = [entry({ name: "burnt-mild-reed", lastStateChangeAt: requestedAt - 1000 })];
+    expect(reconcileCodexInputRequests()).toBe(true);
+    expect(workers.garden[0].agentStatus).toBe("asking");
+
+    const healed = entry({
+      name: "tight-shrewd-drift",
+      lastEventAt: turnActivityAt,
+      transcriptPath: fixture("rollout-turn-complete.jsonl"),
+    });
+    workers.garden = [healed];
+    onUpdate = () => { healed.lastEventAt = turnCompleteAt + 1000; };
+    expect(reconcileCodexInputRequests()).toBe(false);
+
+    expect(routeStopHookEnd).not.toHaveBeenCalled();
+  });
+
+  // The watchdog runs it unsandboxed, and the registry is writable from every
+  // worker sandbox: a name that is not one Garden generated must not choose
+  // the directory its git runs in.
+  it("does not run the turn-end routine for a name Garden did not generate", () => {
+    const worker = entry({
+      name: "../../../../tmp/elsewhere",
+      lastEventAt: turnActivityAt,
+      transcriptPath: fixture("rollout-turn-complete.jsonl"),
+    });
+    workers.garden = [worker];
+
+    expect(reconcileCodexInputRequests()).toBe(true);
+    expect(worker.agentStatus).toBe("idle");
+    expect(routeStopHookEnd).not.toHaveBeenCalled();
   });
 
   it("heals a worker whose prState advanced after the turn ended", () => {

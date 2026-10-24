@@ -76,6 +76,12 @@ vi.mock("../src/config.js", () => ({
 
 vi.mock("../src/version.js", () => ({ GARDEN_VERSION: "abc1234", GARDEN_COMMIT: "abc1234def5678abc1234def5678abc1234def56" }));
 
+// Started only by runWatchdogLoop, which nothing here drives; it is covered by
+// codex-input.test.ts, and its heal reaches the Stop hook's module graph.
+vi.mock("../src/dashboard/codex-input.js", () => ({
+  startCodexInputWatcher: vi.fn(),
+}));
+
 vi.mock("../src/dashboard/state.js", () => {
   let state: { buildBehind: number | null } = { buildBehind: null };
   return {

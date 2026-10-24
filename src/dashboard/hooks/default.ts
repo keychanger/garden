@@ -108,13 +108,15 @@ function worktreeHasUncommittedChanges(cwd: string): boolean | null {
   }
 }
 
-function routeStopHookEnd(projectName: string, workerName: string): void {
+// The turn-end duties every way a turn can end owes: the Stop hook (cwd is
+// the worktree it fires from) and the Codex rollout heal in codex-input.ts,
+// which stands in for a Stop that Codex did not fire.
+export function routeStopHookEnd(projectName: string, workerName: string, cwd: string): void {
   const project = tryGetProject(projectName);
   if (!project) return;
   const entry = findWorkerByName(projectName, workerName);
   if (!entry) return;
   const baseBranch = getWorkerBaseBranch(entry, project.path);
-  const cwd = process.cwd();
   try {
     // git rev-list --count <base>..HEAD — counts commits ahead of base.
     // Returns "0" if no commits ahead, a positive number otherwise.
@@ -503,7 +505,7 @@ const onTurnEnded: HookMethod = (ctx) => {
   // routeStopHookEnd reads the registry fresh — the applyAndLog above has
   // already written agentStatus="idle". See STATUS.md invariant 2 (review
   // entry) and invariant 4 (merged stickiness).
-  routeStopHookEnd(ctx.workerInfo.project, ctx.workerInfo.name);
+  routeStopHookEnd(ctx.workerInfo.project, ctx.workerInfo.name, process.cwd());
   dispatchOwedHandoffCallbacks(ctx.workerInfo.project, ctx.workerInfo.name);
   maybeRefreshUsage(resolveGardenRunner());
   // No Codex usage capture here: the meter is fed role-agnostically from the
