@@ -32,11 +32,21 @@ vi.mock("../src/dashboard/registry.js", () => ({
   getWorkers: vi.fn(() => []),
 }));
 
+// Recovery re-dispatches a pending seed; the real dispatch spawns a detached
+// `garden dashboard _seed-worker`.
+vi.mock("../src/dashboard/continue.js", () => ({
+  dispatchDelayedSeed: vi.fn(),
+}));
+vi.mock("../src/dashboard/runner.js", () => ({
+  resolveGardenRunner: vi.fn(() => "garden"),
+}));
+
 import {
   submitHandoffRequest, waitForHandoffResponse, withdrawPendingHandoffRequest,
   processPendingHandoffs,
 } from "../src/dashboard/handoff-dispatch.js";
 import { newWorker, workerPaneLive } from "../src/dashboard/workers.js";
+import { dispatchDelayedSeed } from "../src/dashboard/continue.js";
 import { getWorkers } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
 import { loadConfig } from "../src/config.js";
@@ -292,6 +302,57 @@ describe("processPendingHandoffs", () => {
     expect(vi.mocked(workerPaneLive)).toHaveBeenCalledWith("wolf", "never-opened");
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
     expect(fs.readdirSync(claimsDir)).toEqual([]);
+  });
+
+  // newWorker dispatches the seed after the pane opens. A dispatcher killed in
+  // between left a live worker with no task, and recovery reported the handoff
+  // as delivered.
+  it("re-dispatches the protected seed of a recovered worker whose pane is live", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    moveToClaim(id, 999_999_999);
+    // The dead dispatcher had copied the briefing into the control tree.
+    const protectedSeed = path.join(controlDir, "handoff", "seeds", `${id}.txt`);
+    fs.mkdirSync(path.dirname(protectedSeed), { recursive: true });
+    fs.writeFileSync(protectedSeed, "seed content");
+    vi.mocked(getWorkers).mockReturnValueOnce([{
+      name: "never-seeded", sessionId: "session", task: "", handoffRequestId: id,
+    }]);
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(dispatchDelayedSeed)).toHaveBeenCalledWith("garden", "wolf", "never-seeded", protectedSeed);
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8"))).toMatchObject({ workerName: "never-seeded" });
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+  });
+
+  it("leaves a recovered worker whose seed was already delivered alone", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    moveToClaim(id, 999_999_999);
+    vi.mocked(getWorkers).mockReturnValueOnce([{
+      name: "already-seeded", sessionId: "session", task: "", handoffRequestId: id,
+    }]);
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(dispatchDelayedSeed)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8"))).toMatchObject({ workerName: "already-seeded" });
+  });
+
+  it("dispatches no seed to a recovered worker that never got a window", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    moveToClaim(id, 999_999_999);
+    const protectedSeed = path.join(controlDir, "handoff", "seeds", `${id}.txt`);
+    fs.mkdirSync(path.dirname(protectedSeed), { recursive: true });
+    fs.writeFileSync(protectedSeed, "seed content");
+    vi.mocked(getWorkers).mockReturnValueOnce([{
+      name: "never-opened", sessionId: "session", task: "", handoffRequestId: id,
+    }]);
+    vi.mocked(workerPaneLive).mockReturnValueOnce(false);
+
+    processPendingHandoffs();
+
+    expect(vi.mocked(dispatchDelayedSeed)).not.toHaveBeenCalled();
+    expect(fs.existsSync(protectedSeed)).toBe(false);
   });
 
   it("leaves an abandoned claim for a later poll when tmux does not answer", () => {

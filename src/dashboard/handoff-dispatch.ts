@@ -19,6 +19,8 @@ import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { getWorkers } from "./registry.js";
 import { newWorker, workerPaneLive } from "./workers.js";
+import { dispatchDelayedSeed } from "./continue.js";
+import { resolveGardenRunner } from "./runner.js";
 import { getCrew } from "./crew.js";
 import { isWorkerEffort } from "./worker-effort.js";
 import { loadConfig } from "../config.js";
@@ -322,6 +324,22 @@ function existingWorkerResponse(workerName: string, request: HandoffRequest): Ha
       };
 }
 
+// A recovered worker whose pane is live may never have been seeded: newWorker
+// dispatches the seed after the pane opens, so a dispatcher killed in between
+// left the protected copy with nothing to deliver it. That copy is removed
+// once a delivery lands intact, so while it is on disk the seed is dispatched
+// again. A seeder the dead dispatcher did start holds the seed's claim, and
+// this one stands down (seedWorker).
+function redispatchPendingSeed(request: HandoffRequest, workerName: string): void {
+  const seedFile = protectedSeedPath(request.id);
+  if (!fs.existsSync(seedFile)) return;
+  dispatchDelayedSeed(resolveGardenRunner(), request.targetProject, workerName, seedFile);
+  log.info("handoff", "re-dispatched seed to recovered worker", {
+    worker: workerName,
+    data: { id: request.id, project: request.targetProject },
+  });
+}
+
 // The claim owner's pid comes from a filename garden wrote in the control
 // tree, so none of the forged values reach here today. Kept the same shape as
 // the lock and slot probes so it stays safe if one ever does: only EPERM
@@ -407,7 +425,10 @@ function processClaim(claimFile: string, filenameId: string): void {
   const existingWorker = findExistingWorker(request);
   if (existingWorker) {
     // Left in place when tmux does not answer; a later poll recovers it again.
+    // The seed goes out before the receipt, so a dispatcher killed between the
+    // two leaves the handoff claim in place and the next recovery sends it again.
     const response = existingWorkerResponse(existingWorker, request);
+    if (response?.workerName) redispatchPendingSeed(request, existingWorker);
     if (response) deliverClaimResult(claimFile, filenameId, response, request);
     return;
   }

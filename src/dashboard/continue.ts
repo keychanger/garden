@@ -44,6 +44,8 @@ import { resolveGardenRunner } from "./runner.js";
 import { recordContinueDispatched } from "./telemetry.js";
 import { addAlert } from "./alerts.js";
 import { readSeedFile } from "./seed-files.js";
+import { pidStartedAfter, processIsAlive, withFileLock } from "./file-lock.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import { tryGetProject } from "../config.js";
 
 // Which garden-initiated delivery this is — the `kind` on the
@@ -629,9 +631,7 @@ function verifyPromptDelivery(
   const poll = (): void => {
     const entry = findWorkerByName(projectName, workerName);
     if (!entry) {
-      if (seedFile) {
-        try { fs.unlinkSync(seedFile); } catch { /* already gone */ }
-      }
+      if (seedFile) removeSeed(seedFile);
       return;
     }
     const landed = readLandedPrompt(entry.harness, entry.transcriptPath);
@@ -642,9 +642,7 @@ function verifyPromptDelivery(
     );
     if (verdict === "intact") {
       if (resent) {
-        if (seedFile) {
-          try { fs.unlinkSync(seedFile); } catch { /* already gone */ }
-        }
+        if (seedFile) removeSeed(seedFile);
         recordContinueDispatched(
           projectName,
           workerName,
@@ -1113,7 +1111,10 @@ export function dispatchDelayedSeed(
 // paste on no confirmation and alerting (keeping the seed file) if it never
 // lands. Retries are safe by construction: continueWorker skips a worker that
 // is already mid-turn, and routes a paste still sitting unsent in the box
-// through pressEnter (isOwnStuckPaste) instead of pasting it twice.
+// through pressEnter (isOwnStuckPaste) instead of pasting it twice. Running
+// twice is safe too: a second seeder for the same file stands down while the
+// first holds its claim, and no paste goes out for a seed the transcript
+// shows already landed whole.
 
 const SEED_READY_POLL_MS = 2_000;
 // Cold boot is git fetch + worktree add + npm install + TUI init. Raised from
@@ -1132,6 +1133,55 @@ const SEED_MAX_ATTEMPTS = 3;
 // Overall bound on the detached seed process, covering the skip loop that
 // deliberately does not consume attempts.
 const SEED_DELIVERY_DEADLINE_MS = 300_000;
+
+// One seeder per seed file. Handoff recovery dispatches a recovered worker's
+// seed again while the protected copy is still on disk, and cannot tell
+// whether the dispatcher that died had already started a seeder: two would
+// wait out the same boot and paste together. The claim names the seeding
+// process and holds while that pid answers for a process no younger than the
+// claim, so a seeder that exited or died leaves it to the next one. It sits
+// beside the seed and goes with it.
+function seedClaimPath(messageFile: string): string {
+  return `${messageFile}.seeder`;
+}
+
+// A pid answering for a process started this long after the claim was written
+// was handed out again after its seeder died (see pidStartedAfter).
+const SEED_CLAIM_REUSE_MARGIN_MS = 30_000;
+
+function seedClaimedElsewhere(claim: string): boolean {
+  try {
+    const pid = Number(fs.readFileSync(claim, "utf8").trim());
+    if (!Number.isSafeInteger(pid) || pid === process.pid || !processIsAlive(pid)) return false;
+    return !pidStartedAfter(pid, fs.statSync(claim).mtimeMs + SEED_CLAIM_REUSE_MARGIN_MS);
+  } catch {
+    return false;
+  }
+}
+
+function claimSeedDelivery(messageFile: string): boolean {
+  const claim = seedClaimPath(messageFile);
+  try {
+    return withFileLock(`${claim}.lock`, () => {
+      if (seedClaimedElsewhere(claim)) return false;
+      atomicWriteFile(claim, String(process.pid), { mode: 0o600, durable: false });
+      return true;
+    }, { name: "seed-claim" });
+  } catch {
+    // A claim that cannot be read or written leaves delivery as it was.
+    return true;
+  }
+}
+
+// Remove a delivered (or abandoned) seed, and its claim while that still
+// names this process.
+function removeSeed(messageFile: string): void {
+  try { fs.unlinkSync(messageFile); } catch { /* already gone */ }
+  const claim = seedClaimPath(messageFile);
+  try {
+    if (fs.readFileSync(claim, "utf8").trim() === String(process.pid)) fs.unlinkSync(claim);
+  } catch { /* no claim, or another seeder's */ }
+}
 
 /** Whether a sent seed has registered as a user turn yet. Pure, so the
  *  confirmation rule is testable without a live TUI. Called only after
@@ -1167,6 +1217,14 @@ export function seedWorker(
     return;
   }
 
+  if (!claimSeedDelivery(messageFile)) {
+    log.info("workers", "seed held by another seeder", {
+      worker: workerName,
+      data: { project: projectName, file: messageFile },
+    });
+    return;
+  }
+
   // Seeds route through tmux load-buffer (see pasteAndSubmit); record size
   // so operators tracing a slow / missed seed can correlate with the buffer
   // path instead of guessing.
@@ -1175,9 +1233,7 @@ export function seedWorker(
     data: { project: projectName, bytes: Buffer.byteLength(message, "utf8") },
   });
 
-  const cleanup = (): void => {
-    try { fs.unlinkSync(messageFile); } catch { /* already gone */ }
-  };
+  const cleanup = (): void => removeSeed(messageFile);
 
   const abortWorkerGone = (): void => {
     log.warn("workers", "seed skipped, worker missing", {
@@ -1263,10 +1319,28 @@ export function seedWorker(
     setTimeout(() => verify(sentStamp, confirmDeadline), SEED_CONFIRM_POLL_MS);
   };
 
+  // A seed the transcript shows already landed whole is not pasted again. A
+  // seeder taking over from one that died, or this one after a confirmation
+  // that missed its own landed paste, would otherwise send it twice.
+  const alreadyLanded = (): boolean => {
+    const entry = findWorkerByName(projectName, workerName);
+    const landed = entry ? readLandedPrompt(entry.harness, entry.transcriptPath) : null;
+    return classifyPromptDelivery(message, landed, null) === "intact"
+      || classifyPromptDelivery(correctivePrompt(message), landed, null) === "intact";
+  };
+
   // Phase 2 — paste.
   const send = (): void => {
     if (Date.now() >= deliveryDeadline) {
       giveUp("delivery deadline elapsed", attempts);
+      return;
+    }
+    if (alreadyLanded()) {
+      log.info("workers", "seed already landed, not re-sent", {
+        worker: workerName,
+        data: { project: projectName, attempts },
+      });
+      cleanup();
       return;
     }
     const delivered = continueWorker(projectName, workerName, message, "seed", messageFile);

@@ -1727,6 +1727,22 @@ describe("seedWorker", () => {
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
   });
 
+  // Handoff recovery can start a second seeder after one that delivered and
+  // died, and a confirmation can miss a paste that landed; neither may send
+  // the briefing twice.
+  it("does not paste a seed the transcript shows already landed", () => {
+    const message = "refactor the parser and update every caller";
+    vi.mocked(fs.readFileSync).mockReturnValue(message);
+    fakeRegistry();
+    vi.mocked(readLandedPrompt).mockReturnValue(message);
+
+    seedWorker("myproject", "bold-ash", "/tmp/seed.txt");
+
+    expect(pasteAndSubmit).not.toHaveBeenCalled();
+    expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/seed.txt");
+    expect(recordContinueDispatched).not.toHaveBeenCalled();
+  });
+
   it("alerts and keeps the seed file when the briefing never registers after every attempt", () => {
     fakeRegistry();
 

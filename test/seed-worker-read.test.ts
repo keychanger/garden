@@ -1,8 +1,9 @@
 // seedWorker against the real filesystem: the seed is read through
 // readSeedFile, so a link planted in place of a seed is refused before
 // anything is pasted. continue.test.ts covers delivery with the read mocked.
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "node:fs";
+import { spawn } from "node:child_process";
 import path from "node:path";
 import { useTmpHome } from "./helpers.js";
 
@@ -54,5 +55,46 @@ describe("seedWorker's read", () => {
     seedWorker("proj", "bold-ash", file);
 
     expect(log.info).toHaveBeenCalledWith("workers", "seed dispatching", expect.objectContaining({ worker: "bold-ash" }));
+  });
+});
+
+// Handoff recovery dispatches a seed again while its protected copy is on disk,
+// and cannot tell whether the dead dispatcher had already started a seeder.
+describe("seedWorker's claim", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("stands down while another live seeder holds the seed's claim", async () => {
+    const { seedWorker, findWorkerByName, log } = await load();
+    const { writeSeedFile } = await import("../src/dashboard/seed-files.js");
+    const file = writeSeedFile("do the thing", "handoff");
+    // Another process, alive and started before its claim was written.
+    const seeder = spawn("sleep", ["30"], { stdio: "ignore" });
+    try {
+      fs.writeFileSync(`${file}.seeder`, String(seeder.pid));
+
+      seedWorker("proj", "bold-ash", file);
+
+      expect(log.info).toHaveBeenCalledWith("workers", "seed held by another seeder", expect.anything());
+      expect(findWorkerByName).not.toHaveBeenCalled();
+      expect(fs.readFileSync(file, "utf8")).toBe("do the thing");
+    } finally {
+      seeder.kill();
+    }
+  });
+
+  it("takes over a claim whose seeder is gone, and removes it with the seed", async () => {
+    const { seedWorker, log } = await load();
+    const { writeSeedFile } = await import("../src/dashboard/seed-files.js");
+    const file = writeSeedFile("do the thing", "handoff");
+    fs.writeFileSync(`${file}.seeder`, "999999999");
+
+    // No registered worker, so the delivery ends at once and cleans up.
+    seedWorker("proj", "bold-ash", file);
+
+    expect(log.info).toHaveBeenCalledWith("workers", "seed dispatching", expect.objectContaining({ worker: "bold-ash" }));
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(`${file}.seeder`)).toBe(false);
   });
 });

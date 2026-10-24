@@ -57,7 +57,7 @@ function readHolderPid(filePath: string): number | null {
   return Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
-function processIsAlive(pid: number): boolean {
+export function processIsAlive(pid: number): boolean {
   // No garden process is pid 1, which always answers kill(0); a lock naming it
   // is forged (these locks sit in the worker-writable sessions dir) and would
   // otherwise never be reclaimed.
