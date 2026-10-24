@@ -196,13 +196,16 @@ export function handleMergePending(
   // which can take hours, and waiting on it held every younger merge in the
   // project for as long. It keeps its place, so it goes first once idle.
   const projectWorkers = getWorkers(projectName);
-  const olderPending = projectWorkers.some(w =>
+  const olderPending = projectWorkers.filter(w =>
     w.name !== entry.name &&
     w.prState === "merge-pending" &&
     w.agentStatus !== "working" &&
     (w.mergePendingAt ?? "") < (entry.mergePendingAt ?? ""),
   );
-  if (olderPending) return false;
+  if (olderPending.length > 0) {
+    logMergeHold(projectName, entry, olderPending);
+    return false;
+  }
 
   const wtPath = entry.worktreePath ?? projectPath;
 
@@ -363,6 +366,37 @@ export function handleMergePending(
   // Merge to base branch
   finalizeMerge(projectName, projectPath, baseBranch, entry);
   return true;
+}
+
+// A merge waiting behind an older one says so once per hold, naming the worker
+// at the head of the queue. The head's own deferral at its CI gate (checks
+// pending, the no-runs or gh grace window, a commit missing on GitHub) holds
+// every younger merge for as long as it lasts, and those merges logged nothing,
+// so a stalled queue showed only the head's lines. Every poll re-runs the gate,
+// so the holds already logged are kept on disk: one line per hold, naming both
+// workers' merge-pending stays, of which only the current head's are kept. A
+// record that cannot be read or written costs a repeated line.
+function logMergeHold(projectName: string, entry: WorkerEntry, older: WorkerEntry[]): void {
+  const head = older.reduce((a, b) => ((b.mergePendingAt ?? "") < (a.mergePendingAt ?? "") ? b : a));
+  const headStay = `${head.name}@${head.mergePendingAt ?? ""}`;
+  const hold = `${entry.name}@${entry.mergePendingAt ?? ""} ${headStay}`;
+  const record = path.join(CONTROL_DIR, `merge-held-${projectName}`);
+  let logged: string[] = [];
+  try {
+    logged = fs.readFileSync(record, "utf-8").split("\n").filter(line => line.endsWith(` ${headStay}`));
+  } catch {
+    // Nothing logged yet.
+  }
+  if (logged.includes(hold)) return;
+  log.info("poller", "merge held behind an older worker", {
+    worker: entry.name,
+    data: { project: projectName, behind: head.name },
+  });
+  try {
+    atomicWriteFile(record, [...logged, hold].join("\n"), { durable: false });
+  } catch {
+    // Unrecorded: the next poll logs this hold again.
+  }
 }
 
 // CI gate. Returns true when the caller should proceed with the merge,

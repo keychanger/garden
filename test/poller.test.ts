@@ -3597,6 +3597,77 @@ describe("poll — merge-pending state", () => {
     });
   });
 
+  // An older worker deferring at its CI gate still holds every younger merge,
+  // and the held merges logged nothing, so a stalled queue showed only the
+  // head's CI lines. Each hold is logged once, naming the head of the queue.
+  describe("a merge held behind an older worker", () => {
+    const HELD = "merge held behind an older worker";
+    const holds = () => vi.mocked(log.info).mock.calls.filter(c => c[1] === HELD).map(c => c[2]);
+    const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+    let contents: Map<string, string>;
+
+    beforeEach(() => {
+      // The hold record is read back by content, so carry it through the
+      // atomic write's tmp-file-and-rename like a real file.
+      contents = new Map<string, string>();
+      vi.mocked(fs.writeFileSync).mockImplementation((p, data) => {
+        fsMtimes.set(String(p), Date.now());
+        contents.set(String(p), String(data));
+      });
+      vi.mocked(fs.renameSync).mockImplementation((from, to) => {
+        fsMtimes.set(String(to), fsMtimes.get(String(from)) ?? Date.now());
+        fsMtimes.delete(String(from));
+        contents.set(String(to), contents.get(String(from)) ?? "");
+        contents.delete(String(from));
+      });
+      vi.mocked(fs.readFileSync).mockImplementation(((p: string) => contents.get(String(p)) ?? "{}") as typeof fs.readFileSync);
+      // The head defers at its CI gate.
+      vi.mocked(getGitHubRepoSlug).mockReturnValue("owner/repo");
+      vi.mocked(checkCiStatus).mockReturnValue({ kind: "pending", pending: ["build"] });
+      registryMock._setEntries("myproject", [
+        makeWorker({
+          name: "calm-bay", worktreePath: "/tmp/wt/myproject/calm-bay", branchName: "calm-bay",
+          prState: "merge-pending", agentStatus: "idle", mergePendingAt: ago(30_000),
+        }),
+        makeWorker({ prState: "merge-pending", agentStatus: "idle", mergePendingAt: ago(1_000) }),
+        makeWorker({
+          name: "tall-fern", worktreePath: "/tmp/wt/myproject/tall-fern", branchName: "tall-fern",
+          prState: "merge-pending", agentStatus: "idle", mergePendingAt: ago(60_000),
+        }),
+      ]);
+    });
+
+    it("names the head of the queue, once however many polls the hold spans", () => {
+      poll("myproject");
+      __simulatePollerRestartForTest();
+      poll("myproject");
+
+      expect(mergeToBase).not.toHaveBeenCalled();
+      expect(holds()).toEqual([
+        { worker: "calm-bay", data: { project: "myproject", behind: "tall-fern" } },
+        { worker: "bold-ash", data: { project: "myproject", behind: "tall-fern" } },
+      ]);
+    });
+
+    it("logs again behind a new head", () => {
+      poll("myproject");
+      // tall-fern went back through review and re-entered at the back.
+      updateWorkerFields("myproject", "tall-fern", { mergePendingAt: ago(0) });
+      __simulatePollerRestartForTest();
+      poll("myproject");
+
+      expect(holds().slice(2)).toEqual([
+        { worker: "bold-ash", data: { project: "myproject", behind: "calm-bay" } },
+        { worker: "tall-fern", data: { project: "myproject", behind: "calm-bay" } },
+      ]);
+      // The record keeps only the holds behind the current head.
+      const headStay = `calm-bay@${findWorkerByName("myproject", "calm-bay")!.mergePendingAt}`;
+      const lines = contents.get(path.join(CONTROL_DIR, "merge-held-myproject"))!.split("\n");
+      expect(lines).toHaveLength(2);
+      expect(lines.every(line => line.endsWith(` ${headStay}`))).toBe(true);
+    });
+  });
+
   it("merges when HEAD is the SHA cleared for merge, and clears the rebased tip", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
