@@ -123,6 +123,16 @@ function lockAppearsStale(filePath: string, startedAfter: StartedAfter): boolean
   return ageMs >= STALE_LOCK_MS;
 }
 
+// A process killed inside reclaimStaleLock, between its rename and its unlink,
+// leaves the salvage `<lock>.reclaiming.<owner uuid>` behind, and nothing else
+// removes it; the watchdog's housekeeping sweeps it by this shape
+// (sweepWriteLeftovers).
+const SALVAGE_NAME = /^.+\.reclaiming\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+export function isLockSalvage(name: string): boolean {
+  return SALVAGE_NAME.test(name);
+}
+
 // Atomically clear a lock believed stale. A naive unlinkSync(lockPath) is racy:
 // two waiters that both read the same dead pid both unlink, and the second
 // unlink can remove a *third* process's freshly created lock, admitting two

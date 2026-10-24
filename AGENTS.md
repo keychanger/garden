@@ -43,6 +43,7 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `state.ts`, `registry.ts`, `validate.ts` — transactional state, tmux/state reconciliation, the sole right-slot repair (DESIGN.md "Swapping Mechanism")
   - `window-heal.ts` — re-files misnamed worker windows from pane cwd (DESIGN.md "Hidden Window Naming")
   - `tmux.ts`, `window-names.ts`, `atomic-write.ts`, `file-lock.ts` — low-level helpers
+  - `write-leftovers.ts` — the hourly sweep of the temps and lock salvages an interrupted write leaves (DESIGN.md "Status tracking and the liveness watchdog")
   - `headless-paths.ts` — bounded control-tree paths for headless prompts/results, settings and context files (DESIGN.md "Poller and Auto-Merge")
   - `poller.ts` + `poller-state.ts` + `poller-{review,merge,resolve,ci,ci-fix,fifo}.ts` — per-project review/merge/resolve/ci-fix lifecycle (DESIGN.md "Poller and Auto-Merge", "Merge Handling")
   - `poller-window.ts` — the windows the poller owns; worker code imports them from here, never from `poller.ts`, which would close the state-handler import cycle (`import-cycles.real.test.ts`)

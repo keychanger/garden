@@ -779,6 +779,8 @@ Before arming that listener, `startCodexInputWatcher` creates `$CODEX_HOME/sessi
 
 The same fast watchdog tick also claims and re-dispatches due worker-cleanup requests. That recovery action is described in "Worker git cleanup" above; it is detached so it does not extend the loop interval that `absorbSleep` measures, and it mutates only the cleanup request's retry mtime rather than worker lifecycle state.
 
+The hourly housekeeping pass also removes what an interrupted write leaves behind (`sweepWriteLeftovers`, `write-leftovers.ts`). A process killed between `atomicWriteFile`'s temp write and its rename leaves `<file>.<uuid>.tmp`, one killed inside a lock reclaim leaves `<lock>.reclaiming.<uuid>`, and nothing else removed either: three intake-stamp temps sat in the sessions dir for weeks, each written the second a rebuild killed that project's poller mid-write. A rebuild no longer restarts a poller mid-poll, but any process killed mid-write leaves the same file. The sweep matches only those two name shapes (`isAtomicWriteTemp`, `isLockSalvage`, beside the code that names them), takes only regular files more than an hour old (a write renames its temp within milliseconds, and a reclaim unlinks or restores its salvage as soon as it has re-read it), and visits at most 50,000 entries in each tree, so a flooded directory cannot stretch the tick `absorbSleep` measures. It walks the whole control tree but only the top level of the sessions dir, whose subdirectories a worker could swap for links between the listing and the unlink.
+
 Planner follows designer's status-decoration form: a grey `planner` identity badge leaves the detail slot available for live decomposition activity.
 
 ## Commands

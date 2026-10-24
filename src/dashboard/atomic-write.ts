@@ -23,6 +23,16 @@ export interface AtomicWriteOpts {
   durable?: boolean;
 }
 
+// The temp file's name: the target's, a v4 UUID, and `.tmp`. A process killed
+// between the temp write and the rename leaves one behind that nothing else
+// removes; the watchdog's housekeeping sweeps them by this shape
+// (sweepWriteLeftovers).
+const TEMP_NAME = /^.+\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/;
+
+export function isAtomicWriteTemp(name: string): boolean {
+  return TEMP_NAME.test(name);
+}
+
 export function atomicWriteFile(
   filePath: string,
   content: string | Buffer,

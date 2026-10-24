@@ -88,6 +88,21 @@ describe("sweepBootstrapScripts", () => {
 });
 
 describe("housekeeping", () => {
+  // atomicWriteFile's temp, left by a process killed before its rename.
+  it("sweeps write leftovers", async () => {
+    const { housekeeping } = await importWatchdog();
+    const { WRITE_LEFTOVER_MAX_AGE_MS } = await import("../src/dashboard/write-leftovers.js");
+    const now = 1_000_000_000_000;
+    const leftover = writeBootstrap(
+      env.sessionsDir, "intake-last-board.3b241101-e2bb-4255-8caf-4136c566a962.tmp",
+      WRITE_LEFTOVER_MAX_AGE_MS + 60_000, now,
+    );
+
+    await housekeeping(now);
+
+    expect(fs.existsSync(leftover)).toBe(false);
+  });
+
   it("trims an oversized dashboard.log and sweeps stale bootstrap scripts together", async () => {
     const { housekeeping, BOOTSTRAP_MAX_AGE_MS } = await importWatchdog();
     const now = 1_000_000_000_000;

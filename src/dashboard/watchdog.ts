@@ -68,6 +68,7 @@ import { isAwaitingInput, isDoneSet } from "./continue.js";
 import { addAlert } from "./alerts.js";
 import { log, truncateLog } from "./log.js";
 import { sweepSpawnDrafts } from "./spawn-draft.js";
+import { sweepWriteLeftovers } from "./write-leftovers.js";
 import { dueCleanupRequests, dispatchWorkerCleanup } from "./worker-cleanup.js";
 import { titleCandidates, dispatchWorkerTitle } from "./task-title.js";
 import {
@@ -768,6 +769,7 @@ export async function housekeeping(nowMs: number): Promise<void> {
   truncateLog();
   sweepBootstrapScripts(nowMs);
   sweepSpawnDrafts(nowMs);
+  sweepWriteLeftovers(nowMs);
   alertOrphanedWorktrees(nowMs);
   // Validate's sweeps too: without them a long-lived dashboard keeps every
   // removed worker's settings and context file until an attach. Dynamic for
