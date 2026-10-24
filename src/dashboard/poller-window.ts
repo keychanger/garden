@@ -211,6 +211,12 @@ export function stopAllPollers(): void {
 
 export function ensureProjectPoller(projectName: string, gardenRunner: string): void {
   if (projectPollerRunning(projectName)) return;
+  // A missing window is evidence only when tmux answers. Inside an agent
+  // sandbox every probe fails as a missing window does, and the spawn could
+  // not run there anyway: its lock is in the control tree, which the sandbox
+  // cannot write, so trying would throw at a caller such as `garden poke`
+  // before it pokes.
+  if (dashboardReach().state === "unreachable") return;
   startProjectPoller(projectName, gardenRunner);
 }
 

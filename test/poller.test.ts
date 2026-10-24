@@ -327,7 +327,9 @@ vi.mock("../src/dashboard/poller-fifo.js", async () => {
 
 import fs from "node:fs";
 import path from "node:path";
-import { poll, postPush, restartLongLivedPollers, startProjectPoller, stopProjectPoller } from "../src/dashboard/poller.js";
+import {
+  ensureProjectPoller, poll, postPush, restartLongLivedPollers, startProjectPoller, stopProjectPoller,
+} from "../src/dashboard/poller.js";
 import {
   __simulatePollerRestartForTest, _resetGateBlockThrottleForTest,
 } from "../src/dashboard/poller-merge.js";
@@ -7459,6 +7461,46 @@ describe("stopProjectPoller — the poll FIFO", () => {
     stopProjectPoller("solo");
 
     expect(fifoUnlinked()).toBe(true);
+  });
+});
+
+// `garden poke` ensures a poller before it pokes, and is meant to work from a
+// worker pane. There the tmux socket is denied, so the window probe reads
+// "missing", and the spawn lock sits in the control tree the sandbox cannot
+// write: trying the spawn threw before the poke went out.
+describe("ensureProjectPoller", () => {
+  const spawnLockOpened = () =>
+    vi.mocked(fs.openSync).mock.calls.some(c => String(c[0]).includes("solo-poller.spawn.lock"));
+
+  beforeEach(() => {
+    vi.mocked(tryGetProject).mockReturnValue(
+      { path: "/repo/solo" } as ReturnType<typeof tryGetProject>);
+    vi.mocked(windowExists).mockReturnValue(false);
+    vi.mocked(windowIndices).mockReturnValue([]);
+  });
+
+  it("leaves the poller alone when tmux does not answer", () => {
+    vi.mocked(execFileSync).mockImplementation(((cmd: string, args?: readonly string[]) => {
+      if (cmd === "tmux" && args?.[0] === "has-session") {
+        throw Object.assign(new Error("Command failed: tmux has-session"), {
+          status: 1,
+          stderr: Buffer.from("error connecting to /private/tmp/tmux-501/default (Operation not permitted)\n"),
+        });
+      }
+      return "";
+    }) as typeof execFileSync);
+
+    ensureProjectPoller("solo", "node /usr/local/bin/garden");
+
+    expect(spawnLockOpened()).toBe(false);
+    expect(newDashboardWindowPaned).not.toHaveBeenCalled();
+  });
+
+  it("spawns a missing poller when tmux answers", () => {
+    ensureProjectPoller("solo", "node /usr/local/bin/garden");
+
+    expect(spawnLockOpened()).toBe(true);
+    expect(vi.mocked(newDashboardWindowPaned).mock.calls.map(c => c[0])).toContain("_solo-poller");
   });
 });
 
