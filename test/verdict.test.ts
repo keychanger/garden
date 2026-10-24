@@ -173,4 +173,31 @@ describe("parseLastLineVerdict", () => {
     const output = "CLEAN\nintermediate text\nFAILED";
     expect(parseLastLineVerdict(output, REVIEW_VOCAB)?.verdict).toBe("FAILED");
   });
+
+  // A reviewer that defers its verdict ("I'll report the verdict when it
+  // completes") leaves summary lines above that tail. A mixed-case summary line
+  // is prose, not the token the prompt asks for, so it must not stand in for
+  // the verdict the reviewer withheld: a false FIXED merges a branch whose
+  // checks never finished, and a false FAILED parks it as a code failure.
+  it("does not read a mixed-case summary line above a deferred verdict as the verdict", () => {
+    const deferredFixed = [
+      "Review notes:",
+      "Fixed: stale cross-reference in AGENTS.md",
+      "Checks: unit suite green; integration suite still running",
+      "I'll report the verdict when the integration run completes.",
+    ].join("\n");
+    const deferredFailed = [
+      "Ran garden checks:",
+      "Passed: 4105",
+      "Failed: 0",
+      "Waiting on the slow cross-engine test before I give a verdict.",
+    ].join("\n");
+    expect(parseLastLineVerdict(deferredFixed, REVIEW_VOCAB)).toBeNull();
+    expect(parseLastLineVerdict(deferredFailed, REVIEW_VOCAB)).toBeNull();
+  });
+
+  it("still accepts the exact token above trailing commentary, and any case on the last line", () => {
+    expect(parseLastLineVerdict("Summary.\nFIXED\nTrailing note.", REVIEW_VOCAB)?.verdict).toBe("FIXED");
+    expect(parseLastLineVerdict("Summary.\nFailed: the suite is red", REVIEW_VOCAB)?.verdict).toBe("FAILED");
+  });
 });

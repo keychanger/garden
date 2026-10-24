@@ -21,7 +21,8 @@
 // separator requirement guards against prose that merely begins with a vocab
 // word ("CLEAN code is important.") being misread as a verdict — a word
 // boundary with no separator does not match. Anything after the token on the
-// line is commentary and is discarded.
+// line is commentary and is discarded. Any case is accepted on the last
+// non-empty line; above it only the exact (uppercase) token counts.
 const VERDICT_LINE = /^([A-Za-z_]+)(?:[.\s!]*$|\s*[-—–:,])/;
 
 export interface VerdictResult<V extends string> {
@@ -58,6 +59,10 @@ export function parseLastLineVerdict<V extends string>(
     if (!match) continue;
     const token = match[1].toUpperCase() as V;
     if (!vocabulary.includes(token)) continue;
+    // Above the last line, only the exact token counts. A summary line there
+    // ("Fixed: a stale reference", "Failed: 0") is prose, and reading it as the
+    // verdict replaced the one a reviewer said it had not reached yet.
+    if (i !== lastLineIdx && match[1] !== token) continue;
     const body = lines.slice(0, i).join("\n").trim();
     return { verdict: token, body };
   }

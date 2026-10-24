@@ -237,7 +237,10 @@ export function parseLastLineVerdict<V extends string>(
    the separator requirement keeps prose that merely opens with a vocab
    word, like `CLEAN code is important.`, from matching). If the captured
    token uppercased is in `vocabulary`, that line is the verdict line;
-   everything before it (joined, trimmed) is the body.
+   everything before it (joined, trimmed) is the body. Above the last
+   non-empty line the token must match exactly (uppercase): a summary line
+   such as `Fixed: a stale reference` or `Failed: 0` over a reviewer's
+   deferred verdict is prose, not the verdict.
 4. Returns `{ verdict, body }` or `null` if no match in the scan window.
 
 The function is pure, type-parameterized so callers get type-safe verdict
@@ -261,9 +264,9 @@ level so workflows can declare it `as const`.
 - Returns null when output is empty or whitespace-only.
 - Returns null when no token in the scan window matches the vocabulary.
 - Honors `scanLines`: a verdict outside the window is not found.
-- Case-insensitive on input but vocabulary match is case-sensitive (matches
-  current behavior — current code uppercases the matched token before
-  comparison).
+- Case-insensitive on the last non-empty line but vocabulary match is
+  case-sensitive (the matched token is uppercased before comparison); an
+  earlier line in the window must carry the exact token.
 - Body is trimmed; trailing blank lines and whitespace are dropped.
 - A vocabulary of one element works (degenerate case, useful for future
   one-shot verdicts).
