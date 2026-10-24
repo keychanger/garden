@@ -65,7 +65,7 @@ import {
 import { newWorker } from "../src/dashboard/workers.js";
 import { tryGetProject, loadConfig } from "../src/config.js";
 import { tmuxDisplay } from "../src/dashboard/tmux.js";
-import { readSpawnDraft, writeSpawnDraft } from "../src/dashboard/spawn-draft.js";
+import { readSpawnDraft, writeSpawnDraft, consumeSpawnDraft } from "../src/dashboard/spawn-draft.js";
 import fs from "node:fs";
 import { writeSeedFile } from "../src/dashboard/seed-files.js";
 
@@ -660,5 +660,38 @@ describe("plantDesignerFromPicker", () => {
     vi.mocked(newWorker).mockReturnValueOnce(null);
     plantDesignerFromPicker("proj");
     expect(tmuxDisplay).toHaveBeenCalledWith(expect.stringContaining("Failed to plant designer"));
+  });
+
+  // The model/effort lists come from the build member, but a designer launches
+  // on its crew's design seat. A stored crew naming no designer derives that
+  // seat from its review half, so it can design on Codex while building on
+  // Claude; Claude-list dims must not reach that Codex designer.
+  it("drops claude-list dims when the project's crew designs on another harness", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, providers: {},
+      crews: { mine: { worker: { member: "claude", model: "opus" }, review: { member: "codex" } } },
+    } as unknown as ReturnType<typeof loadConfig>);
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj", crew: "mine" } as ReturnType<typeof tryGetProject>);
+    vi.mocked(consumeSpawnDraft).mockReturnValueOnce({ model: "sonnet", effort: "ultra" });
+    try {
+      plantDesignerFromPicker("proj");
+      const call = vi.mocked(newWorker).mock.calls.at(-1)![0] as Record<string, unknown>;
+      expect(call.workflow).toBe("designer");
+      expect(call.model).toBeUndefined();
+      expect(call.effort).toBeUndefined();
+      expect(call.ultracode).toBeUndefined();
+    } finally {
+      vi.mocked(loadConfig).mockReturnValue({ projects: {}, providers: {} } as unknown as ReturnType<typeof loadConfig>);
+    }
+  });
+
+  it("keeps the dims when the crew's design seat is claude-code", () => {
+    vi.mocked(loadConfig).mockReturnValue({ projects: {}, providers: {} } as unknown as ReturnType<typeof loadConfig>);
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/proj", crew: "claude-codex" } as ReturnType<typeof tryGetProject>);
+    vi.mocked(consumeSpawnDraft).mockReturnValueOnce({ model: "sonnet", effort: "ultra" });
+    plantDesignerFromPicker("proj");
+    expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
+      workflow: "designer", model: "sonnet", ultracode: true,
+    }));
   });
 });

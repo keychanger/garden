@@ -12,7 +12,9 @@ import { readDashState } from "./state.js";
 import { shellEscape, tmuxDisplay, promptCommand } from "./tmux.js";
 import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
 import { loadConfig, type GardenConfig, type ProjectConfig } from "../config.js";
-import { listCrews, listMembers, findMember, getCrew, projectWorkerMemberName } from "./crew.js";
+import {
+  listCrews, listMembers, findMember, getCrew, projectWorkerMemberName, designerSeat, resolveProjectCrew,
+} from "./crew.js";
 import { codexModels, CODEX_EFFORT_LEVELS } from "./harness/codex-models.js";
 import { listBranches } from "./git.js";
 import { WORKER_EFFORT_LEVELS } from "./create.js";
@@ -493,14 +495,19 @@ export function plantDesignerFromPicker(projectName: string): void {
   }
 
   const draft = consumeSpawnDraft(projectName);
+  // newWorker launches the designer on the project crew's design seat, which a
+  // stored crew can put on a different harness from its builder.
+  const crew = resolveProjectCrew(project, loadConfig());
+  const designerHarness = crew ? designerSeat(crew).harness : DEFAULT_MEMBER_HARNESS;
   const newName = newWorker({
     projectName,
     workflow: "designer",
     ...(draft.base ? { base: draft.base } : {}),
     // Model/effort dims layer over the workflow's Opus/xhigh default; crew and
     // build member are default-only and not consumed, so a foreign-harness
-    // draft drops both dims rather than handing claude another harness's model.
-    ...claudeOnlyLaunchOpts(project, draft),
+    // draft, or a designer seat on another harness, drops both dims rather
+    // than handing one harness another's model.
+    ...(designerHarness === DEFAULT_MEMBER_HARNESS ? claudeOnlyLaunchOpts(project, draft) : {}),
   });
   if (!newName) {
     tmuxDisplay(`Failed to plant designer on '${projectName}'. Is the dashboard running?`);

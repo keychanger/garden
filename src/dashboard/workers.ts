@@ -499,7 +499,10 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // Workflow-level model/effort defaults (the designer/planner seats → Opus /
   // xhigh) sit one layer beneath the per-spawn and project defaults.
   const workflowDef = getWorkflow(workflowName);
-  const workflowModelDefault = workflowDef.workerModel;
+  // The seat model is a claude-code alias, so another harness (a Codex
+  // designer) takes its own launch default instead; the xhigh rung is a valid
+  // Codex level and applies to both.
+  const workflowModelDefault = preflightPlan.harness === "claude-code" ? workflowDef.workerModel : undefined;
   const workflowEffortDefault = workflowDef.workerEffort;
 
   const ultracode = reqUltracode;

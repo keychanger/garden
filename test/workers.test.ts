@@ -1070,6 +1070,26 @@ describe("newWorker", () => {
     expect(entry.effort).toBe("xhigh");
   });
 
+  // The workflow's Opus default is an Anthropic alias: a Codex designer with no
+  // seat model takes Codex's own launch default instead of `codex -m opus`.
+  it.each([
+    ["--harness codex", {}, { harness: "codex" }],
+    ["a stored crew's derived design seat", {
+      crews: { mine: { worker: { member: "claude", model: "opus" }, review: { member: "codex" } } },
+    }, { crew: "mine" }],
+  ])("designer: %s with no seat model launches on Codex's default model", (_label, crews, opts) => {
+    vi.mocked(loadConfig).mockReturnValue({ projects: {}, plots: {}, ...crews } as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ workflow: "designer", ...opts })).toBe("bold-ash");
+    const entry = vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+    expect(entry.harness).toBe("codex");
+    expect(entry.model).toBeUndefined();
+    expect(entry.effort).toBe("xhigh");
+    expect(vi.mocked(buildWorktreeBootstrapScript).mock.calls.at(-1)![7]?.launchPlan).toMatchObject({
+      harness: "codex", model: "gpt-6-astra", effort: "xhigh",
+    });
+  });
+
   it("designer: a per-spawn harness overrides the crew seat while the crew remains stamped", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker({
