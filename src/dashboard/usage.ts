@@ -119,6 +119,9 @@ export interface UsageSnapshot {
   // freezes the primary bars (that is `error`'s job); it renders as a dim note on
   // the model-scoped row's health tag so a Fable-meter rate-limit is explicit.
   scopedError?: string;
+  // Present only on a claim (see refreshUsage): a refresh claimed the slot at
+  // this time and is fetching. Its final write drops it.
+  claimedAt?: string;
 }
 
 // Neutral read seam over the snapshot's named buckets: consumers (the
@@ -650,7 +653,7 @@ function isUsageData(v: unknown): boolean {
 
 export function isUsageSnapshot(v: unknown): v is UsageSnapshot {
   return isRecord(v) && isString(v.fetchedAt) && optional(v.data, isUsageData)
-    && [v.dataAt, v.error, v.scopedAt, v.scopedAttemptedAt, v.scopedError].every((f) => optional(f, isString))
+    && [v.dataAt, v.error, v.scopedAt, v.scopedAttemptedAt, v.scopedError, v.claimedAt].every((f) => optional(f, isString))
     && [v.retryAfterMs, v.rateLimitStreak, v.weeklyPctAtScoped].every((f) => optional(f, isFiniteNumber));
 }
 
@@ -1169,26 +1172,66 @@ function logUsageOutcome(
 //   1. Acquire the file lock, re-read the snapshot, decide whether to fetch.
 //      If a sibling process just refreshed (snapshot is fresh enough), bail
 //      with the existing snapshot — no fetch, no thundering herd. Otherwise
-//      "claim" the slot by bumping `fetchedAt` to now (preserving prior data
-//      and dataAt) so concurrent callers see a fresh-looking snapshot and
+//      "claim" the slot by bumping `fetchedAt` to now and stamping
+//      `claimedAt` (preserving prior data, dataAt, and both endpoints' error
+//      and 429 state) so concurrent callers see a fresh-looking snapshot and
 //      skip. Release the lock so other state writers aren't blocked on our
 //      ~15s network call.
 //   2. Fetch (async, no lock held).
 //   3. Re-acquire the lock to write the final snapshot. Brief, sync, atomic.
 //
-// On crash mid-fetch the bumped `fetchedAt` naturally expires after the next
-// caller's cadence window (HOOK_REFRESH_COOLDOWN_MS for a turn-end hook,
-// POLL_OK_MS for the poller), so a stuck claim self-heals rather than wedging
-// the meter.
+// On crash mid-fetch the bumped `fetchedAt` naturally expires after the
+// window the next caller would wait on the prior outcome: its cadence
+// (HOOK_REFRESH_COOLDOWN_MS for a turn-end hook, POLL_OK_MS for the poller),
+// or the error backoff the claim carried. A stuck claim self-heals rather
+// than wedging the meter.
 //
 // `reason` is the caller's own cadence class and gates the healthy-snapshot
 // age check. The poller claims with "poller" so a freshly respawned poller
 // (dashboard restart) skips when the snapshot is inside POLL_OK_MS instead
 // of firing an immediate fetch under the hook cooldown.
+//
+// A forced refresh skips that cadence check, which is what keeps every other
+// caller off a claim, so it waits for a claim in flight to land and then
+// decides on what landed. Fetching beside it would send the scoped endpoint a
+// second request before the first one's 429 was recorded, and whichever
+// final write came last would discard the other's outcome.
 export async function refreshUsage(force = false, reason: RefreshReason = "hook"): Promise<UsageSnapshot> {
-  const claim = withFileLock(USAGE_LOCK, () => {
+  const waitUntil = Date.now() + CLAIM_IN_FLIGHT_MS;
+  let claim = claimRefresh(force, reason, waitUntil);
+  while (claim.waiting) {
+    await new Promise((resolve) => setTimeout(resolve, CLAIM_WAIT_POLL_MS));
+    claim = claimRefresh(force, reason, waitUntil);
+  }
+
+  if (!claim.fetched) return claim.snap;
+  return fetchAndStore(claim.prior, force);
+}
+
+// A claim counts as in flight for this long: its refresh's slowest path is a
+// token refresh and both fetches, each bounded by a 15s timeout, so an older
+// claim belongs to a refresh that died mid-fetch.
+export const CLAIM_IN_FLIGHT_MS = 60 * 1000;
+const CLAIM_WAIT_POLL_MS = 250;
+
+function claimInFlight(snap: UsageSnapshot | null, nowMs: number): boolean {
+  if (!snap?.claimedAt) return false;
+  const age = nowMs - Date.parse(snap.claimedAt);
+  return age >= 0 && age < CLAIM_IN_FLIGHT_MS;
+}
+
+type RefreshClaim =
+  | { fetched: false; waiting: boolean; snap: UsageSnapshot }
+  | { fetched: true; waiting: false; prior: UsageSnapshot | null };
+
+function claimRefresh(force: boolean, reason: RefreshReason, waitUntil: number): RefreshClaim {
+  return withFileLock(USAGE_LOCK, (): RefreshClaim => {
     const prior = readUsageSnapshot();
-    const decision = decideRefresh(prior, Date.now(), reason);
+    const now = Date.now();
+    if (force && prior && claimInFlight(prior, now) && now < waitUntil) {
+      return { fetched: false, waiting: true, snap: prior };
+    }
+    const decision = decideRefresh(prior, now, reason);
     // A forced refresh (manual `garden usage refresh`, post-login heal) bypasses
     // the auth and generic-error backoffs so a fresh login clears a stale "login
     // expired" snapshot immediately instead of echoing it for the next 30 min.
@@ -1198,23 +1241,28 @@ export async function refreshUsage(force = false, reason: RefreshReason = "hook"
     const rateLimited = prior?.error === "rate-limited";
     const shouldRefresh = decision.shouldRefresh || (force && !rateLimited);
     if (!shouldRefresh && prior) {
-      return { fetched: false as const, snap: prior };
+      return { fetched: false, waiting: false, snap: prior };
     }
+    const claimedAt = new Date(now).toISOString();
     const claimSnap: UsageSnapshot = {
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: claimedAt,
+      claimedAt,
       ...(prior?.data ? { data: prior.data } : {}),
       ...(prior?.dataAt ? { dataAt: prior.dataAt } : (prior?.fetchedAt && prior.data ? { dataAt: prior.fetchedAt } : {})),
+      ...(prior?.error ? { error: prior.error } : {}),
+      ...(prior?.retryAfterMs !== undefined ? { retryAfterMs: prior.retryAfterMs } : {}),
+      ...(prior?.rateLimitStreak !== undefined ? { rateLimitStreak: prior.rateLimitStreak } : {}),
       ...(prior?.scopedAt ? { scopedAt: prior.scopedAt } : {}),
       ...(prior?.scopedAttemptedAt ? { scopedAttemptedAt: prior.scopedAttemptedAt } : {}),
       ...(prior?.weeklyPctAtScoped !== undefined ? { weeklyPctAtScoped: prior.weeklyPctAtScoped } : {}),
+      ...(prior?.scopedError ? { scopedError: prior.scopedError } : {}),
     };
     writeUsageSnapshot(claimSnap);
-    return { fetched: true as const, prior };
+    return { fetched: true, waiting: false, prior };
   }, { name: "claude-usage", deadlineMs: 5000 });
+}
 
-  if (!claim.fetched) return claim.snap;
-
-  const prior = claim.prior;
+async function fetchAndStore(prior: UsageSnapshot | null, force: boolean): Promise<UsageSnapshot> {
   const resolved = await resolveCredential();
   if (!resolved.ok) {
     if (resolved.error === "no_credentials") {

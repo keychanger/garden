@@ -331,6 +331,127 @@ describe("refreshUsage — force skips the scoped cadence but not a scoped 429's
   });
 });
 
+// While a refresh fetches, every other process reads its claim. The claim used
+// to drop both endpoints' error state, so a forced refresh landing mid-fetch
+// saw no 429 hold on either one.
+describe("refreshUsage — the claim keeps both endpoints' holds", () => {
+  const env = useTmpHome();
+
+  beforeEach(() => {
+    vi.resetModules();
+    mockState.readPersonalCredential.mockReset();
+    mockState.refreshOAuthToken.mockReset();
+    mockState.persistCredential.mockReset();
+    delete process.env.GARDEN_CLAUDE_SESSION_KEY;
+  });
+
+  it("carries the prior error, backoff, streak and scoped 429 while its fetch is in flight", async () => {
+    const now = Date.now();
+    // A primary 429 whose backoff has run out, so this unforced refresh claims.
+    fs.writeFileSync(path.join(env.controlDir, "claude-usage.json"), JSON.stringify({
+      fetchedAt: new Date(now - 30 * 60_000).toISOString(),
+      error: "rate-limited",
+      retryAfterMs: 10 * 60_000,
+      rateLimitStreak: 2,
+      scopedAttemptedAt: new Date(now - 5 * 60_000).toISOString(),
+      scopedError: "rate-limited",
+    }));
+    // Hold the fetch at its token refresh, so the claim can be read mid-flight.
+    let fail!: (err: Error) => void;
+    mockState.readPersonalCredential.mockReturnValue({
+      source: "file",
+      oauth: { accessToken: "stale", refreshToken: "rt", expiresAt: now - 1000 },
+    });
+    mockState.refreshOAuthToken.mockReturnValue(new Promise((_resolve, reject) => { fail = reject; }));
+
+    const { refreshUsage, readUsageSnapshot } = await import("../src/dashboard/usage.js");
+    const inFlight = refreshUsage();
+    await vi.waitFor(() => expect(mockState.refreshOAuthToken).toHaveBeenCalled());
+
+    const claim = readUsageSnapshot();
+    expect(claim?.claimedAt).toBe(claim?.fetchedAt);
+    expect(claim).toMatchObject({
+      error: "rate-limited",
+      retryAfterMs: 10 * 60_000,
+      rateLimitStreak: 2,
+      scopedError: "rate-limited",
+    });
+
+    fail(Object.assign(new Error("timeout"), { code: "network" }));
+    const landed = await inFlight;
+    expect(landed.claimedAt).toBeUndefined();
+    expect(readUsageSnapshot()?.claimedAt).toBeUndefined();
+  });
+});
+
+// A forced refresh skips the cadence check that keeps every other caller off a
+// claim, so it used to fetch beside another process's refresh: a second scoped
+// request, and whichever final write came last discarded the other's outcome.
+describe("refreshUsage — a forced refresh waits out a fetch in flight", () => {
+  const env = useTmpHome();
+  const SCOPED_PATH = "/api/oauth/usage";
+  const reset = new Date(Date.now() + 86_400_000).toISOString();
+
+  beforeEach(() => {
+    vi.resetModules();
+    mockHttps.paths.length = 0;
+    const resetSec = String(Math.floor(Date.now() / 1000) + 3600);
+    mockHttps.respond = (p) => p === SCOPED_PATH
+      ? { status: 200, body: JSON.stringify({ five_hour: null, seven_day: null }) }
+      : {
+          status: 200,
+          headers: {
+            "anthropic-ratelimit-unified-5h-utilization": "0.4",
+            "anthropic-ratelimit-unified-5h-reset": resetSec,
+            "anthropic-ratelimit-unified-7d-utilization": "0.41",
+            "anthropic-ratelimit-unified-7d-reset": resetSec,
+          },
+        };
+    process.env.GARDEN_CLAUDE_SESSION_KEY = "sk-ant-test-token";
+  });
+  afterEach(() => {
+    delete process.env.GARDEN_CLAUDE_SESSION_KEY;
+  });
+
+  function writeSnapshot(snap: unknown): void {
+    fs.writeFileSync(path.join(env.controlDir, "claude-usage.json"), JSON.stringify(snap));
+  }
+
+  it("sends nothing while another process's claim is in flight, then refreshes on what it wrote", async () => {
+    const claimedAt = new Date().toISOString();
+    writeSnapshot({ fetchedAt: claimedAt, claimedAt, data: { weekly: { pct: 30, resetsAt: reset } } });
+    const { refreshUsage } = await import("../src/dashboard/usage.js");
+
+    const forced = refreshUsage(true);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(mockHttps.paths).toEqual([]);
+
+    // The other process's fetch lands, having just met a scoped 429.
+    const landedAt = new Date().toISOString();
+    writeSnapshot({
+      fetchedAt: landedAt,
+      data: { weekly: { pct: 35, resetsAt: reset } },
+      scopedAttemptedAt: landedAt,
+      scopedError: "rate-limited",
+    });
+    const snap = await forced;
+
+    expect(mockHttps.paths).toEqual(["/v1/messages"]);
+    expect(snap.data?.weekly?.pct).toBe(41);
+    expect(snap.scopedError).toBe("rate-limited");
+  });
+
+  it("does not wait on a claim older than any refresh takes", async () => {
+    const { refreshUsage, CLAIM_IN_FLIGHT_MS } = await import("../src/dashboard/usage.js");
+    const claimedAt = new Date(Date.now() - CLAIM_IN_FLIGHT_MS - 1000).toISOString();
+    writeSnapshot({ fetchedAt: claimedAt, claimedAt });
+
+    await refreshUsage(true);
+
+    expect(mockHttps.paths).toEqual(["/v1/messages", SCOPED_PATH]);
+  });
+});
+
 describe("refreshUsage — the claim honors the caller's cadence class", () => {
   const env = useTmpHome();
 
