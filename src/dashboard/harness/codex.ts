@@ -223,38 +223,75 @@ const MAX_EXCLUDE_BYTES = 1024 * 1024;
 const CODEX_EXCLUDES = ["/.codex/", `/${AGENTS_OVERRIDE}`, "/AGENTS.md.garden-legacy-*"];
 const UNANCHORED_CODEX_EXCLUDES = new Set(["AGENTS.md", ".codex/"]);
 
-function ensureWorktreeExcludes(targetDir: string): void {
-  const patterns = [".garden-hooks/", ".garden/", ".garden-done", ".garden-awaiting-input", ...CODEX_EXCLUDES];
+interface SharedExclude {
+  file: string;
+  commonDir: string;
+}
+
+// info/exclude in the git common dir of targetDir's repository; null outside one.
+function sharedExclude(targetDir: string): SharedExclude | null {
   let commonDir: string;
   try {
     commonDir = runGit(targetDir, ["rev-parse", "--git-common-dir"]).trim();
   } catch {
-    return;
+    return null;
   }
   const resolvedCommonDir = path.isAbsolute(commonDir)
     ? commonDir
     : path.resolve(targetDir, commonDir);
-  const excludeFile = path.join(resolvedCommonDir, "info", "exclude");
-  // The shared git dir is worker-writable, and this runs unsandboxed: a
-  // symlink or FIFO planted at info/exclude must be neither followed nor
-  // written through.
-  const read = () => readStableRegularFile(excludeFile, resolvedCommonDir, MAX_EXCLUDE_BYTES);
-  let file = read();
+  return { file: path.join(resolvedCommonDir, "info", "exclude"), commonDir: resolvedCommonDir };
+}
+
+// The shared git dir is worker-writable, and this runs unsandboxed: a symlink
+// or FIFO planted at info/exclude must be neither followed nor written through.
+function readExclude(exclude: SharedExclude) {
+  return readStableRegularFile(exclude.file, exclude.commonDir, MAX_EXCLUDE_BYTES);
+}
+
+function ensureWorktreeExcludes(targetDir: string): void {
+  const patterns = [".garden-hooks/", ".garden/", ".garden-done", ".garden-awaiting-input", ...CODEX_EXCLUDES];
+  const exclude = sharedExclude(targetDir);
+  if (!exclude) return;
+  const file = readExclude(exclude);
   if (!file) return; // No exclude file yet (rare; bootstrap will create one), or not a plain file.
-  let current = file.data.toString("utf-8");
+  const current = file.data.toString("utf-8");
   const present = new Set(current.split("\n").map(l => l.trim()));
   const missing = patterns.filter(p => !present.has(p));
   try {
     if (missing.length > 0) {
-      appendToStableFile(excludeFile, file, (current === "" || current.endsWith("\n") ? "" : "\n") + missing.join("\n") + "\n");
+      appendToStableFile(exclude.file, file, (current === "" || current.endsWith("\n") ? "" : "\n") + missing.join("\n") + "\n");
     }
-    if (![...UNANCHORED_CODEX_EXCLUDES].some(p => present.has(p))) return;
+    retireUnanchoredCodexExcludes(targetDir, exclude);
+  } catch {
+    /* best effort */
+  }
+}
+
+// Remove the bare `AGENTS.md` and `.codex/` lines older builds wrote. They stay
+// in the shared file until a refresh removes them, whichever harness the
+// project runs now, so the claude-code installer and a Claude worker's spawn
+// call this as well.
+export function retireUnanchoredCodexExcludes(targetDir: string, exclude = sharedExclude(targetDir)): void {
+  if (!exclude) return;
+  let file = readExclude(exclude);
+  if (!file) return;
+  let current = file.data.toString("utf-8");
+  const present = new Set(current.split("\n").map(l => l.trim()));
+  if (![...UNANCHORED_CODEX_EXCLUDES].some(p => present.has(p))) return;
+  try {
+    // The anchored lines go in first: `/.codex/` keeps a worktree-root .codex/
+    // an older build wrote out of `git status`, and the retirement below can
+    // save an AGENTS.md.garden-legacy-<ms> copy.
+    const missing = CODEX_EXCLUDES.filter(p => !present.has(p));
+    if (missing.length > 0) {
+      appendToStableFile(exclude.file, file, (current === "" || current.endsWith("\n") ? "" : "\n") + missing.join("\n") + "\n");
+    }
     // In a checkout where an older build's untracked composition is still in
     // AGENTS.md, the bare line is all that keeps it out of `git status` and a
     // commit. So every checkout's is retired first, and the line stays while
     // one remains.
     const keepAgentsLine = present.has("AGENTS.md") && !retireEveryCheckout(targetDir);
-    file = read();
+    file = readExclude(exclude);
     if (!file) return;
     current = file.data.toString("utf-8");
     const lines = current.split("\n");
@@ -262,7 +299,7 @@ function ensureWorktreeExcludes(targetDir: string): void {
       const p = l.trim();
       return !UNANCHORED_CODEX_EXCLUDES.has(p) || (keepAgentsLine && p === "AGENTS.md");
     });
-    if (kept.length < lines.length) rewriteStableFile(excludeFile, file, kept.join("\n"));
+    if (kept.length < lines.length) rewriteStableFile(exclude.file, file, kept.join("\n"));
   } catch {
     /* best effort */
   }

@@ -358,6 +358,74 @@ describe("worker bootstrap (real fs + real git)", () => {
     expect(body).toContain(".garden-done");
   });
 
+  // Older Codex builds wrote unanchored `AGENTS.md` and `.codex/` lines to the
+  // info/exclude every checkout shares, and only a Codex refresh removed them,
+  // so a project whose workers all run claude-code kept hiding every new nested
+  // AGENTS.md from `git add -A`.
+  describe("an older Codex build's unanchored exclude lines", () => {
+    const excludeLines = () => fs.readFileSync(path.join(projectPath, ".git", "info", "exclude"), "utf-8").split("\n");
+    const writeOlderCodexExcludes = () =>
+      fs.appendFileSync(path.join(projectPath, ".git", "info", "exclude"), "AGENTS.md\n.codex/\n");
+    // A checkout an older Codex worker composed its rules into, untracked.
+    async function olderCodexCheckout(): Promise<string> {
+      const { createWorktree } = await import("../../src/dashboard/git.js");
+      const { composeAgentsMd } = await import("../../src/dashboard/harness/agents-md.js");
+      const dir = path.join(path.dirname(worktreePath), "old-codex");
+      createWorktree(projectPath, dir, "old-codex");
+      fs.writeFileSync(path.join(dir, "AGENTS.md"), composeAgentsMd("OLD GARDEN RULES", ""));
+      return dir;
+    }
+
+    it("are replaced by the claude-code installer, after every checkout's composition is retired", async () => {
+      const { createWorktree } = await import("../../src/dashboard/git.js");
+      const { claudeCodeAdapter } = await import("../../src/dashboard/harness/claude-code.js");
+      createWorktree(projectPath, worktreePath, WORKER);
+      const oldCodex = await olderCodexCheckout();
+      writeOlderCodexExcludes();
+
+      claudeCodeAdapter.installRuntimeConfig(worktreePath, { path: projectPath });
+
+      expect(fs.existsSync(path.join(oldCodex, "AGENTS.md"))).toBe(false);
+      expect(git(oldCodex, "status", "--porcelain")).toBe("");
+      expect(excludeLines()).not.toContain("AGENTS.md");
+      expect(excludeLines()).not.toContain(".codex/");
+      expect(excludeLines()).toContain("/.codex/");
+      fs.mkdirSync(path.join(worktreePath, "pkg"));
+      fs.writeFileSync(path.join(worktreePath, "pkg", "AGENTS.md"), "# pkg rules\n");
+      expect(git(worktreePath, "status", "--porcelain")).toBe("?? pkg/");
+    });
+
+    it("keep the AGENTS.md line under the claude-code installer while a composition cannot be retired", async () => {
+      const { createWorktree } = await import("../../src/dashboard/git.js");
+      const { claudeCodeAdapter } = await import("../../src/dashboard/harness/claude-code.js");
+      createWorktree(projectPath, worktreePath, WORKER);
+      const oldCodex = await olderCodexCheckout();
+      writeOlderCodexExcludes();
+      fs.chmodSync(oldCodex, 0o555); // the unlink fails
+      try {
+        claudeCodeAdapter.installRuntimeConfig(worktreePath, { path: projectPath });
+
+        expect(fs.existsSync(path.join(oldCodex, "AGENTS.md"))).toBe(true);
+        expect(git(oldCodex, "status", "--porcelain")).toBe("");
+        expect(excludeLines()).toContain("AGENTS.md");
+      } finally {
+        fs.chmodSync(oldCodex, 0o755);
+      }
+    });
+
+    it("are replaced when a Claude worker spawns, before its worktree exists", async () => {
+      const { buildWorktreeBootstrapScript } = await import("../../src/dashboard/create.js");
+      writeOlderCodexExcludes();
+
+      buildWorktreeBootstrapScript(PROJECT, projectPath, WORKER, WORKER, "sid", worktreePath, "main");
+
+      expect(fs.existsSync(worktreePath)).toBe(false);
+      expect(excludeLines()).not.toContain("AGENTS.md");
+      expect(excludeLines()).not.toContain(".codex/");
+      expect(excludeLines()).toContain("/.codex/");
+    });
+  });
+
   it("worker registry round-trips a worker entry that points at the real worktree", async () => {
     const { createWorktree } = await import("../../src/dashboard/git.js");
     const { addWorker, getWorkers } = await import("../../src/dashboard/registry.js");

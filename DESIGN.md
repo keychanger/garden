@@ -69,7 +69,12 @@ bare exclude lines go last: the file is shared, and in a checkout whose
 untracked composition is still in place the bare `AGENTS.md` line is all that
 keeps it out of `git status` and a commit, so the composition in every checkout
 `git worktree list` reports is retired first, and that line stays while one
-remains. `stripGardenRules` is the inverse of the composition, and every reader
+remains. The root-anchored lines go in before the bare ones come out, so a
+worktree-root `.codex/` an older build wrote stays excluded. The bare lines
+outlast a project's Codex workers, so the claude-code installer and a Claude
+worker's spawn run the same retirement as the Codex installer
+(`retireUnanchoredCodexExcludes`). `stripGardenRules` is the inverse of the
+composition, and every reader
 of `AGENTS.md`-as-documentation must apply it. `readDocSections` reads the
 committed file, which never holds the composition unless one was committed by
 mistake, and strips it anyway.

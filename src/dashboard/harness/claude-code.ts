@@ -11,7 +11,8 @@
 // import the harness registry, and a back-edge would re-open the
 // init-cycle class that hook-dispatcher.ts was extracted to kill. Only
 // leaf modules (tmux, sandbox, skills, runner, git, conversation,
-// atomic-write, config, registry types) are safe imports.
+// atomic-write, config, registry types) are safe imports, and codex.ts,
+// which holds itself to the same rule.
 import fs from "node:fs";
 import path from "node:path";
 import type { ProjectConfig } from "../../config.js";
@@ -26,6 +27,7 @@ import { buildSandboxConfig, type SandboxConfig } from "../sandbox.js";
 import { shellEscape } from "../tmux.js";
 import { installClaudeSkills } from "../skills.js";
 import { claudeCodeCore } from "./claude-code-core.js";
+import { retireUnanchoredCodexExcludes } from "./codex.js";
 import type { HarnessAdapter, RuntimeInstallOptions } from "./types.js";
 
 // The status line: model, reasoning effort, and remaining context window,
@@ -222,6 +224,10 @@ function installRuntimeConfig(targetDir: string, project: ProjectConfig, runtime
   installStatusLineScript();
   installClaudeSkills(targetDir);
   ensureWorktreeExcludes(targetDir);
+  // An older Codex build's unanchored `AGENTS.md` line hides every new nested
+  // AGENTS.md in the repository, and a project with no Codex worker left has
+  // no Codex refresh to remove it.
+  retireUnanchoredCodexExcludes(targetDir);
   if (runtime?.beforeLaunch) retireWorktreeSettings(targetDir);
 }
 

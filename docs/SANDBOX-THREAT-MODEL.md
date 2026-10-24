@@ -94,8 +94,9 @@ reads or runs.
   own instructions (a symlink there would otherwise deliver a file the worker's sandbox
   cannot read), the handoff dispatcher's seed copies, and both installers' `info/exclude`
   heal, whose append goes only to the file that was read (`appendToStableFile`), as does
-  the Codex installer's one-time rewrite of it, which also requires the file to still hold
-  the bytes it read (`rewriteStableFile`).
+  the one-time rewrite of it that drops an older Codex build's unanchored lines (run by both
+  installers and a Claude worker's spawn), which also requires the file to still hold the
+  bytes it read (`rewriteStableFile`).
 - **Launch inputs.** What an unsandboxed process runs, or hands an agent as
   instructions, lives under `~/.garden/control` rather than `~/.garden/sessions`: the
   worker bootstrap script and the dashboard pane scripts (`control/scripts`), the

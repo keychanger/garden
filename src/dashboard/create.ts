@@ -48,6 +48,7 @@ import { getHarness } from "./harness/index.js";
 import { resolveWorkerLaunchPlan } from "./launch-plan.js";
 import type { WorkerLaunchPlan } from "./harness/types.js";
 import { buildSettingsJson, installStatusLineScript, statusLineCommand } from "./harness/claude-code.js";
+import { retireUnanchoredCodexExcludes } from "./harness/codex.js";
 import { claudeSettingsPath, contextFilePath, editsUnwatchedMarkerPath } from "./headless-paths.js";
 import { CONTROL_CONTEXTS_DIR, CONTROL_SCRIPTS_DIR } from "../paths.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
@@ -916,6 +917,11 @@ export function buildWorktreeBootstrapScript(
     }), statusLineCommand(), { ultracode: launchPlan.ultracode, unwatchedMarker: editsUnwatchedMarkerPath(wtPath) });
     atomicWriteFile(claudeSettingsPath(wtPath), settingsJson, { mode: 0o444 });
     installStatusLineScript();
+    // The script's exclude loop below only appends, and the installer that
+    // removes an older Codex build's unanchored lines next runs for this
+    // worker at an attach or bounce. The file is shared with the project
+    // checkout, so it is reachable before the worktree exists.
+    retireUnanchoredCodexExcludes(projectPath);
   }
   const doneSkillLit = shellEscape(DONE_SKILL_CONTENT);
   const doneSkillDirnameLit = shellEscape(DONE_SKILL_DIRNAME);
