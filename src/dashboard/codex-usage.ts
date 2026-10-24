@@ -320,7 +320,11 @@ export function codexInFleet(): boolean {
 // inside the watchdog loop body, and that loop reads its own iteration overrun
 // as machine-suspend time (absorbSleep). A probe allowed to block for a full
 // slack window would be misread as a suspend and silently discount a minute
-// from every live review's timeout.
+// from every live review's timeout. Enforced with SIGKILL: the npm `codex`
+// wrapper traps SIGTERM, forwards it to the native binary and waits for that
+// to exit, which execFileSync then waits on too (a probe sent SIGTERM at 30s
+// ran to 107s). The native process, if still running, finishes on its own;
+// with stdio ignored, nothing it holds keeps the call open.
 const PROBE_TIMEOUT_MS = 30_000;
 
 // Make Codex report its current quota. Callers MUST gate on codexInFleet().
@@ -337,14 +341,14 @@ const PROBE_TIMEOUT_MS = 30_000;
 //
 // An unchanged reading is confirmed only by a populated quota event during a
 // successful probe. A zero exit alone can leave capture reading an old rollout.
-export function probeCodexUsage(): boolean {
+export function probeCodexUsage(timeoutMs = PROBE_TIMEOUT_MS): boolean {
   const startedAt = Date.now();
   let probed = false;
   try {
     execFileSync(
       "codex",
       ["exec", "-s", "read-only", "--skip-git-repo-check", "Reply with the single word: ok"],
-      { cwd: os.tmpdir(), stdio: "ignore", timeout: PROBE_TIMEOUT_MS },
+      { cwd: os.tmpdir(), stdio: "ignore", timeout: timeoutMs, killSignal: "SIGKILL" },
     );
     probed = true;
   } catch { /* see above — capture anything the attempt wrote */ }

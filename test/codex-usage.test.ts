@@ -771,6 +771,23 @@ process.exit(${exitCode});
       expect(mod.probeCodexUsage()).toBe(false);
       expect(mod.readCodexUsage()!.capturedAt).toBe(1_000);
     });
+
+    // The npm `codex` wrapper traps SIGTERM, forwards it to the native binary,
+    // and waits for that to exit, so a SIGTERM at the timeout did not end the
+    // call: a live probe ran 107s against its 30s bound. The watchdog runs it
+    // synchronously and reads its own overrun as machine suspend.
+    it("returns at its timeout even when codex traps SIGTERM", async () => {
+      setup(0);
+      fs.writeFileSync(path.join(home, "bin", "codex"), `#!/usr/bin/env node
+process.on("SIGTERM", () => {});
+setTimeout(() => process.exit(0), 3000);
+`, { mode: 0o755 });
+      const mod = await import("../src/dashboard/codex-usage.js");
+      const started = Date.now();
+      expect(mod.probeCodexUsage(200)).toBe(false);
+      expect(Date.now() - started).toBeLessThan(1500);
+      expect(mod.readCodexUsage()!.capturedAt).toBe(1_000);
+    });
   });
 
   it("coerces a string credit balance (Codex reports it as \"0\", not 0)", async () => {
