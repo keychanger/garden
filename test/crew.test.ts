@@ -22,7 +22,7 @@ vi.mock("../src/config.js", async (orig) => {
 vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 
 const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew,
-  workerMemberName, projectWorkerMemberName, projectWorkerModel, builtinCrews, storedCrews,
+  workerMemberName, projectWorkerMemberName, projectWorkerModel, projectModelFor, builtinCrews, storedCrews,
   resolveProjectCrew, crewOverridden, clearCrew, saveCrew, deleteCrew,
   isBuiltinCrew, validateCrewDef, formatRecipe, designerSeat } =
   await import("../src/dashboard/crew.js");
@@ -136,6 +136,46 @@ describe("worker member name (status-pane identity badge source)", () => {
     expect(projectWorkerModel({ crew: "all-claude", provider: "deepseek" }, c)).toBeUndefined();
     expect(projectWorkerModel({ crew: "all-claude", harness: "claude" }, c)).toBe("opus");
     expect(projectWorkerModel({ crew: "all-codex", harness: "claude", model: "sonnet" }, c)).toBe("sonnet");
+  });
+
+  // The baseline is what the project's default workers launch on, and newWorker
+  // skips an Anthropic flat model for a Codex builder.
+  it("skips a flat model in another harness's vocabulary, as newWorker does", () => {
+    const c = cfg();
+    expect(projectWorkerModel({ path: "/p", harness: "codex", model: "opus" }, c)).toBe("gpt-6-astra");
+    expect(projectWorkerModel({ path: "/p", crew: "codex-claude", model: "sonnet" }, c)).toBe("gpt-6-astra");
+    expect(projectWorkerModel({ path: "/p", harness: "codex", model: "gpt-5.6-sol" }, c)).toBe("gpt-5.6-sol");
+    expect(projectWorkerModel({ path: "/p", model: "claude-opus-4-6" }, c)).toBe("claude-opus-4-6");
+  });
+});
+
+// A flat model name belongs to one harness: an Anthropic name to claude-code,
+// any other name to the harness the project's default workers build with.
+describe("projectModelFor", () => {
+  it("gives an Anthropic name only to claude-code workers", () => {
+    for (const model of ["opus", "fable", "opus[1m]", "claude-sonnet-5"]) {
+      expect(projectModelFor({ harness: "codex", model }, null, "codex")).toBeUndefined();
+      expect(projectModelFor({ harness: "codex", model }, null, "claude-code")).toBe(model);
+    }
+  });
+
+  it("gives any other name only to the project's builder harness", () => {
+    expect(projectModelFor({ harness: "codex", model: "gpt-6-astra" }, null, "codex")).toBe("gpt-6-astra");
+    expect(projectModelFor({ harness: "codex", model: "gpt-6-astra" }, null, "claude-code")).toBeUndefined();
+    // A provider's own model id belongs to a claude-code builder, here named by its member alias.
+    expect(projectModelFor({ harness: "claude", model: "ds-pro" }, null, "claude-code")).toBe("ds-pro");
+    expect(projectModelFor({ model: "ds-pro" }, null, "codex")).toBeUndefined();
+  });
+
+  it("takes the builder from the bound crew when the flat harness key is absent", () => {
+    const crew = getCrew("codex-claude", cfg());
+    expect(projectModelFor({ model: "gpt-6-astra" }, crew, "codex")).toBe("gpt-6-astra");
+    expect(projectModelFor({ model: "gpt-6-astra" }, crew, "claude-code")).toBeUndefined();
+    expect(projectModelFor({ harness: "claude-code", model: "gpt-6-astra" }, crew, "claude-code")).toBe("gpt-6-astra");
+  });
+
+  it("returns nothing when the project sets no model", () => {
+    expect(projectModelFor({}, null, "claude-code")).toBeUndefined();
   });
 });
 

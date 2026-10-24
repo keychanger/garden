@@ -58,10 +58,10 @@ import {
   buildWorkflowPickerPlan, buildComposeBaseSubmenuPlan,
   buildComposeCrewSubmenuPlan, buildComposeModelSubmenuPlan,
   buildComposeEffortSubmenuPlan, buildComposeMemberSubmenuPlan, draftLaunchOpts,
-  composerModels, composerEfforts, effectiveBuildMember, claudeOnlyLaunchOpts,
-  providerModelAliases, memberProvider,
+  effectiveBuildMember, claudeOnlyLaunchOpts, memberProvider,
   plantGrowFromPicker, plantDesignerFromPicker, stageSpawnDraft,
 } from "../src/dashboard/workflow-picker.js";
+import { composerModels, composerEfforts, providerModelAliases } from "../src/dashboard/harness/vocabulary.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { tryGetProject, loadConfig } from "../src/config.js";
 import { tmuxDisplay } from "../src/dashboard/tmux.js";

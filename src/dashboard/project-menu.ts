@@ -20,7 +20,8 @@ import { resolveGardenRunner } from "./runner.js";
 import { shellEscape, tmuxDisplay } from "./tmux.js";
 import { runMenu, type MenuSpec, type MenuRow } from "./menu.js";
 import { refreshDashboard } from "./header.js";
-import { deriveCrew, resolveProjectCrew } from "./crew.js";
+import { deriveCrew, findMember, projectWorkerMemberName, resolveProjectCrew } from "./crew.js";
+import { composerEfforts, composerModels, providerModelAliases } from "./harness/vocabulary.js";
 import { ASSIGNABLE_LOG_COLOR_KEYS } from "../log-palette.js";
 import { setProjectConfigKey, SETTABLE_KEYS, type SettableKey } from "./project-config-mutate.js";
 import { listBranches, resolveBaseBranch } from "./git.js";
@@ -29,13 +30,25 @@ import { log } from "./log.js";
 const NOT_SET = "(not set)";
 const trunc = (s: string, n = 28): string => (s.length <= n ? s : s.slice(0, n - 1) + "…");
 
-// Model/effort choice lists for the submenus. These mirror the ⌥⇧N composer's
-// COMPOSER_MODELS / COMPOSER_EFFORTS (workflow-picker.ts) so the project-default
-// picker and the per-spawn picker agree; kept as local literals here so this
-// menu module does not pull in create.ts's / workflow-picker's heavier graph.
-// The CLI (`garden config <p> model <id>`) covers exotic model ids.
-const PROJECT_MODEL_CHOICES = ["opus", "sonnet", "haiku", "fable"];
-const PROJECT_EFFORT_CHOICES = ["low", "medium", "high", "xhigh", "ultra"];
+// The model and effort choices for the project's builder, the member its
+// default workers build with: the ⌥⇧N composer's lists with nothing staged, so
+// a Codex-building project is offered Codex's catalog and levels rather than
+// Anthropic aliases its workers would launch as `codex -m opus`. "ultra" names
+// the claude-code ultracode preset at this level, which another builder's
+// workers skip, so only a claude-code builder is offered it. The CLI
+// (`garden config <p> model <id>`) covers exotic model ids.
+export function projectBuilderChoices(
+  project: ProjectConfig,
+  config: GardenConfig,
+): { models: string[]; efforts: string[] } {
+  const member = findMember(projectWorkerMemberName(project, config), config);
+  const harness = member?.harness ?? "claude-code";
+  const aliases = member?.provider ? providerModelAliases(member.provider, config) : undefined;
+  return {
+    models: composerModels(harness, aliases),
+    efforts: composerEfforts(harness).filter(e => e !== "ultra" || harness === "claude-code"),
+  };
+}
 
 // ---- pure plan builders --------------------------------------------------
 
@@ -97,21 +110,22 @@ export function buildHolisticSubmenuPlan(project: string, current: string, runne
   return buildEnumSubmenuPlan(project, "holisticReview", `Holistic review for ${project}`, ["off", "shadow", "fix"], current, runner, `unset — default (${DEFAULT_HOLISTIC_REVIEW})`);
 }
 
-// Default worker model (default + grow workers). This flat key is the override layer above a bound crew's own
-// model pin.
-export function buildProjectModelSubmenuPlan(project: string, current: string | undefined, runner: string): MenuSpec {
-  return buildEnumSubmenuPlan(project, "model", `Default model for ${project} (default+grow workers)`, PROJECT_MODEL_CHOICES, current, runner, "unset — account/provider default");
+// Default worker model (default + grow workers), offered from the builder's
+// list (projectBuilderChoices). This flat key is the override layer above a
+// bound crew's own model pin.
+export function buildProjectModelSubmenuPlan(project: string, models: string[], current: string | undefined, runner: string): MenuSpec {
+  return buildEnumSubmenuPlan(project, "model", `Default model for ${project} (default+grow workers)`, models, current, runner, "unset — account/provider default");
 }
 
-// Default reasoning effort (default + grow workers). These are the claude-code
-// rungs: the four plain ones (low/medium/high/xhigh) happen to be valid Codex
-// reasoning levels too, so they carry over to a codex worker as
-// `model_reasoning_effort`, but "ultra" here is the ultracode preset (max
-// effort + dynamic workflows) rather than a rung, and that preset has no Codex
-// analog. Codex's fuller ladder (which adds "max" and its own genuine "ultra")
-// is offered per-spawn by the ⌥⇧N composer once codex is the build member.
-export function buildProjectEffortSubmenuPlan(project: string, current: string | undefined, runner: string): MenuSpec {
-  return buildEnumSubmenuPlan(project, "effort", `Default effort for ${project} (ultra = ultracode preset)`, PROJECT_EFFORT_CHOICES, current, runner, "unset — no effort passed");
+// Default reasoning effort (default + grow workers), offered from the builder's
+// ladder (projectBuilderChoices). A claude-code builder's ends in "ultra", the
+// ultracode preset (max effort + dynamic workflows) rather than a rung; a Codex
+// builder's adds "max", rendered as `model_reasoning_effort` like the rest.
+export function buildProjectEffortSubmenuPlan(project: string, efforts: string[], current: string | undefined, runner: string): MenuSpec {
+  const title = efforts.includes("ultra")
+    ? `Default effort for ${project} (ultra = ultracode preset)`
+    : `Default effort for ${project}`;
+  return buildEnumSubmenuPlan(project, "effort", title, efforts, current, runner, "unset — no effort passed");
 }
 
 // ---- runners (resolve data, drive tmux) ----------------------------------
@@ -183,13 +197,15 @@ export function runColorSubmenu(project: string): void {
 export function runProjectModelSubmenu(project: string): void {
   const proj = tryGetProject(project);
   if (!proj) { tmuxDisplay(`Unknown project '${project}'.`); return; }
-  runMenu(buildProjectModelSubmenuPlan(project, proj.model, resolveGardenRunner()));
+  const { models } = projectBuilderChoices(proj, loadConfig());
+  runMenu(buildProjectModelSubmenuPlan(project, models, proj.model, resolveGardenRunner()));
 }
 
 export function runProjectEffortSubmenu(project: string): void {
   const proj = tryGetProject(project);
   if (!proj) { tmuxDisplay(`Unknown project '${project}'.`); return; }
-  runMenu(buildProjectEffortSubmenuPlan(project, proj.effort, resolveGardenRunner()));
+  const { efforts } = projectBuilderChoices(proj, loadConfig());
+  runMenu(buildProjectEffortSubmenuPlan(project, efforts, proj.effort, resolveGardenRunner()));
 }
 
 // ---- mutating dispatch (set -> present -> refresh -> re-open) -------------

@@ -41,10 +41,9 @@ import { DEFAULT_CODEX_MODEL } from "./launch-plan.js";
 const DEFAULT_HARNESS = "claude-code";
 
 // A crew's worker effort answers the same question as the flat `effort` project
-// key and renders through the same `--effort <level>`, so it takes the same
-// values: the four claude-code rungs plus "ultra" (the ultracode preset). Kept
-// as a local literal for the same reason project-config-mutate.ts does — this
-// module must not pull in create.ts's module graph.
+// key and renders through the same `--effort <level>`. It takes the four
+// claude-code rungs plus "ultra" (the ultracode preset), kept as a local literal
+// because this module must not pull in create.ts's module graph.
 const CREW_EFFORT_VALUES = ["low", "medium", "high", "xhigh", "ultra"] as const;
 // Operator-facing member name for the claude-code harness. Other harnesses and
 // providers use their own name.
@@ -255,6 +254,31 @@ export function projectWorkerMemberName(
   return workerMemberName(project.harness ?? crewHarness, project.provider);
 }
 
+// An Anthropic model name: a family alias, bare or with a bracketed context tag
+// (`opus[1m]`, the ultracode pin), or a concrete `claude-` id.
+const ANTHROPIC_MODEL_NAME = /^(?:claude-|opus|sonnet|haiku|fable)/i;
+
+// The project's flat `model`, for a worker launching on `harness`. The key
+// serves workers on more than one harness (a Codex-building project's grow
+// workers run claude-code; the composer and `--harness` can name another
+// builder), but a model name is one harness's: an Anthropic name is
+// claude-code's, and any other name is taken to belong to the harness the
+// project's default workers build with, the one the ⌥, menu offers names for.
+// A worker on another harness skips the key, as a Codex builder skips a project
+// `ultra`, so the next layer or the harness's own default supplies the model
+// rather than `codex -m opus`.
+export function projectModelFor(
+  project: Pick<ProjectConfig, "harness" | "model">,
+  crew: CrewSpec | null,
+  harness: string,
+): string | undefined {
+  if (!project.model) return undefined;
+  const owner = ANTHROPIC_MODEL_NAME.test(project.model)
+    ? DEFAULT_HARNESS
+    : project.harness ?? crew?.worker.harness ?? DEFAULT_HARNESS;
+  return canonicalHarnessName(owner) === canonicalHarnessName(harness) ? project.model : undefined;
+}
+
 // The model a project's default worker resolves to — the baseline the row's
 // model tag is compared against, read through the same chain newWorker uses:
 // the flat key, then the bound crew's worker seat, then a Garden-owned harness
@@ -272,7 +296,7 @@ export function projectWorkerModel(
   const matchingSeat = crew?.worker
     && canonicalHarnessName(crew.worker.harness) === harness
     && (crew.worker.provider ?? null) === (provider || null);
-  const model = project.model ?? (matchingSeat ? crew.worker.model : undefined);
+  const model = projectModelFor(project, crew, harness) ?? (matchingSeat ? crew.worker.model : undefined);
   if (model) return model;
   return harness === "codex" ? DEFAULT_CODEX_MODEL : undefined;
 }

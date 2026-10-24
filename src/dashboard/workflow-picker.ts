@@ -15,9 +15,8 @@ import { loadConfig, type GardenConfig, type ProjectConfig } from "../config.js"
 import {
   listCrews, listMembers, findMember, getCrew, projectWorkerMemberName, designerSeat, resolveProjectCrew,
 } from "./crew.js";
-import { codexModels, CODEX_EFFORT_LEVELS } from "./harness/codex-models.js";
+import { composerEfforts, composerModels, providerModelAliases } from "./harness/vocabulary.js";
 import { listBranches } from "./git.js";
-import { WORKER_EFFORT_LEVELS } from "./create.js";
 import { readSpawnDraft, writeSpawnDraft, consumeSpawnDraft, type SpawnDraftPatch } from "./spawn-draft.js";
 import { writeSeedFile } from "./seed-files.js";
 
@@ -34,16 +33,6 @@ import { writeSeedFile } from "./seed-files.js";
 // The grow command-prompt input is single-line (it reaches `_grow-plant` as
 // typed, via promptCommand). Operators with multi-line seeds use the CLI:
 // `garden workers new --workflow grow --seed-file <path>`.
-
-// Suggested models for a claude-code build member — the everyday Anthropic
-// aliases (fable included, per the "fable ultracode" ergonomic). Opaque
-// strings passed to `--model`; the CLI `workers new --model <id>` covers any
-// exotic id, exactly as base/crew keep their fixed lists.
-const COMPOSER_MODELS = ["opus", "sonnet", "haiku", "fable"];
-
-// The claude-code effort rungs: the four `--effort` levels plus "ultra" — the
-// top rung the consumer maps to the ultracode preset.
-const COMPOSER_EFFORTS = [...WORKER_EFFORT_LEVELS, "ultra"];
 
 const CODEX_HARNESS = "codex";
 const DEFAULT_MEMBER_HARNESS = "claude-code";
@@ -79,34 +68,6 @@ export function memberHarness(member: string, config: GardenConfig): string {
 // (claude / codex) carries none — it runs first-party.
 export function memberProvider(member: string, config: GardenConfig): string | undefined {
   return findMember(member, config)?.provider;
-}
-
-// The model aliases a provider actually serves — the keys of its `modelMap`,
-// which is the whole set of names that resolve to a real backend model for it.
-// Offering the full Anthropic list would be wrong in both directions: an
-// unmapped alias reaches the provider as a literal it does not know, and the
-// provider may map only a subset (`haiku` alone). An empty/absent map means the
-// provider serves whatever its endpoint defaults to, so the caller falls back.
-export function providerModelAliases(provider: string, config: GardenConfig): string[] {
-  const map = config.providers?.[provider]?.modelMap ?? {};
-  return Object.entries(map).filter(([, v]) => v).map(([k]) => k);
-}
-
-// Model / effort vocabularies belong to the build MEMBER, not to garden: Codex
-// names concrete slugs (gpt-5.6-sol) where Anthropic names aliases (opus), a
-// provider serves only the aliases its modelMap defines, and Codex's reasoning
-// rungs are its own `model_reasoning_effort` values. Offering one member's
-// vocabulary while another builds is the bug this fixes.
-export function composerModels(harness: string, providerAliases?: string[]): string[] {
-  if (harness === CODEX_HARNESS) return codexModels();
-  // A provider is reached through claude-code, so it shares the harness but
-  // NOT the model vocabulary.
-  if (providerAliases && providerAliases.length > 0) return providerAliases;
-  return COMPOSER_MODELS;
-}
-
-export function composerEfforts(harness: string): string[] {
-  return harness === CODEX_HARNESS ? CODEX_EFFORT_LEVELS : COMPOSER_EFFORTS;
 }
 
 // Map a consumed draft's model/effort onto newWorker options, in the target

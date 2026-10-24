@@ -1480,6 +1480,70 @@ describe("newWorker", () => {
     expect(entry.effort).toBe("low");
   });
 
+  // ===== A project model is one harness's =====
+  // An Anthropic name is claude-code's; any other name belongs to the harness
+  // the project's default workers build with. A worker launching on another
+  // harness skips the key, as it skips a project 'ultra', so an alias never
+  // reaches `codex -m` and a Codex slug never reaches `claude --model`.
+
+  it.each([
+    ["the flat harness key", { harness: "codex" }, undefined],
+    ["a bound crew", { crew: "codex-claude" }, "gpt-6-astra"],
+  ])("project model: an Anthropic alias is skipped for a codex builder named by %s", (_label, projectKeys, seatModel) => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", model: "opus", ...projectKeys,
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker()).toBe("bold-ash");
+    const entry = lastEntry();
+    expect(entry.harness).toBe("codex");
+    // The bound crew's seat, else Codex's launch default, supplies the model.
+    expect(entry.model).toBe(seatModel);
+    expect(lastLaunchPlan()).toMatchObject({ harness: "codex", model: "gpt-6-astra" });
+  });
+
+  it("project model: a Codex project's own model still reaches its codex workers", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex", model: "gpt-5.6-sol",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    expect(lastEntry().model).toBe("gpt-5.6-sol");
+    expect(lastLaunchPlan()).toMatchObject({ harness: "codex", model: "gpt-5.6-sol" });
+  });
+
+  it("project model: a Codex project's own model is skipped for its claude-code grow worker", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex", model: "gpt-5.6-sol",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "grow", grow: { seed: "harden", maxIterations: 3 } });
+    const entry = lastEntry();
+    expect(entry.harness).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+  });
+
+  it("project model: an Anthropic alias on a Codex project still reaches its claude-code grow worker", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex", model: "opus",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "grow", grow: { seed: "harden", maxIterations: 3 } });
+    expect(lastEntry().model).toBe("opus");
+  });
+
+  it("project model: a claude-code project's model is skipped for a worker spawned on codex", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", model: "sonnet",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ harness: "codex" });
+    const entry = lastEntry();
+    expect(entry.harness).toBe("codex");
+    expect(entry.model).toBeUndefined();
+    expect(lastLaunchPlan()).toMatchObject({ harness: "codex", model: "gpt-6-astra" });
+  });
+
   // ===== Harness selection (workers new --harness codex) =====
   // opts.harness is validated against the real registry (harness/core.js is
   // NOT mocked here, so isRegisteredHarness/harnessNames are real), stamped

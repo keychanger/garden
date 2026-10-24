@@ -12,8 +12,9 @@ vi.mock("../src/dashboard/runner.js", () => ({ resolveGardenRunner: vi.fn(() => 
 
 const {
   buildProjectMenuPlan, buildEnumSubmenuPlan, buildProjectBranchSubmenuPlan, buildHolisticSubmenuPlan,
-  buildProjectModelSubmenuPlan, buildProjectEffortSubmenuPlan, projectMenuView,
+  buildProjectModelSubmenuPlan, buildProjectEffortSubmenuPlan, projectMenuView, projectBuilderChoices,
 } = await import("../src/dashboard/project-menu.js");
+const { codexModels } = await import("../src/dashboard/harness/codex-models.js");
 
 const view = {
   project: "lex", runner: "garden",
@@ -103,7 +104,7 @@ describe("buildHolisticSubmenuPlan", () => {
 
 describe("buildProjectModelSubmenuPlan", () => {
   it("lists the alias choices (current marked) + an account-default unset, dispatching _config-set model", () => {
-    const plan = buildProjectModelSubmenuPlan("lex", "sonnet", "garden");
+    const plan = buildProjectModelSubmenuPlan("lex", ["opus", "sonnet", "haiku", "fable"], "sonnet", "garden");
     const choiceLabels = plan.rows.slice(0, -1).map(r => r.label.replace(/\s+✓$/, ""));
     expect(choiceLabels).toEqual(["opus", "sonnet", "haiku", "fable"]);
     expect(plan.rows.find(r => r.label.startsWith("sonnet"))!.label).toContain("✓");
@@ -115,11 +116,54 @@ describe("buildProjectModelSubmenuPlan", () => {
 
 describe("buildProjectEffortSubmenuPlan", () => {
   it("offers the four rungs plus ultra (current marked), dispatching _config-set effort", () => {
-    const plan = buildProjectEffortSubmenuPlan("lex", "ultra", "garden");
+    const plan = buildProjectEffortSubmenuPlan("lex", ["low", "medium", "high", "xhigh", "ultra"], "ultra", "garden");
+    expect(plan.title).toContain("ultra = ultracode preset");
     expect(plan.rows.map(r => r.label).join(" ")).toMatch(/low.*medium.*high.*xhigh.*ultra/);
     expect(plan.rows.find(r => r.label.startsWith("ultra"))!.label).toContain("✓");
     expect(plan.rows.find(r => r.label.startsWith("xhigh"))!.run).toBe("garden dashboard _config-set lex effort xhigh");
     expect(plan.rows.at(-1)!.run).toBe("garden dashboard _config-set lex effort ''");
+  });
+
+  it("names the ultracode preset only when its rung is offered", () => {
+    const plan = buildProjectEffortSubmenuPlan("lex", ["low", "medium", "high", "xhigh", "max"], "max", "garden");
+    expect(plan.title).not.toContain("ultracode");
+    expect(plan.rows.find(r => r.label.startsWith("max"))!.run).toBe("garden dashboard _config-set lex effort max");
+  });
+});
+
+// The submenus speak the builder's vocabulary. They offered the Anthropic
+// aliases to every project, and picking `opus` on a Codex-building one launched
+// its default workers as `codex -m opus`.
+describe("projectBuilderChoices", () => {
+  const config = {
+    projects: {},
+    providers: {
+      deepseek: { baseUrl: "https://ds.example", authTokenEnv: "DEEPSEEK_API_KEY", modelMap: { opus: "ds-pro", haiku: "ds-lite" } },
+    },
+  } as unknown as Parameters<typeof projectBuilderChoices>[1];
+
+  it.each([
+    ["the flat harness key", { path: "/p", harness: "codex" }],
+    ["a bound crew", { path: "/p", crew: "codex-claude" }],
+  ])("offers Codex's catalog and levels to a Codex builder named by %s", (_label, project) => {
+    const { models, efforts } = projectBuilderChoices(project, config);
+    expect(models).toEqual(codexModels());
+    expect(models).not.toContain("opus");
+    // `max` is Codex's; `ultra` at project level is the claude-code preset,
+    // which a Codex builder's workers skip.
+    expect(efforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+  });
+
+  it("offers the Anthropic aliases and the rungs ending in ultra to a claude-code builder", () => {
+    const { models, efforts } = projectBuilderChoices({ path: "/p" }, config);
+    expect(models).toEqual(["opus", "sonnet", "haiku", "fable"]);
+    expect(efforts).toEqual(["low", "medium", "high", "xhigh", "ultra"]);
+  });
+
+  it("offers a provider builder only the aliases its modelMap serves", () => {
+    const { models, efforts } = projectBuilderChoices({ path: "/p", provider: "deepseek" }, config);
+    expect(models).toEqual(["opus", "haiku"]);
+    expect(efforts).toEqual(["low", "medium", "high", "xhigh", "ultra"]);
   });
 });
 

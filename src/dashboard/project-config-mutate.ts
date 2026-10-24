@@ -14,14 +14,15 @@ import path from "node:path";
 import {
   mutateConfig, beadsStoreError, DEFAULT_HOLISTIC_REVIEW, REVIEW_EFFORT_LEVELS,
   isValidReviewEffort, expandHome, normalizeSandboxWriteRoot, resolveBeadsWriteRoot,
-  type GardenConfig, type ResolvedProvider,
+  type GardenConfig, type ProjectConfig, type ResolvedProvider,
 } from "../config.js";
 import { syncProviderTokenToVault } from "./claude-env.js";
 import {
   getHarnessCore, isRegisteredHarness, harnessNames, canonicalHarnessName,
   workerLaunchCompatibilityError,
 } from "./harness/core.js";
-import { resolveProjectCrew } from "./crew.js";
+import { composerEfforts } from "./harness/vocabulary.js";
+import { projectModelFor, resolveProjectCrew } from "./crew.js";
 import { branchExistsOnOrigin } from "./git.js";
 import type { ReviewRole } from "./roles.js";
 import {
@@ -46,12 +47,6 @@ export type SettableKey = typeof SETTABLE_KEYS[number];
 
 // CLI role name -> config sub-object key. The review family only; the worker
 // role selects its harness/model via `workers new`, not this config surface.
-// Valid values for the project-default `effort` key: the four claude-code
-// reasoning rungs (mirrors WORKER_EFFORT_LEVELS in dashboard/create.ts) plus
-// "ultra", the ultracode preset. Kept as a local literal so this leaf mutator
-// does not import create.ts's heavy module graph.
-const PROJECT_EFFORT_VALUES = ["low", "medium", "high", "xhigh", "ultra"] as const;
-
 export const REVIEW_ROLE_KEYS: Record<string, ReviewRole> = {
   reviewer: "reviewer",
   resolver: "resolver",
@@ -69,6 +64,12 @@ export interface MutateResult {
 
 function result(message: string, notes: string[]): MutateResult {
   return notes.length > 0 ? { message, notes } : { message };
+}
+
+// The harness this project's default workers build with: the flat key, else
+// the bound crew's builder. Its vocabulary is the one model and effort are set in.
+function projectBuilder(project: ProjectConfig, cfg: GardenConfig): string {
+  return canonicalHarnessName(project.harness ?? resolveProjectCrew(project, cfg)?.worker.harness ?? "claude-code");
 }
 
 function assertWorkerConfigCompatible(
@@ -204,19 +205,26 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
         message = `Cleared ${key} for ${projectName} (workers use the account/provider default)`;
       } else {
         project.model = value.trim();
-        message = `Set ${key} = ${project.model} for ${projectName} (default/grow workers; per-spawn --model and the ultracode preset override it; the review family ignores it)`;
+        // newWorker skips a model in another harness's vocabulary
+        // (projectModelFor); say so when this project's default workers will.
+        const builder = projectBuilder(project, cfg);
+        const suffix = projectModelFor(project, resolveProjectCrew(project, cfg), builder) === undefined
+          ? ` (a claude-code model: this project's ${builder} default workers skip it)`
+          : "";
+        message = `Set ${key} = ${project.model} for ${projectName}${suffix} (default/grow workers; per-spawn --model and the ultracode preset override it; the review family ignores it)`;
       }
     } else if (key === "effort") {
+      // Checked against the ladder of the harness the project builds with;
+      // Codex's adds `max`.
+      const builder = projectBuilder(project, cfg);
+      const efforts = composerEfforts(builder);
       if (value === "" || value === "unset" || value === "null") {
         delete project.effort;
         message = `Cleared ${key} for ${projectName} (no effort passed)`;
-      } else if ((PROJECT_EFFORT_VALUES as readonly string[]).includes(value)) {
+      } else if (efforts.includes(value)) {
         project.effort = value;
         // The ultracode preset is claude-code only and newWorker skips it for a
         // builder on another harness, so it is not promised to those workers.
-        const builder = canonicalHarnessName(
-          project.harness ?? resolveProjectCrew(project, cfg)?.worker.harness ?? "claude-code",
-        );
         const suffix = value !== "ultra"
           ? ""
           : builder === "claude-code"
@@ -224,7 +232,7 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
             : ` (ultracode preset, claude-code only: this project's ${builder} default workers skip it)`;
         message = `Set ${key} = ${value} for ${projectName}${suffix} (default/grow workers; per-spawn --effort overrides it)`;
       } else {
-        throw new Error(`effort must be one of: ${PROJECT_EFFORT_VALUES.join(", ")}, got '${value}'`);
+        throw new Error(`effort must be one of: ${efforts.join(", ")}, got '${value}'`);
       }
     } else if (key === "maxGrowIterations") {
       if (value === "" || value === "unset" || value === "null") {

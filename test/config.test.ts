@@ -1369,6 +1369,44 @@ describe("model / effort project config keys", () => {
         .toContain("claude-code only: this project's codex default workers skip it");
     }
   });
+
+  // The value is checked against the ladder of the harness the project's
+  // default workers build with, and Codex's adds `max`, which the ⌥, menu
+  // offers a Codex-building project. A claude-code project still refuses it
+  // (above).
+  it("config() accepts Codex's max for a project whose default workers build with codex", async () => {
+    const { loadConfig, saveConfig, GARDEN_DIR } = await importConfig();
+    const { config } = await import("../src/commands/config.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {
+      flat: { path: "/tmp/flat", harness: "codex" },
+      bound: { path: "/tmp/bound", crew: "codex-claude" },
+    } });
+    for (const name of ["flat", "bound"]) {
+      await config([name, "effort", "max"]);
+      expect(loadConfig().projects[name].effort).toBe("max");
+    }
+  });
+
+  // newWorker skips an Anthropic model name for a codex builder, so the
+  // confirmation must not promise it to such a project's default workers.
+  it("setting an Anthropic model says when the project's default workers build with codex", async () => {
+    const { saveConfig, GARDEN_DIR } = await importConfig();
+    const { setProjectConfigKey } = await import("../src/dashboard/project-config-mutate.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {
+      plain: { path: "/tmp/plain" },
+      flat: { path: "/tmp/flat", harness: "codex" },
+      bound: { path: "/tmp/bound", crew: "codex-claude" },
+    } });
+    const skipNote = "a claude-code model: this project's codex default workers skip it";
+    expect(setProjectConfigKey("plain", "model", "opus").message).not.toContain("skip");
+    for (const name of ["flat", "bound"]) {
+      expect(setProjectConfigKey(name, "model", "opus").message).toContain(skipNote);
+      expect(setProjectConfigKey(name, "model", "claude-opus-4-6").message).toContain(skipNote);
+      expect(setProjectConfigKey(name, "model", "gpt-5.6-sol").message).not.toContain("skip");
+    }
+  });
 });
 
 describe("displayName project config key", () => {

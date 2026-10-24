@@ -25,7 +25,7 @@ import {
 import {
   recordWorkerCreated, recordOperatorAction, recordWorkerRemoved, shortHash, telemetryDir, type RoleSnapshot,
 } from "./telemetry.js";
-import { designerSeat, getCrew, resolveProjectCrew, type CrewMember } from "./crew.js";
+import { designerSeat, getCrew, projectModelFor, resolveProjectCrew, type CrewMember } from "./crew.js";
 import { resolveReviewRole, type ReviewRole } from "./roles.js";
 import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -493,8 +493,11 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     if (crewEffort === "ultra") reqUltracode = true;
     else reqEffort = crewEffort;
   }
+  // A flat model naming another harness's model is skipped like a project
+  // `ultra` (projectModelFor): an Anthropic alias for a Codex builder, or a
+  // Codex project's model for its claude-code grow workers.
   const projectModel = projectDefaultsApply
-    ? (workerSeat?.model ?? project.model ?? projectSeat?.model)
+    ? (workerSeat?.model ?? projectModelFor(project, projectCrew, preflightPlan.harness) ?? projectSeat?.model)
     : buildingDesignSeat?.model;
   // Workflow-level model/effort defaults (the designer/planner seats → Opus /
   // xhigh) sit one layer beneath the per-spawn and project defaults.
