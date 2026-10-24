@@ -829,6 +829,34 @@ describe("codex readActivity (status-pane summary)", () => {
     }
   });
 
+  // A handoff seed's first line is written by the sandboxed calling worker, and
+  // both lines become entry.task, which the status row prints as stored. This
+  // file's tmux mock passes text through, so the real strip is swapped in.
+  it("removes terminal control sequences from the seed and prompt lines", async () => {
+    const tmux = await import("../src/dashboard/tmux.js");
+    const actual = await vi.importActual<typeof import("../src/dashboard/tmux.js")>(
+      "../src/dashboard/tmux.js");
+    vi.mocked(tmux.stripControlSequences).mockImplementation(actual.stripControlSequences);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-escapes-"));
+    const rollout = path.join(dir, "rollout.jsonl");
+    fs.writeFileSync(rollout, JSON.stringify({
+      type: "response_item", payload: { type: "message", role: "user", content: [
+        { type: "input_text", text: "\x1b[2J\x1b]0;pwned\x07Fix the \x1b[31mflaky\x1b[0m merge test.\nMore." },
+      ] },
+    }) + "\n");
+    try {
+      const { initialCodexActivity } = await import("../src/dashboard/harness/codex-core.js");
+      expect(initialCodexActivity("[handoff from garden/x]\n\x1b]2;owned\x07Port \x1b[1Athe parser"))
+        .toBe("Port the parser");
+      const { getHarnessCore } = await importCore();
+      expect(getHarnessCore("codex").readActivity!({ name: "w", transcriptPath: rollout, task: "" } as never))
+        .toBe("Fix the flaky merge test.");
+    } finally {
+      vi.mocked(tmux.stripControlSequences).mockImplementation((s: string) => s);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("heals a task left as the worker's own name by the default codex title", async () => {
     const { getHarnessCore } = await importCore();
     const entry = entryFor("rollout-sample.jsonl", { task: "weak-brave-snow" });

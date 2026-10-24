@@ -17,6 +17,7 @@ vi.mock("../src/dashboard/registry.js", async (orig) => ({
 import { spawnBeadWorker } from "../src/dashboard/poller-intake.js";
 import { newWorker } from "../src/dashboard/workers.js";
 import { writeSeedFile } from "../src/dashboard/seed-files.js";
+import { updateWorkerTask } from "../src/dashboard/registry.js";
 
 describe("spawnBeadWorker", () => {
   it("stages the bead's briefing as a control-tree seed and spawns on it", () => {
@@ -25,5 +26,12 @@ describe("spawnBeadWorker", () => {
     expect(newWorker).toHaveBeenCalledWith(expect.objectContaining({
       projectName: "proj", seedMessageFile: "/control/seeds/bead-1.txt", bead: "bd-1", background: true,
     }));
+  });
+
+  // A bead's title comes from the worker-writable .beads store; the status row
+  // prints the task as stored.
+  it("stamps the task without the terminal control sequences a bead title carries", () => {
+    spawnBeadWorker("proj", { seed: "s", task: "bead bd-2: \x1b]2;owned\x07Fix \x1b[31mthe\x1b[0m parser", bead: "bd-2" });
+    expect(updateWorkerTask).toHaveBeenCalledWith("proj", "bold-ash", "bead bd-2: Fix the parser");
   });
 });

@@ -38,6 +38,13 @@ describe("sanitizeTitle", () => {
     expect(sanitizeTitle("   \n  ")).toBeNull();
   });
 
+  // The model has just read a prompt someone else wrote, and the title is
+  // stamped as entry.task, which the status row prints as stored.
+  it("removes terminal control sequences from the reply", () => {
+    expect(sanitizeTitle("\x1b]0;pwned\x07Erica \x1b[1mcomposer\x1b[0m autosize\x1b[2J"))
+      .toBe("Erica composer autosize");
+  });
+
   it("returns null when the model explained itself instead of naming a topic", () => {
     // Longer than a status row can carry: pasting it would reproduce exactly
     // the truncated-paragraph symptom the title exists to fix.

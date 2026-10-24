@@ -104,6 +104,8 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmuxSplit: vi.fn(() => "%50"),
   getPaneSize: vi.fn(() => ({ width: 120, height: 50 })),
   resizeWindow: vi.fn(),
+  // initialCodexActivity passes a codex seed's first line through it.
+  stripControlSequences: vi.fn((s: string) => s),
 }));
 
 vi.mock("../src/dashboard/names.js", () => ({

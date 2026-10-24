@@ -105,6 +105,7 @@ import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
 import { writeSeedFile } from "./seed-files.js";
+import { stripControlSequences } from "./tmux.js";
 import {
   listOpenEpics, swarmStatus, showBeads, claimBead, reopenBead, unassignBead,
   addLabel, removeLabel, parseLabelCount, incrementFailedLabel,
@@ -1155,6 +1156,8 @@ export function spawnBeadWorker(projectName: string, req: IntakeSpawnRequest): s
     try { fs.unlinkSync(seedFile); } catch { /* ignore */ }
     return null;
   }
-  updateWorkerTask(projectName, name, req.task);
+  // The title comes from the worker-writable bead store, and the status row
+  // prints the task verbatim.
+  updateWorkerTask(projectName, name, stripControlSequences(req.task));
   return name;
 }

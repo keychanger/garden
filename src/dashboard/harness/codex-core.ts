@@ -21,7 +21,7 @@ import { resolveBeadsDir } from "../../config.js";
 import { promptTurn, readTurnsFromTail, summarizeTurn } from "../conversation.js";
 import type { ToolUse, Turn } from "../conversation.js";
 import type { WorkerEntry } from "../registry.js";
-import { shellEscape, pasteAndSubmit } from "../tmux.js";
+import { shellEscape, pasteAndSubmit, stripControlSequences } from "../tmux.js";
 import { resolveHookRunner } from "../runner.js";
 import type { AgentCommandOptions, HarnessCore, HeadlessCommandOptions } from "./types.js";
 
@@ -969,9 +969,13 @@ function responseItemUserText(rec: CodexLine): string | null {
 }
 
 // One line, bounded — the status pane's detail column truncates too, but the
-// registry should not carry a whole paragraph.
+// registry should not carry a whole paragraph. Terminal control sequences go
+// first, matching what cleanPaneTitle strips from a claude-code title: the text
+// is a seed line or prompt someone else wrote (a handoff seed's comes from the
+// sandboxed calling worker), and the status row and `garden whoami` print
+// entry.task as stored.
 function condense(text: string): string {
-  const line = text.trim().split("\n").find(l => l.trim())?.trim() ?? "";
+  const line = stripControlSequences(text).trim().split("\n").find(l => l.trim())?.trim() ?? "";
   return line.length > ACTIVITY_MAX_CHARS ? `${line.slice(0, ACTIVITY_MAX_CHARS - 1)}…` : line;
 }
 

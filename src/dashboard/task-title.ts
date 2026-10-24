@@ -41,7 +41,7 @@ import {
   type AgentStatus, type WorkerEntry, type WorkerRegistry,
 } from "./registry.js";
 import { isGeneratedWorkerName } from "./names.js";
-import { shellEscape } from "./tmux.js";
+import { shellEscape, stripControlSequences } from "./tmux.js";
 
 // Haiku 4.5, as in verdict-extract.ts: naming the topic of a prompt is a
 // summarization, and the strong models are reserved for work that forms
@@ -86,8 +86,11 @@ export function buildTitlePrompt(openingPrompt: string): string {
 
 // Reduce a model reply to a status-row title, or null when it does not look
 // like one. Pure, so the shaping is testable without spawning a process.
+// Terminal control sequences go first: the model has just read a prompt
+// someone else wrote, and the title becomes entry.task, which the status row
+// prints as stored.
 export function sanitizeTitle(response: string): string | null {
-  const line = response.trim().split("\n").map(l => l.trim()).find(Boolean) ?? "";
+  const line = stripControlSequences(response).trim().split("\n").map(l => l.trim()).find(Boolean) ?? "";
   const stripped = line
     .replace(/^[-*>\s]+/, "")
     .replace(/^["'`“”]+|["'`“”]+$/g, "")
