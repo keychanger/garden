@@ -27,8 +27,11 @@ import path from "node:path";
 // had grown to 131.8KB, 164 bytes under the old ceiling. Raised to 140KB when
 // the Stop hook stopped flagging a dirty tree while background tasks (now
 // including Monitors) are pending: the bundle stood at 139.15KB, 113 bytes
-// under the old ceiling, and the change adds ~130.
-const HOOK_BUNDLE_CEILING_BYTES = 140 * 1024;
+// under the old ceiling, and the change adds ~130. Raised to 144KB when the
+// ⌥h history bake began skipping its transcript re-read while nothing it
+// depends on has changed (header.ts writeHistoryRendered, ~240 bytes): the
+// bundle stood at 139.9KB, about 110 bytes under the old ceiling.
+const HOOK_BUNDLE_CEILING_BYTES = 144 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

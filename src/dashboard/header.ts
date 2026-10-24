@@ -24,6 +24,7 @@ import { renderUsagePane } from "./usage.js";
 import { formatConversationPane } from "./conversation.js";
 import { getHarnessCore } from "./harness/core.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
+import { GARDEN_VERSION } from "../version.js";
 
 export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 // Diagnostic captures the status pane's unsandboxed loop writes with `>`, which
@@ -893,10 +894,14 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     if (state.gardenPaneType !== "history" || !state.gardenShellPaneId) return;
     const size = getPaneSize(state.gardenShellPaneId);
     const width = size?.width ?? 60;
-    const rendered = renderHistoryContent(state, width, opts?.registry);
-    if (renderedFileUnchanged(HISTORY_RENDERED_FILE, rendered)) return;
-    atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
-    signalPane(state.gardenShellPaneId);
+    const bake = renderHistoryContent(state, width, opts?.registry);
+    if (!bake) return;
+    const [rendered, key] = bake;
+    if (!renderedFileUnchanged(HISTORY_RENDERED_FILE, rendered)) {
+      atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
+      signalPane(state.gardenShellPaneId);
+    }
+    if (key) atomicWriteFile(HISTORY_KEY_FILE, `${key}\n${rendered}`, { durable: false });
   } catch { /* best effort */ }
 }
 
@@ -937,12 +942,24 @@ function dimLine(msg: string): string {
   return ` \x1b[2m${msg}\x1b[0m`;
 }
 
+// A bake's inputs besides the transcript's content, stored with the text that
+// bake produced. While both still match — the same transcript at the same size
+// and mtime, and history.rendered still holding that text — a bake would come
+// out the same, so the transcript's tail read (16MB, escalating) is skipped:
+// every refresh the fleet makes while ⌥h shows a worker that is not working.
+// A working worker's transcript grows, so each refresh still re-reads it.
+// Binding the text means a bake by any other process, or a placeholder,
+// invalidates the key with no write ordering between the two files.
+const HISTORY_KEY_FILE = `${HISTORY_RENDERED_FILE}.key`;
+
+// Returns [text, key], or null when the stored key shows the bake unchanged.
 function renderHistoryContent(
   state: DashboardState,
   width: number,
   cachedRegistry?: WorkerRegistry,
-): string {
+): [string, string] | null {
   let lines: string[];
+  let key = "";
   if (state.activePaneType !== "worker" || !state.activeWindowName || !state.activeProject) {
     lines = [dimLine("no active worker — focus one with ⌥w")];
   } else {
@@ -959,17 +976,22 @@ function renderHistoryContent(
       // so the ⌥h view works for any harness (claude-code stays byte-identical
       // — its adapter methods wrap the same conversation.ts functions).
       const core = getHarnessCore(entry.harness);
-      const turns = core.readTurns(core.resolveTranscriptPath(entry), HISTORY_MAX_TURNS);
+      const transcript = core.resolveTranscriptPath(entry);
+      const status = entry.agentStatus === "working" ? "working"
+        : entry.agentStatus === "asking" ? "asking" : undefined;
+      const st = transcript ? fs.statSync(transcript, { throwIfNoEntry: false }) : undefined;
+      key = JSON.stringify([GARDEN_VERSION, transcript, st?.size, st?.mtimeMs, width, status]);
+      if (fs.existsSync(HISTORY_RENDERED_FILE)
+          && renderedFileUnchanged(HISTORY_KEY_FILE, `${key}\n${fs.readFileSync(HISTORY_RENDERED_FILE, "utf-8")}`)) return null;
+      const turns = core.readTurns(transcript, HISTORY_MAX_TURNS);
       if (turns.length === 0) {
         lines = [dimLine("no conversation yet")];
       } else {
-        const status = entry.agentStatus === "working" ? "working"
-          : entry.agentStatus === "asking" ? "asking" : undefined;
         lines = formatConversationPane(turns, { width, status });
       }
     }
   }
-  return lines.join("\n");
+  return [lines.join("\n"), key];
 }
 
 function writeUsageRendered(opts?: RefreshOptions): void {
