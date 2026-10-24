@@ -8,7 +8,7 @@
 // section list plus a thin builder — the I/O gathering and the join logic
 // are shared.
 import {
-  composePrompt, composeWithinCeiling, gatherPromptContext, makeContext,
+  claudeLoadedDocs, composePrompt, composeWithinCeiling, gatherPromptContext, makeContext,
   findSpecFiles, readDocSections, readTestSections,
   type PromptContext, type PromptData, type PromptSection,
 } from "./prompt-compose.js";
@@ -264,18 +264,30 @@ function pagedDiffBlock(heading: string, command: string, stat: string): string 
 export const reviewDocumentationSection: PromptSection = {
   name: "documentation",
   render(ctx) {
-    if (ctx.data.docsPaged && ctx.data.docSections.length > 0) {
-      return pagedFilesBlock(
+    const loaded = ctx.data.docSections.filter(s => ctx.data.harnessLoadedDocs?.includes(sectionPath(s)));
+    const note = loadedDocsNote(loaded.map(sectionPath));
+    const docs = ctx.data.docSections.filter(s => !loaded.includes(s));
+    if (ctx.data.docsPaged && docs.length > 0) {
+      return [pagedFilesBlock(
         "## Documentation (current state in the worktree — too large to inline)",
         "Verify these are still accurate after the diff above:",
-        ctx.data.docSections,
-      );
+        docs,
+      ), note].filter(Boolean).join("\n\n");
     }
     const intro = "## Documentation (current state in the worktree)\n\nVerify these are still accurate after the diff above.";
-    const docs = ctx.data.docSections.join("\n");
-    return docs ? `${intro}\n\n${docs}` : intro;
+    return [intro, note, docs.join("\n")].filter(Boolean).join("\n\n");
   },
 };
+
+// A doc the reviewer's harness loaded on its own is named, not repeated: a
+// second copy only crowds the window the reviewer works in.
+function loadedDocsNote(files: readonly string[]): string {
+  if (files.length === 0) return "";
+  const one = files.length === 1;
+  return `${files.join(" and ")} ${one ? "is" : "are"} already in your context: loaded from the `
+    + `worktree as your project instructions, so ${one ? "it is" : "they are"} not repeated here. `
+    + `Verify ${one ? "it" : "them"} too.`;
+}
 
 export const reviewTestFilesSection: PromptSection = {
   name: "test-files",
@@ -306,8 +318,12 @@ function pagedFilesBlock(heading: string, ask: string, sections: readonly string
     "needs them.",
     "",
     ask,
-    ...sections.map((section) => `- ${section.split("\n", 1)[0].replace(/^### /, "")}`),
+    ...sections.map((section) => `- ${sectionPath(section)}`),
   ].join("\n");
+}
+
+function sectionPath(section: string): string {
+  return section.split("\n", 1)[0].replace(/^### /, "");
 }
 
 export const reviewVerdictFormatSection: PromptSection = {
@@ -808,10 +824,14 @@ export function buildReviewPrompt(
   projectPath: string,
   baseBranch: string,
   entry: WorkerEntry,
+  // The harness the reviewer runs on: a claude-code reviewer already holds the
+  // agent docs Claude Code loads (claudeLoadedDocs), so they are named, not inlined.
+  reviewerHarness?: string,
 ): string | null {
   const ctx = gatherPromptContext(projectName, projectPath, baseBranch, entry);
   if (!ctx) return null;
   const wtPath = entry.worktreePath ?? projectPath;
+  if (reviewerHarness === "claude-code") ctx.data.harnessLoadedDocs = claudeLoadedDocs(wtPath);
   return composeWithinCeiling(reviewSections, ctx,
     () => getDiffStat(wtPath, `${remoteBranchRef(baseBranch)}...HEAD`));
 }
@@ -861,6 +881,8 @@ export function buildHolisticFinalReviewPrompt(
   // The `to` endpoint of the whole-task range. Production leaves this at the
   // live base tip; the offline backtest passes a reconstructed historical ref.
   toRef: string = remoteBranchRef(baseBranch),
+  // As for buildReviewPrompt.
+  reviewerHarness?: string,
 ): string | null {
   const wtPath = entry.worktreePath ?? projectPath;
   const fromSha = entry.baseBranchSha;
@@ -880,6 +902,7 @@ export function buildHolisticFinalReviewPrompt(
     docSections: readDocSections(wtPath),
     testSections: readTestSections(wtPath, files),
     specFiles: findSpecFiles(wtPath, files),
+    ...(reviewerHarness === "claude-code" ? { harnessLoadedDocs: claudeLoadedDocs(wtPath) } : {}),
   };
   const ctx = makeContext(projectName, projectPath, baseBranch, entry, data);
   return composeWithinCeiling(holisticReviewSections, ctx,

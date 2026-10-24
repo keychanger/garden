@@ -1658,7 +1658,35 @@ function launchReview(
     else log.debug("poller", "fetch before review failed", { worker: entry.name, data });
   }
 
-  const prompt = buildReviewPrompt(projectName, projectPath, baseBranch, entry);
+  // Reviewer role resolution: harness + model + env, arbitrary-per-role but
+  // defaulting to a strong first-party Anthropic reviewer (Opus). That default
+  // is the safety net that makes a cheap/experimental worker safe to try —
+  // resolveReviewRole's claude-code env prefix also neutralizes any provider
+  // env inherited from the tmux server so the reviewer never runs against the
+  // worker's backend. Codex-as-reviewer (`garden config <p> role reviewer
+  // harness codex`) flows through the same path with its own auth and no
+  // Anthropic env. See docs/MULTI-MODEL.md "Phase 4".
+  //
+  // Quota fallback override: when the configured (foreign) reviewer is
+  // quota-blocked, entry.reviewFallbackHarness pins THIS cycle to the pure
+  // first-party Opus safety net — the fallback harness, the Opus model, and the
+  // neutralizing reviewer env prefix — regardless of project.roles, so a
+  // multi-day foreign-subscription window can't wedge the merge pipeline. The
+  // model is SAFE_REVIEW_MODEL for every workflow. Cleared on the next fresh
+  // cycle, so the configured reviewer
+  // resumes automatically (see handleQuotaFallbackReview).
+  const projectCfg: ProjectConfig = tryGetProject(projectName) ?? { path: projectPath };
+  const reviewer = entry.reviewFallbackHarness
+    ? resolveHeadlessLaunchPlan({
+        role: "reviewer",
+        harness: entry.reviewFallbackHarness,
+        model: SAFE_REVIEW_MODEL,
+        envPrefix: reviewerEnvPrefix(projectCfg),
+      })
+    : resolveReviewRole(projectCfg, entry.workflow ?? "default", "reviewer", undefined, entry);
+  // Resolved before the prompt is built: a claude-code reviewer is not handed
+  // the agent docs Claude Code loads from the worktree itself.
+  const prompt = buildReviewPrompt(projectName, projectPath, baseBranch, entry, reviewer.harness);
 
   if (prompt === null) {
     log.warn("poller", "failed to build review prompt", { worker: entry.name, data: { project: projectName } });
@@ -1717,33 +1745,6 @@ function launchReview(
   // hook handler. Without this, the reviewer's Stop hook would be treated
   // as the worker's Stop hook and would (a) write agentStatus="idle" for
   // the worker, and (b) poke the poller to start another review.
-  //
-  // Reviewer role resolution: harness + model + env, arbitrary-per-role but
-  // defaulting to a strong first-party Anthropic reviewer (Opus). That default
-  // is the safety net that makes a cheap/experimental worker safe to try —
-  // resolveReviewRole's claude-code env prefix also neutralizes any provider
-  // env inherited from the tmux server so the reviewer never runs against the
-  // worker's backend. Codex-as-reviewer (`garden config <p> role reviewer
-  // harness codex`) flows through the same path with its own auth and no
-  // Anthropic env. See docs/MULTI-MODEL.md "Phase 4".
-  //
-  // Quota fallback override: when the configured (foreign) reviewer is
-  // quota-blocked, entry.reviewFallbackHarness pins THIS cycle to the pure
-  // first-party Opus safety net — the fallback harness, the Opus model, and the
-  // neutralizing reviewer env prefix — regardless of project.roles, so a
-  // multi-day foreign-subscription window can't wedge the merge pipeline. The
-  // model is SAFE_REVIEW_MODEL for every workflow. Cleared on the next fresh
-  // cycle, so the configured reviewer
-  // resumes automatically (see handleQuotaFallbackReview).
-  const projectCfg: ProjectConfig = tryGetProject(projectName) ?? { path: projectPath };
-  const reviewer = entry.reviewFallbackHarness
-    ? resolveHeadlessLaunchPlan({
-        role: "reviewer",
-        harness: entry.reviewFallbackHarness,
-        model: SAFE_REVIEW_MODEL,
-        envPrefix: reviewerEnvPrefix(projectCfg),
-      })
-    : resolveReviewRole(projectCfg, entry.workflow ?? "default", "reviewer", undefined, entry);
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,

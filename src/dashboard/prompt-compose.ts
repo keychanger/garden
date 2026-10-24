@@ -36,6 +36,10 @@ export interface PromptData {
    *  anything reading their content (nonBlockingNotesFor) still sees it. */
   docsPaged?: boolean;
   testsPaged?: boolean;
+  /** Agent docs the reviewer's harness loads from the worktree on its own
+   *  (claudeLoadedDocs). The documentation section names them instead of
+   *  inlining a second copy; docSections still holds their content. */
+  harnessLoadedDocs?: readonly string[];
   commitSummary: string;
   branchName: string;
   rules: string;
@@ -255,6 +259,18 @@ export function readDocSections(wtPath: string): string[] {
     sections.push(`### ${docFile}\n\n${body}`);
   }
   return sections;
+}
+
+// The agent docs Claude Code loads from the worktree as project instructions:
+// CLAUDE.md, or the AGENTS.md it names when it is only that pointer. A
+// claude-code reviewer runs `claude -p` there, so these are already in its
+// context. Codex reads AGENTS.md as well, but a headless Codex run keeps its
+// 32 KiB project-doc limit, so a Codex reviewer gets the docs inline.
+export function claudeLoadedDocs(wtPath: string): string[] {
+  const claude = readCommittedFiles(wtPath, ["CLAUDE.md"]).get("CLAUDE.md")?.trim();
+  if (!claude) return [];
+  if (!isAgentDocPointer(claude)) return ["CLAUDE.md"];
+  return claude.replace(/<!--[\s\S]*?-->/g, "").trim() === "@AGENTS.md" ? ["AGENTS.md"] : [];
 }
 
 export function readTestSections(wtPath: string, changedFiles: string[]): string[] {

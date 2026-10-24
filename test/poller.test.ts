@@ -5861,6 +5861,40 @@ describe("poll — reviewer prompt", () => {
     expect(content).toContain("only* to descriptive documents");
     expect(content).toContain("Specs drive the code; do not edit them to match code");
   });
+
+  // launchReview resolves the reviewer before building its prompt: Claude Code
+  // loads the AGENTS.md a CLAUDE.md pointer names, so a claude-code reviewer
+  // given it inline held it twice. A Codex headless run reads only 32 KiB of it.
+  describe("agent docs the reviewer's harness already loads", () => {
+    const servePairedDocs = () => vi.mocked(readCommittedFiles).mockImplementation((_wt, paths) => new Map(
+      paths.flatMap(p => p === "CLAUDE.md" ? [[p, "@AGENTS.md\n"] as [string, string]]
+        : p === "AGENTS.md" ? [[p, "# Agents\n\nAGENTS-BODY"] as [string, string]] : []),
+    ));
+    const promptWritten = () => String(vi.mocked(fs.writeFileSync).mock.calls.find(c =>
+      String(c[0]).includes("review-prompt") && !String(c[0]).includes("settings"))![1]);
+
+    it("names rather than inlines it for a claude-code reviewer", () => {
+      setupForReview();
+      servePairedDocs();
+
+      poll("myproject");
+
+      expect(promptWritten()).not.toContain("AGENTS-BODY");
+      expect(promptWritten()).toContain("AGENTS.md is already in your context");
+    });
+
+    it("inlines it for a Codex reviewer", () => {
+      vi.mocked(tryGetProject).mockReturnValue({
+        path: "/repo/myproject", roles: { reviewer: { harness: "codex" } },
+      } as ReturnType<typeof tryGetProject>);
+      setupForReview();
+      servePairedDocs();
+
+      poll("myproject");
+
+      expect(promptWritten()).toContain("AGENTS-BODY");
+    });
+  });
 });
 
 describe("poll — failing state", () => {

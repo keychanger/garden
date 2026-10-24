@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { describe, it, expect, vi } from "vitest";
 import { useTmpHome } from "./helpers.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -168,6 +169,29 @@ describe("interposed final review launch (touched files present)", () => {
     const opts = launchHeadlessAgent.mock.calls[0][0] as { launchPlan?: { harness?: string } };
     expect(opts.launchPlan?.harness).toBe("codex");
     expect(reg.findWorkerByName("proj", "codex-reviewed")!.holisticReviewMode).toBe("fix");
+  });
+
+  // The reviewer is resolved before the prompt is built: Claude Code loads the
+  // AGENTS.md that a CLAUDE.md pointer names, so a claude-code reviewer given
+  // it inline held it twice.
+  it("names rather than inlines the AGENTS.md a claude-code reviewer already loads", async () => {
+    launchHeadlessAgent.mockClear();
+    const wt = path.join(env.home, "wt");
+    fs.mkdirSync(wt);
+    fs.writeFileSync(path.join(wt, "CLAUDE.md"), "@AGENTS.md\n");
+    fs.writeFileSync(path.join(wt, "AGENTS.md"), "# Agents\n\nAGENTS-BODY\n");
+    for (const args of [["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "docs"]]) {
+      execFileSync("git", args, { cwd: wt, stdio: "ignore" });
+    }
+    const { reg, hol } = await setup("shadow", { worktreePath: wt, holisticTouchedFiles: ["src/a.ts"] });
+    hol.maybeDispatchHolisticReview(
+      "proj", env.gardenDir, "main", reg.findWorkerByName("proj", "multi-phase")!, "transitionToTerminal",
+    );
+
+    expect(launchHeadlessAgent).toHaveBeenCalledTimes(1);
+    const { prompt } = launchHeadlessAgent.mock.calls[0][0] as { prompt: string };
+    expect(prompt).not.toContain("AGENTS-BODY");
+    expect(prompt).toContain("AGENTS.md is already in your context");
   });
 });
 

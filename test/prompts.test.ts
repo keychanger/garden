@@ -322,6 +322,66 @@ describe("buildReviewPrompt — oversized reference material", () => {
   });
 });
 
+// A claude-code reviewer runs `claude -p` in the worktree, and Claude Code
+// loads CLAUDE.md there as project instructions, following its `@AGENTS.md`
+// import. Inlining that doc as well put it in the reviewer's context twice
+// (AGENTS.md is 179KB in garden).
+describe("buildReviewPrompt — agent docs the reviewer's harness already loaded", () => {
+  const AGENTS_BODY = "Agent quick-start notes";
+  const DESIGN_BODY = "Architecture notes";
+
+  it("names AGENTS.md instead of inlining it for a claude-code reviewer", () => {
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry(), "claude-code")!;
+
+    expect(result).not.toContain(AGENTS_BODY);
+    expect(result).toContain(DESIGN_BODY);
+    expect(result).toContain("AGENTS.md is already in your context");
+  });
+
+  it("names a CLAUDE.md with content of its own instead of inlining it", () => {
+    vi.mocked(fs.readFileSync).mockImplementation(((p: unknown) =>
+      String(p).endsWith("/CLAUDE.md") ? docBody("Claude-only guide") : defaultRead(p as never)) as typeof fs.readFileSync);
+
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry(), "claude-code")!;
+
+    expect(result).not.toContain("Claude-only guide notes");
+    expect(result).toContain("CLAUDE.md is already in your context");
+    // Claude Code does not read AGENTS.md on its own, so that one stays inline.
+    expect(result).toContain(AGENTS_BODY);
+  });
+
+  it("leaves it off the files to read when the documentation is paged", () => {
+    vi.mocked(getDiffAgainstBase).mockReturnValue("+diff-line\n".repeat(Math.ceil(300 * 1024 / 11)));
+    vi.mocked(fs.readFileSync).mockImplementation(((p: unknown) => String(p).endsWith("/DESIGN.md")
+      ? "DESIGN-BODY ".repeat(Math.ceil(1100 * 1024 / 12)) : defaultRead(p as never)) as typeof fs.readFileSync);
+
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry(), "claude-code")!;
+
+    expect(result).toContain("## Documentation (current state in the worktree — too large to inline)");
+    expect(result).toContain("- DESIGN.md");
+    expect(result).not.toContain("- AGENTS.md");
+    expect(result).toContain("AGENTS.md is already in your context");
+  });
+
+  it("still inlines AGENTS.md for a Codex reviewer, whose headless run reads only its first 32 KiB", () => {
+    const result = buildReviewPrompt("myproject", "/repo/myproject", "main", makeEntry(), "codex")!;
+
+    expect(result).toContain(AGENTS_BODY);
+    expect(result).not.toContain("already in your context");
+  });
+
+  it("names AGENTS.md for a claude-code whole-task reviewer too", () => {
+    const entry = makeEntry({ baseBranchSha: "base123", holisticTouchedFiles: ["src/foo.ts"] });
+
+    const result = buildHolisticFinalReviewPrompt(
+      "myproject", "/repo/myproject", "main", entry, undefined, "claude-code",
+    )!;
+
+    expect(result).not.toContain(AGENTS_BODY);
+    expect(result).toContain("AGENTS.md is already in your context");
+  });
+});
+
 describe("buildResolvePrompt", () => {
   it("frames the task as resolving, not reviewing", () => {
     const result = buildResolvePrompt("myproject", "/repo/myproject", "main", makeEntry());

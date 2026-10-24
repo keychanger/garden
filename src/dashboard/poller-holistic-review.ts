@@ -201,7 +201,18 @@ function launchHolisticFinalReview(
   });
   const staged = findWorkerByName(projectName, entry.name) ?? entry;
 
-  const prompt = buildHolisticFinalReviewPrompt(projectName, projectPath, baseBranch, staged);
+  // Reviewer role (harness/model/env) — honors project.roles + crew, so a Codex
+  // reviewer runs the aggregated pass exactly like a per-phase review. Resolved
+  // independently of the worker's own harness (docs/MULTI-MODEL.md "Mixed fleets").
+  // Resolved before the prompt is built: a claude-code reviewer is not handed
+  // the agent docs Claude Code loads from the worktree itself.
+  const project: ProjectConfig = tryGetProject(projectName) ?? { path: projectPath };
+  const reviewer = resolveReviewRole(
+    project, staged.workflow ?? "default", "reviewer", undefined, staged,
+  );
+  const prompt = buildHolisticFinalReviewPrompt(
+    projectName, projectPath, baseBranch, staged, undefined, reviewer.harness,
+  );
   if (prompt === null) {
     log.warn("poller", "holistic prompt build failed; leaving done", {
       worker: entry.name, data: { project: projectName },
@@ -243,13 +254,6 @@ function launchHolisticFinalReview(
     return; // guard already set — the worker stays `done`
   }
 
-  // Reviewer role (harness/model/env) — honors project.roles + crew, so a Codex
-  // reviewer runs the aggregated pass exactly like a per-phase review. Resolved
-  // independently of the worker's own harness (docs/MULTI-MODEL.md "Mixed fleets").
-  const project: ProjectConfig = tryGetProject(projectName) ?? { path: projectPath };
-  const reviewer = resolveReviewRole(
-    project, staged.workflow ?? "default", "reviewer", undefined, staged,
-  );
   const revWindow = reviewWindowName(projectName, entry.name);
   launchHeadlessAgent({
     cwd: wtPath,
