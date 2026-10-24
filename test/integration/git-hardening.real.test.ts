@@ -137,6 +137,25 @@ describe("garden's git in a worker worktree", () => {
     expect(fastForwardBase(env.repoPath, "main")).toEqual({ ok: true, advanced: "worktree" });
     expect(ran()).toEqual(["post-merge"]);
   });
+
+  // refs/replace/<sha> makes git read another object under that SHA, and the
+  // shared refs are inside every worker's write grant: a replacement for
+  // origin's tip would otherwise land the worker's tree in the operator's
+  // checkout, under the SHA origin itself reported.
+  it("ignores a replace ref a worker wrote for origin's tip when advancing the operator's checkout", async () => {
+    const { fastForwardBase } = await import("../../src/dashboard/git.js");
+    advanceOrigin("merged.txt");
+    git(wt, "fetch", "-q", "origin", "main");
+    const tip = git(wt, "rev-parse", "FETCH_HEAD");
+    fs.writeFileSync(path.join(wt, "evil.sh"), "echo owned\n");
+    git(wt, "add", "evil.sh");
+    git(wt, "commit", "-q", "-m", "evil");
+    git(wt, "replace", tip, git(wt, "rev-parse", "HEAD"));
+
+    expect(fastForwardBase(env.repoPath, "main")).toEqual({ ok: true, advanced: "worktree" });
+    expect(fs.existsSync(path.join(env.repoPath, "merged.txt"))).toBe(true);
+    expect(fs.existsSync(path.join(env.repoPath, "evil.sh"))).toBe(false);
+  });
 });
 
 describe("readCommittedFiles", () => {

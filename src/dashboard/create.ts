@@ -961,6 +961,9 @@ export function buildWorktreeBootstrapScript(
 
   const script = `#!/bin/sh
 set -e
+# Every git command below ignores replace refs, which a worker can write into
+# the shared refs to swap origin's tip for its own tree (git-exec.ts).
+export GIT_NO_REPLACE_OBJECTS=1
 
 # Any unhandled non-zero exit keeps the pane alive — exit 1 would let tmux
 # close the right-slot pane and wedge every subsequent park/swap (the

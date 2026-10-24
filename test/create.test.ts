@@ -861,6 +861,22 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toContain('branch --set-upstream-to="refs/remotes/origin/$BASE" bold-ash');
   });
 
+  // A replace ref a worker writes for origin's tip would otherwise have the
+  // worktree add check out, and npm install run the scripts of, its own tree.
+  it("runs every git command with replace refs ignored", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    buildWorktreeBootstrapScript(
+      "myproject", "/repo/myproject", "bold-ash", "bold-ash",
+      "session-123", "/wt/myproject/bold-ash", "main",
+    );
+    const script = vi.mocked(fs.writeFileSync).mock.calls.find(
+      c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
+    )![1] as string;
+    const exportAt = script.indexOf("export GIT_NO_REPLACE_OBJECTS=1\n");
+    expect(exportAt).toBeGreaterThan(0);
+    expect(exportAt).toBeLessThan(script.indexOf("git -C"));
+  });
+
   it("refuses to build from a base commit it does not have, before either consumer", () => {
     // Two readings must abort rather than continue: origin not answering (empty
     // BASE_SHA), and a commit origin named that the object store lacks. Without

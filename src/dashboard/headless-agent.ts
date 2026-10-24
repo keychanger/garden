@@ -68,9 +68,11 @@ export function launchHeadlessAgent(
   }
 
   const escapedFifo = shellEscape(opts.signalFifo);
-  const inlineEnv = opts.envVars
-    ? Object.entries(opts.envVars).map(([k, v]) => `${k}=${shellEscape(v)} `).join("")
-    : "";
+  // The agent's git sees the objects garden's own git does (git-exec.ts): with
+  // replace refs honored, a worker could show its reviewer one tree while the
+  // merge queue pushes another under the same commit.
+  const env = { GIT_NO_REPLACE_OBJECTS: "1", ...opts.envVars };
+  const inlineEnv = Object.entries(env).map(([k, v]) => `${k}=${shellEscape(v)} `).join("");
   // The harness owns the agent invocation; the FIFO-poke suffix is garden's
   // completion signal and stays caller-composed.
   const agentCmd = getHarnessCore(opts.launchPlan.harness).buildHeadlessCommand({

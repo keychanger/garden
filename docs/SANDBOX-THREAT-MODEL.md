@@ -312,16 +312,19 @@ reads or runs.
   that SHA to the reviewer and resolver, and refuse at merge any commit between origin's
   tip and HEAD outside the reviewed range, a record that cannot live in the worker-writable
   registry. Registry forgery ("Skip review", above) reaches the same end more simply.
-  Also open: every SHA read above trusts git to read the commit that SHA names, and git
-  reads the object `refs/replace/<sha>` points at in its place unless run with
-  `--no-replace-objects`, which garden's git does not pass. Reproduced against a scratch
-  repository on 2026-10-24, with a replacement for origin's tip written from a worktree:
-  `fastForwardBase` left the operator checkout's `HEAD` at origin's SHA with the
-  replacement's files in its working tree and a clean status, `createWorktree` at that SHA
-  checked out the replacement's files, and a rebase onto it built commits whose trees
-  carried them, which the queue's fast-forward check let onto the base. The bootstrap's
-  `worktree add` is the same command. Until garden's git passes that flag, asking origin
-  closes only the ref-rewrite route.
+  Replace refs no longer stand in for those SHAs. git reads the object
+  `refs/replace/<sha>` points at in place of the commit that SHA names unless told not
+  to, and a replacement for origin's tip written from a worktree did exactly that
+  (reproduced against a scratch repository on 2026-10-24): `fastForwardBase` left the
+  operator checkout's `HEAD` at origin's SHA with the replacement's files in its working
+  tree and a clean status, `createWorktree` at that SHA checked out the replacement's
+  files, and a rebase onto it built commits whose trees carried them, which the queue's
+  fast-forward check let onto the base. Garden's git now runs with
+  `GIT_NO_REPLACE_OBJECTS=1`: `runGit` sets it for every command (`git-exec.ts`), the
+  bootstrap script exports it before its first git command, and every headless agent gets
+  it inline, so a reviewer is not shown one tree while the queue pushes another under the
+  same commit. `info/grafts`, which git has deprecated in favor of replace refs, was not
+  tested.
 - **Other state in the sessions dir is still trusted.** Besides the registry, garden
   keeps files there that sandboxed `garden` commands write: the dashboard state file,
   alerts, the pre-rendered pane files the status, usage, history and alerts panes replay,

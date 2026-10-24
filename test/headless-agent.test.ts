@@ -120,7 +120,15 @@ describe("launchHeadlessAgent", () => {
     const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
     // Safe-token values (1, bar) pass through shellEscape unquoted; bash
     // assignment semantics are identical with or without the surrounding quotes.
-    expect(cmd).toMatch(/^GARDEN_REVIEWER=1 FOO=bar claude -p /);
+    expect(cmd).toMatch(/^GIT_NO_REPLACE_OBJECTS=1 GARDEN_REVIEWER=1 FOO=bar claude -p /);
+  });
+
+  // The agent's git must see the objects garden's own git does: honoring a
+  // replace ref, it could review one tree while the queue pushes another.
+  it("runs every agent with replace refs ignored, whatever envVars it is given", () => {
+    launchHeadlessAgent(baseOpts());
+    const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
+    expect(cmd).toMatch(/^GIT_NO_REPLACE_OBJECTS=1 claude -p /);
   });
 
   it("prepends envPrefix when provided", () => {
@@ -128,7 +136,7 @@ describe("launchHeadlessAgent", () => {
       launchPlan: { ...DEFAULT_HEADLESS_PLAN, envPrefix: "CLAUDE_CONFIG_DIR=/tmp/.claude " },
     }));
     const cmd = vi.mocked(newDashboardWindow).mock.calls[0][5] as string;
-    expect(cmd).toMatch(/^CLAUDE_CONFIG_DIR=\/tmp\/\.claude claude -p /);
+    expect(cmd).toMatch(/^GIT_NO_REPLACE_OBJECTS=1 CLAUDE_CONFIG_DIR=\/tmp\/\.claude claude -p /);
   });
 
   it("redirects stdin from promptFile and stdout/stderr to resultFile", () => {

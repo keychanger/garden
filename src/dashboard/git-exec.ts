@@ -21,6 +21,15 @@ export const SAFE_GIT_CONFIG: readonly string[] = [
   "--no-optional-locks",
 ];
 
+// Replace refs (refs/replace/<sha>) make git read another object in place of
+// the one named, and they live in the shared refs every worker sandbox can
+// write: a replacement for origin's tip would hand garden a worker's tree under
+// the very SHA origin reported, and the checkout it advances, the worktree it
+// creates and the commits it pushes would carry it. Garden's git ignores them.
+function gitEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, GIT_NO_REPLACE_OBJECTS: "1" };
+}
+
 export interface RunGitOptions {
   /** Keep the repository's hooks and fsmonitor. For commands run in the
    *  operator's own checkout only, never in a worker's worktree. */
@@ -35,6 +44,7 @@ export function runGit(cwd: string, args: readonly string[], opts: RunGitOptions
   const argv = opts.operatorHooks ? [...args] : [...SAFE_GIT_CONFIG, ...args];
   return execFileSync("git", argv, {
     cwd,
+    env: gitEnv(),
     encoding: "utf-8",
     stdio: ["ignore", "pipe", opts.quietStderr ? "ignore" : "pipe"],
     timeout: opts.timeout ?? 60_000,
@@ -47,6 +57,7 @@ export function runGit(cwd: string, args: readonly string[], opts: RunGitOptions
 export function runGitBytes(cwd: string, args: readonly string[], input: string): Buffer {
   return execFileSync("git", [...SAFE_GIT_CONFIG, ...args], {
     cwd,
+    env: gitEnv(),
     input,
     stdio: ["pipe", "pipe", "pipe"],
     timeout: 60_000,
