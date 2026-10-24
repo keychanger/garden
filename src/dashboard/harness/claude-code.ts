@@ -19,7 +19,7 @@ import { atomicWriteFile } from "../atomic-write.js";
 import { getRemoteHost } from "../git.js";
 import { runGit } from "../git-exec.js";
 import { appendToStableFile, readStableRegularFile } from "../safe-read.js";
-import { claudeSettingsPath, STATUS_LINE_SCRIPT_PATH } from "../headless-paths.js";
+import { claudeSettingsPath, editsUnwatchedMarkerPath, STATUS_LINE_SCRIPT_PATH } from "../headless-paths.js";
 import { log } from "../log.js";
 import { resolveHookRunner, hookCompileCachePrefix, resolveNodeBin } from "../runner.js";
 import { buildSandboxConfig, type SandboxConfig } from "../sandbox.js";
@@ -80,7 +80,7 @@ export function buildSettingsJson(
   hookRunner: string,
   sandbox: SandboxConfig,
   statusLineCmd: string,
-  opts: { ultracode?: boolean } = {},
+  opts: { ultracode?: boolean; omitHooks?: boolean; unwatchedMarker?: string } = {},
 ): string {
   // The hook commands are written into JSON and ultimately executed by Claude
   // Code as shell commands. The hook runner targets the minimal dist/hook.js
@@ -95,8 +95,16 @@ export function buildSettingsJson(
   // these command strings through a shell — the existing multi-token
   // `<node> <hook.js> <event>` form already relies on that.
   const hookCmd = `${hookCompileCachePrefix()}${hookRunner}`;
+  // The Bash hook records nothing unless a review or merge is in flight, and
+  // runs on most tool calls. While the marker is present the shell drains its
+  // input and exits instead of starting node: Claude Code reports a hook that
+  // exits with its input unread as failed, once the input outgrows the pipe.
+  const toolstartGate = opts.unwatchedMarker
+    ? `[ -e ${shellEscape(opts.unwatchedMarker)} ] && exec cat >/dev/null; `
+    : "";
   return JSON.stringify({
-    hooks: {
+    // undefined drops the key.
+    hooks: opts.omitHooks ? undefined : {
       SessionStart: [{
         matcher: "",
         hooks: [{ type: "command", command: `${hookCmd} sessionstart`, timeout: 5 }],
@@ -127,7 +135,7 @@ export function buildSettingsJson(
         // Records the worktree before a Bash call during review, so a
         // read-only command does not cancel it (hooks/default.ts).
         matcher: "Bash",
-        hooks: [{ type: "command", command: `${hookCmd} toolstart`, timeout: 10 }],
+        hooks: [{ type: "command", command: `${toolstartGate}${hookCmd} toolstart`, timeout: 10 }],
       }],
       PermissionRequest: [{
         matcher: "",
@@ -185,8 +193,13 @@ function sandboxForTarget(targetDir: string, project: ProjectConfig): SandboxCon
   });
 }
 
+// No hooks: every headless launch sets GARDEN_REVIEWER=1, so each of garden's
+// hooks would start node only to return before reading its input
+// (hook-dispatcher.ts), on every tool call of the run.
 export function installHeadlessSettings(targetDir: string, project: ProjectConfig, settingsFile: string): void {
-  const json = buildSettingsJson(resolveHookRunner(), sandboxForTarget(targetDir, project), statusLineCommand());
+  const json = buildSettingsJson(resolveHookRunner(), sandboxForTarget(targetDir, project), statusLineCommand(), {
+    omitHooks: true,
+  });
   atomicWriteFile(settingsFile, json, { mode: 0o444 });
 }
 
@@ -203,6 +216,7 @@ function installRuntimeConfig(targetDir: string, project: ProjectConfig, runtime
   const sandbox = sandboxForTarget(targetDir, project);
   const json = buildSettingsJson(resolveHookRunner(), sandbox, statusLineCommand(), {
     ultracode: runtime?.ultracode,
+    unwatchedMarker: editsUnwatchedMarkerPath(targetDir),
   });
   atomicWriteFile(claudeSettingsPath(targetDir), json, { mode: 0o444 });
   installStatusLineScript();

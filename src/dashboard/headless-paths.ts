@@ -62,6 +62,13 @@ export function claudeSettingsPath(runtimeDir: string): string {
   return path.join(CLAUDE_SETTINGS_DIR, `${runtimeDirDigest(runtimeDir)}.json`);
 }
 
+// Present while the worker in runtimeDir has no review or merge in flight
+// (editsWatched, hooks/default.ts). Its PreToolUse Bash hook command tests for
+// this file and exits without starting node, which would record nothing then.
+export function editsUnwatchedMarkerPath(runtimeDir: string): string {
+  return path.join(CLAUDE_SETTINGS_DIR, `${runtimeDirDigest(runtimeDir)}.unwatched`);
+}
+
 // The status-line script every worker's settings point at.
 export const STATUS_LINE_SCRIPT_PATH = path.join(CLAUDE_SETTINGS_DIR, "statusline.mjs");
 

@@ -202,7 +202,7 @@ import path from "node:path";
 import { getGitCommonDir } from "../src/dashboard/git.js";
 import { readStableRegularFile } from "../src/dashboard/safe-read.js";
 import { claudeCodeAdapter } from "../src/dashboard/harness/claude-code.js";
-import { claudeSettingsPath, contextFilePath, STATUS_LINE_SCRIPT_PATH } from "../src/dashboard/headless-paths.js";
+import { claudeSettingsPath, contextFilePath, editsUnwatchedMarkerPath, STATUS_LINE_SCRIPT_PATH } from "../src/dashboard/headless-paths.js";
 import { CONTROL_SCRIPTS_DIR } from "../src/paths.js";
 import {
   createShellWindow,
@@ -329,6 +329,18 @@ describe("claude-code adapter installRuntimeConfig", () => {
     const parsed = JSON.parse(settingsJsonContent());
     const bash = parsed.hooks.PreToolUse.find((h: { matcher: string }) => h.matcher === "Bash");
     expect(bash.hooks[0].command).toContain("hook.js toolstart");
+  });
+
+  // The poller keeps that marker present while the worktree has no review or
+  // merge in flight, and the command then exits before starting node.
+  it("gates the Bash PreToolUse hook on the worktree's own edits-unwatched marker", () => {
+    process.argv[1] = "/usr/local/bin/garden";
+    claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
+    const parsed = JSON.parse(settingsJsonContent());
+    const bash = parsed.hooks.PreToolUse.find((h: { matcher: string }) => h.matcher === "Bash");
+    expect(bash.hooks[0].command).toMatch(new RegExp(
+      `^\\[ -e '?${editsUnwatchedMarkerPath("/repo/myproject")}'? \\] && exec cat >/dev/null; .*hook\\.js toolstart$`,
+    ));
   });
 
   it("registers a catch-all PostToolUse hook so asking flips back to working after any tool completes", () => {
@@ -916,7 +928,10 @@ describe("buildWorktreeBootstrapScript", () => {
     const settingsWrite = vi.mocked(fs.writeFileSync).mock.calls.find(
       c => String(c[0]).startsWith(`${settingsFile}.`),
     );
-    expect(JSON.parse(String(settingsWrite![1])).hooks.SessionStart).toBeDefined();
+    const hooks = JSON.parse(String(settingsWrite![1])).hooks;
+    expect(hooks.SessionStart).toBeDefined();
+    const bash = hooks.PreToolUse.find((h: { matcher: string }) => h.matcher === "Bash");
+    expect(bash.hooks[0].command).toContain(editsUnwatchedMarkerPath("/wt/myproject/bold-ash"));
     const call = vi.mocked(fs.writeFileSync).mock.calls.find(
       c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
     );

@@ -48,7 +48,7 @@ import { getHarness } from "./harness/index.js";
 import { resolveWorkerLaunchPlan } from "./launch-plan.js";
 import type { WorkerLaunchPlan } from "./harness/types.js";
 import { buildSettingsJson, installStatusLineScript, statusLineCommand } from "./harness/claude-code.js";
-import { claudeSettingsPath, contextFilePath } from "./headless-paths.js";
+import { claudeSettingsPath, contextFilePath, editsUnwatchedMarkerPath } from "./headless-paths.js";
 import { CONTROL_CONTEXTS_DIR, CONTROL_SCRIPTS_DIR } from "../paths.js";
 import { gardenWindowName, shellWindowName as shellWin, workerWindowName as workerWin, isGardenWindow } from "./window-names.js";
 
@@ -888,7 +888,7 @@ export function buildWorktreeBootstrapScript(
       worktreePath: wtPath,
       project: launchPlan.runtimeProject,
       remoteHost: getRemoteHost(project.path),
-    }), statusLineCommand(), { ultracode: launchPlan.ultracode });
+    }), statusLineCommand(), { ultracode: launchPlan.ultracode, unwatchedMarker: editsUnwatchedMarkerPath(wtPath) });
     atomicWriteFile(claudeSettingsPath(wtPath), settingsJson, { mode: 0o444 });
     installStatusLineScript();
   }

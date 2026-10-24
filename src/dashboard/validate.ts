@@ -765,7 +765,7 @@ export function cleanClaudeSettingsFiles(): void {
   const statusLine = path.basename(STATUS_LINE_SCRIPT_PATH);
   sweepUnclaimedFiles(
     CLAUDE_SETTINGS_DIR,
-    file => file === statusLine || digests.has(file.replace(/\.json$/, "")),
+    file => file === statusLine || digests.has(file.replace(/\.(json|unwatched)$/, "")),
     "removed stale claude settings file",
   );
 }

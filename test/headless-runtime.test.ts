@@ -81,6 +81,16 @@ describe("headless runtime repair", () => {
     },
   );
 
+  // Every headless launch sets GARDEN_REVIEWER=1, which turns each garden hook
+  // into a node start that returns before reading its input: per tool call,
+  // for the whole run, and a failed hook once a payload outgrows the pipe.
+  it.each(["reviewer", "resolver", "ciFix"] as const)("gives a %s no garden hooks to run", role => {
+    launchHeadlessAgent(options("claude-code", role));
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+    expect(settings.hooks).toBeUndefined();
+    expect(settings.sandbox.enabled).toBe(true);
+  });
+
   it("preserves an existing worker's Claude runtime settings", () => {
     fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
     const existing = '{"sandbox":{"enabled":true},"permissions":{"deny":["Bash(custom:*)"]}}\n';

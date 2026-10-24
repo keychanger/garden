@@ -346,6 +346,7 @@ import {
 import { buildRulesContext } from "../src/rules.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 import { CONTROL_DIR } from "../src/paths.js";
+import { editsUnwatchedMarkerPath } from "../src/dashboard/headless-paths.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
   _setEntries: (project: string, list: WorkerEntry[]) => void;
@@ -401,6 +402,28 @@ beforeEach(() => {
   // (resetAllMocks wiped the factory impl to undefined). The unparseable-path
   // tests rely on this; the recovery test overrides it.
   vi.mocked(extractReviewVerdict).mockReturnValue(null);
+});
+
+// The worker's PreToolUse Bash hook exits before starting node while this
+// marker exists, so each poll keeps it in step with the worker's state.
+describe("poll — edits-unwatched marker", () => {
+  const marker = editsUnwatchedMarkerPath("/tmp/wt/myproject/bold-ash");
+
+  it("leaves the marker for a worker with no review or merge in flight", () => {
+    registryMock._setEntries("myproject", [makeWorker({ prState: "working", agentStatus: "working" })]);
+    poll("myproject");
+    expect(fs.writeFileSync).toHaveBeenCalledWith(marker, "");
+  });
+
+  it("takes it away when the poll launches a review", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+    poll("myproject");
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("reviewing");
+    expect(fs.rmSync).toHaveBeenCalledWith(marker, { force: true });
+    expect(fs.writeFileSync).not.toHaveBeenCalledWith(marker, "");
+  });
 });
 
 // In the new model, review is launched when pendingReviewAt is set on the

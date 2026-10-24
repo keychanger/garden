@@ -699,8 +699,9 @@ function toolUseId(ctx: HookContext): string | null {
 
 // From the review's launch until its verdict merges: the reviewer certifies
 // the tree, a resolver or CI-fix agent on the way rebases or pushes it, and
-// the merge queue then rebases and pushes it.
-function editsWatched(prState: WorkerEntry["prState"]): boolean {
+// the merge queue then rebases and pushes it. Exported for the poller, which
+// keeps the toolstart hook's skip marker in step (syncEditsUnwatchedMarker).
+export function editsWatched(prState: WorkerEntry["prState"]): boolean {
   return prState === "reviewing" || prState === "merge-pending"
     || prState === "resolving" || prState === "ci-fixing";
 }

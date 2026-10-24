@@ -34,6 +34,7 @@ import { withFileLock } from "./file-lock.js";
 import { getWorkflow } from "./workflows/index.js";
 import { processPendingHandoffs } from "./handoff-dispatch.js";
 import { runBeadIntake } from "./poller-intake.js";
+import { syncEditsUnwatchedMarker } from "./poller-state.js";
 
 // Re-exports of the public API consumed elsewhere in the codebase.
 // External callers continue to import from "./poller" — the split is
@@ -183,7 +184,9 @@ function pollWorker(
     }
     return false;
   }
-  return workflow.stateHandlers[state](projectName, projectPath, baseBranch, entry);
+  const changed = workflow.stateHandlers[state](projectName, projectPath, baseBranch, entry);
+  syncEditsUnwatchedMarker(projectName, entry.name);
+  return changed;
 }
 
 // --- Per-project poller lifecycle ---

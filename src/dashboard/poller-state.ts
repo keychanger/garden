@@ -7,11 +7,15 @@
 // getValidTransitions() rather than going through workflows/index.ts. That
 // indirection breaks a module-init cycle that closed in earlier shapes
 // of this code (see workflows/types.ts comment).
+import fs from "node:fs";
+import path from "node:path";
 import { addAlert } from "./alerts.js";
 import {
   getBranchHeadSha, getCommitSummary, getNewCommitSummary,
 } from "./git.js";
 import { refreshDashboard } from "./header.js";
+import { editsUnwatchedMarkerPath } from "./headless-paths.js";
+import { editsWatched } from "./hooks/default.js";
 import { log } from "./log.js";
 import {
   findWorkerByName, updateWorkerFields, updateWorkerFieldsIf,
@@ -132,6 +136,9 @@ function applyTransition(
       };
     }
 
+    // Under the registry lock and before the state lands, so no Bash call can
+    // start in the new state with its baseline skipped (syncEditsUnwatchedMarker).
+    if (editsWatched(toState) && entry.worktreePath) dropEditsUnwatchedMarker(entry.worktreePath);
     const callback = callbackDispatchFor(projectName, workerName, entry, toState);
     const owed = callback ? owedCallback(callback, find) : undefined;
     const stateFields: Omit<WorkerFieldsUpdate, "prState"> = toState !== fromState
@@ -195,6 +202,46 @@ export function forceTransitionState(
   extraFields?: Omit<WorkerFieldsUpdate, "prState">,
 ): boolean {
   return applyTransition(projectName, workerName, toState, extraFields, true);
+}
+
+// The marker that lets a worker's PreToolUse Bash hook exit before starting
+// node (editsUnwatchedMarkerPath). Missing, it costs that node start. Present
+// while edits are watched, the hook records no baseline and the worker's next
+// read-only command cancels the review. So the write entering a watched state
+// removes it (applyTransition), and it is created only under the registry lock
+// after reading an unwatched state. Runs after each worker's poll.
+export function syncEditsUnwatchedMarker(projectName: string, workerName: string): void {
+  try {
+    const entry = findWorkerByName(projectName, workerName);
+    if (!entry?.worktreePath) return;
+    const marker = editsUnwatchedMarkerPath(entry.worktreePath);
+    if (editsWatched(entry.prState)) {
+      dropEditsUnwatchedMarker(entry.worktreePath);
+      return;
+    }
+    if (fs.existsSync(marker)) return;
+    updateWorkerFieldsIf(projectName, workerName, current => {
+      if (!editsWatched(current.prState) && current.worktreePath === entry.worktreePath) {
+        fs.mkdirSync(path.dirname(marker), { recursive: true });
+        fs.writeFileSync(marker, "");
+      }
+      return { fields: null, result: undefined };
+    });
+  } catch (err) {
+    log.debug("poller", "edits-unwatched marker not synced", {
+      worker: workerName, data: { project: projectName, error: String(err) },
+    });
+  }
+}
+
+function dropEditsUnwatchedMarker(worktreePath: string): void {
+  try {
+    fs.rmSync(editsUnwatchedMarkerPath(worktreePath), { force: true });
+  } catch (err) {
+    log.warn("poller", "edits-unwatched marker not removed", {
+      data: { worktreePath, error: String(err) },
+    });
+  }
 }
 
 // The Stop hook's trail-off `done` write bypasses transitionState, so

@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import type {
   HeadlessLaunchPlan,
@@ -966,5 +967,53 @@ describe("promptReady (harness boot probe)", () => {
   it("reports ready from a booted Codex pane", async () => {
     const { harnessSignalsPromptReady } = await importCore();
     expect(harnessSignalsPromptReady("codex", () => BOOTED)).toBe(true);
+  });
+});
+
+// The PreToolUse Bash hook records something only while a review or merge is
+// in flight, and fires on most of a worker's tool calls, so outside those
+// states its command exits without starting the hook process. Fed the way
+// Claude Code feeds it: through a shell, the payload on stdin, which must be
+// read in full, since Claude Code reports a hook that exits with its input
+// unread as failed once the payload outgrows the pipe (EPIPE).
+describe("claude-code toolstart hook gate", () => {
+  let dir: string;
+  beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-toolstart-")); });
+  afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
+
+  async function toolstartCommand(marker: string): Promise<string> {
+    const { buildSettingsJson } = await import("../src/dashboard/harness/claude-code.js");
+    // Stands in for `node hook.js`: records that it ran and what it read.
+    const runner = path.join(dir, "hook.sh");
+    fs.writeFileSync(runner, `#!/bin/sh\ncat > '${dir}/ran.'"$1"\n`, { mode: 0o755 });
+    const settings = JSON.parse(buildSettingsJson(runner, { enabled: true } as never, "true", {
+      unwatchedMarker: marker,
+    }));
+    const bash = settings.hooks.PreToolUse.find((h: { matcher: string }) => h.matcher === "Bash");
+    return bash.hooks[0].command;
+  }
+
+  function feed(command: string, payload: string): Promise<{ code: number | null; stdinError?: string }> {
+    return new Promise(resolve => {
+      const child = spawn(command, [], { shell: true, cwd: dir, stdio: ["pipe", "ignore", "ignore"] });
+      let stdinError: string | undefined;
+      child.stdin.on("error", err => { stdinError = (err as NodeJS.ErrnoException).code; });
+      child.stdin.end(payload);
+      child.on("close", code => resolve({ code, stdinError }));
+    });
+  }
+
+  it("exits without running the hook while the worker's edits are unwatched, reading all its input", async () => {
+    const marker = path.join(dir, "worker.unwatched");
+    fs.writeFileSync(marker, "");
+    const result = await feed(await toolstartCommand(marker), `{"tool_input":"${"x".repeat(200_000)}"}`);
+    expect(result).toEqual({ code: 0, stdinError: undefined });
+    expect(fs.existsSync(path.join(dir, "ran.toolstart"))).toBe(false);
+  });
+
+  it("runs the hook with the payload while edits are watched", async () => {
+    const result = await feed(await toolstartCommand(path.join(dir, "worker.unwatched")), '{"tool_name":"Bash"}');
+    expect(result).toEqual({ code: 0, stdinError: undefined });
+    expect(fs.readFileSync(path.join(dir, "ran.toolstart"), "utf-8")).toBe('{"tool_name":"Bash"}');
   });
 });
