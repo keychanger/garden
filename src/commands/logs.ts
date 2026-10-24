@@ -946,6 +946,14 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
   let prevKey = "";
   let repeatCount = 0;
   let prevLineCount = 1;
+  // The newest timestamp among the lines read so far, which is how the poll
+  // below skips what it already showed when it has to re-read from the top.
+  let newestReadMs = -Infinity;
+  const noteRead = (entry: LogEntry): number => {
+    const ms = Date.parse(entry.ts);
+    if (ms > newestReadMs) newestReadMs = ms;
+    return ms;
+  };
 
   // Every row is wrapped to the pane width at the moment it is printed, and a
   // date rule spans that width exactly, so a pane that narrows afterward holds
@@ -957,6 +965,8 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
     } catch { lastSize = 0; }
     resetDateRuleState();
     const entries = readLogLines().map(parseLine).filter((e): e is LogEntry => e !== null);
+    newestReadMs = -Infinity;
+    for (const entry of entries) noteRead(entry);
     printEntries(entries, filters, opts, false);
     prevKey = "";
     repeatCount = 0;
@@ -996,9 +1006,16 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
       return;
     }
 
+    // A shrink is truncateLog rewriting the file down to its newest lines, all
+    // but the latest of which this loop has already read. The file can only be
+    // re-read from the top, so skip each line no newer than the newest one
+    // read. A line logged in that same millisecond after the read is skipped
+    // too; it stays in the file for `garden logs`.
+    let skipThroughMs = -Infinity;
     if (currentSize <= lastSize) {
-      if (currentSize < lastSize) lastSize = 0;
-      else return;
+      if (currentSize === lastSize) return;
+      lastSize = 0;
+      skipThroughMs = newestReadMs;
     }
 
     const fd = fs.openSync(LOG_FILE, "r");
@@ -1010,7 +1027,8 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
     const newLines = buf.toString("utf-8").trim().split("\n");
     for (const line of newLines) {
       const entry = parseLine(line);
-      if (!entry || !matchesFilters(entry, filters)) continue;
+      if (!entry || noteRead(entry) <= skipThroughMs) continue;
+      if (!matchesFilters(entry, filters)) continue;
       if (opts.mode === "pretty" && !opts.showAll && isSuppressed(entry)) continue;
 
       // A day boundary ends the current dedup block: the rule has to land

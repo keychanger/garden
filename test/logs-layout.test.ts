@@ -344,6 +344,54 @@ describe("date rules while following logs", () => {
   });
 });
 
+describe("following through a log trim", () => {
+  // truncateLog rewrites dashboard.log down to its newest ~8MB, so the file
+  // the follower is reading shrinks. Re-reading it from the top printed every
+  // retained line again: tens of thousands of rows into the logs pane.
+  it("prints only what arrived after the lines already shown", async () => {
+    vi.useFakeTimers();
+    const signals = ["SIGINT", "SIGTERM"] as const;
+    const originalListeners = new Set(signals.flatMap(signal => process.listeners(signal)));
+    const printed: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(line => { printed.push(strip(String(line))); });
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const line = (minute: number, msg: string) =>
+      JSON.stringify(entry({ ts: new Date(2026, 8, 17, 14, minute).toISOString(), msg })) + "\n";
+    logContent = line(1, `trimmed away ${"x".repeat(400)}`) + line(2, "kept one") + line(3, "kept two");
+    vi.mocked(fs.statSync).mockImplementation(() => ({ size: Buffer.byteLength(logContent) }) as fs.Stats);
+    vi.mocked(fs.readSync).mockImplementation((_fd, buffer, offset, length, position) =>
+      Buffer.from(logContent).copy(buffer as Buffer, offset as number, position as number,
+        (position as number) + (length as number)));
+    const pending = logs(["--follow"]);
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(printed.join("\n")).toContain("kept two");
+
+      logContent = line(2, "kept one") + line(3, "kept two") + line(4, "after the trim");
+      writeSpy.mockClear();
+      await vi.advanceTimersByTimeAsync(1000);
+
+      const output = strip(writeSpy.mock.calls.map(call => String(call[0])).join(""));
+      expect(output).toContain("after the trim");
+      expect(output).not.toContain("kept");
+    } finally {
+      for (const signal of signals) {
+        for (const listener of process.listeners(signal)) {
+          if (originalListeners.has(listener)) continue;
+          if (signal === "SIGINT") (listener as () => void)();
+          process.removeListener(signal, listener);
+        }
+      }
+      await pending;
+      consoleSpy.mockRestore();
+      writeSpy.mockRestore();
+      vi.mocked(fs.statSync).mockReset();
+      vi.mocked(fs.readSync).mockReset();
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("no rendered row overruns the pane", () => {
   // The defect this covers: headlines were emitted raw while only details were
   // wrapped, so any message wider than the message column ran off and the
