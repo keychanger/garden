@@ -98,6 +98,38 @@ export function dashboardExists(): boolean {
   }
 }
 
+export type DashboardReach =
+  | { state: "present" }
+  | { state: "absent" }
+  | { state: "unreachable"; detail: string };
+
+// tmux's own wording for "no such session" (the server answered) and for
+// nothing listening on its socket (no server). Only these count as absence.
+const TMUX_SAYS_ABSENT =
+  /can't find session|session not found|no server running on|^error connecting to .* \((No such file or directory|Connection refused)\)$/m;
+
+// dashboardExists, but keeping "tmux could not be reached" apart from "tmux
+// answered: no dashboard". It reads both as false, which is right for a caller
+// that only acts on a live session. A caller that acts on a pane being ABSENT
+// needs the difference: a garden run inside an agent sandbox is denied the
+// tmux socket ("Operation not permitted"), so every probe fails there exactly
+// as it does with nothing running. Any failure tmux did not explain as
+// absence is unreachable.
+export function dashboardReach(): DashboardReach {
+  try {
+    execFileSync("tmux", ["has-session", "-t", DASHBOARD_SESSION], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    return { state: "present" };
+  } catch (err) {
+    // No tmux binary: no server, so no dashboard.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { state: "absent" };
+    const detail = String((err as { stderr?: unknown }).stderr ?? "").trim();
+    if (TMUX_SAYS_ABSENT.test(detail)) return { state: "absent" };
+    return { state: "unreachable", detail: detail || String(err) };
+  }
+}
+
 export function createDashboardSession(command: string, cwd: string): void {
   execFileSync(
     "tmux",

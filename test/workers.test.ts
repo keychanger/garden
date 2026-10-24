@@ -33,6 +33,7 @@ vi.mock("node:child_process", () => ({
 vi.mock("../src/session.js", () => ({
   DASHBOARD_SESSION: "garden-dashboard",
   dashboardExists: vi.fn(() => false),
+  dashboardReach: vi.fn(() => ({ state: "present" })),
 }));
 
 vi.mock("../src/config.js", () => {
@@ -285,7 +286,7 @@ import fs from "node:fs";
 import { readSeedFile } from "../src/dashboard/seed-files.js";
 import crypto from "node:crypto";
 import type { DashboardState } from "../src/dashboard/state.js";
-import { dashboardExists } from "../src/session.js";
+import { dashboardExists, dashboardReach } from "../src/session.js";
 
 function makeState(overrides: Partial<DashboardState> = {}): DashboardState {
   return {
@@ -325,6 +326,7 @@ beforeEach(() => {
   vi.mocked(unassignBead).mockReset().mockReturnValue(true);
   vi.mocked(tryResolveProvider).mockReset().mockReturnValue(null);
   vi.mocked(dashboardExists).mockReturnValue(false);
+  vi.mocked(dashboardReach).mockReturnValue({ state: "present" });
   delete process.env.GARDEN_TEST_PROVIDER_KEY;
   // clearAllMocks clears calls but not implementations, so a test that stubs a
   // stored-crew config would otherwise leak it into every later test.
@@ -2433,6 +2435,63 @@ describe("stopWorkerByName", () => {
     expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
     expect(vi.mocked(removeWorker)).not.toHaveBeenCalledWith("myproject", "calm-elm");
     expect(stateReads).toBe(1);
+  });
+
+  // garden/weak-tough-lynx, 2026-09-17: a stop run inside an agent sandbox,
+  // which is denied the tmux socket but may write ~/.garden/sessions. Every
+  // tmux probe fails there and every kill is a silent no-op, so the worker
+  // kept running while its entry, its project's poll FIFO and its git cleanup
+  // were acted on as if it were gone.
+  it("refuses, changing nothing, when tmux does not answer", () => {
+    vi.mocked(dashboardReach).mockReturnValue({
+      state: "unreachable",
+      detail: "error connecting to /private/tmp/tmux-501/default (Operation not permitted)",
+    });
+    vi.mocked(paneExists).mockReturnValue(false);
+    vi.mocked(windowExists).mockReturnValue(false);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
+      worktreePath: "/wt/swift-oak", createdAt: 42,
+    });
+
+    let thrown: unknown;
+    try {
+      stopWorkerByName("myproject", "swift-oak");
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordWorkerRemoved)).not.toHaveBeenCalled();
+    expect(vi.mocked(stopProjectPoller)).not.toHaveBeenCalled();
+    expect(vi.mocked(writeWorkerCleanupRequest)).not.toHaveBeenCalled();
+    expect(vi.mocked(dispatchWorkerCleanup)).not.toHaveBeenCalled();
+    expect(vi.mocked(writeDashState)).not.toHaveBeenCalled();
+    expect(vi.mocked(killWindowSafe)).not.toHaveBeenCalled();
+    expect(String(thrown)).toMatch(/tmux did not answer/);
+    expect(String(thrown)).toContain("Operation not permitted");
+    expect(String(thrown)).toContain("garden workers stop swift-oak");
+  });
+
+  // With no dashboard at all there is no pane left to kill. Refusing here
+  // would make the operator start the dashboard, which resumes every
+  // registered worker, only to stop one of them.
+  it("still removes a worker when tmux answers that no dashboard is running", () => {
+    vi.mocked(dashboardReach).mockReturnValue({ state: "absent" });
+    vi.mocked(paneExists).mockReturnValue(false);
+    vi.mocked(windowExists).mockReturnValue(false);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(findWorkerByName).mockReturnValue({
+      name: "swift-oak", sessionId: "s1", task: "", branchName: "swift-oak",
+      worktreePath: "/wt/swift-oak", createdAt: 42,
+    });
+
+    stopWorkerByName("myproject", "swift-oak");
+
+    expect(vi.mocked(recordWorkerRemoved)).toHaveBeenCalled();
+    expect(vi.mocked(removeWorker)).toHaveBeenCalledWith("myproject", "swift-oak");
+    expect(vi.mocked(writeWorkerCleanupRequest)).toHaveBeenCalled();
   });
 });
 

@@ -1,7 +1,7 @@
 // Worker lifecycle: creation and destruction of Claude worker sessions.
 import path from "node:path";
 import fs from "node:fs";
-import { DASHBOARD_SESSION } from "../session.js";
+import { DASHBOARD_SESSION, dashboardReach } from "../session.js";
 import { getProject, tryGetProject, loadConfig, plotsMap, type ProjectConfig } from "../config.js";
 import {
   syncProviderTokenToVault, providerTokenPresence, tmuxWorkerCommand,
@@ -1146,6 +1146,25 @@ function unclaimBeadOnRemoval(
 export function stopWorkerByName(projectName: string, workerName: string): void {
   if (!findWorkerByName(projectName, workerName)) {
     throw new Error(`No worker '${workerName}' in project '${projectName}'.`);
+  }
+  // Everything after the kill — the tombstone, the registry entry, the poll
+  // FIFO, the git cleanup — assumes the worker's panes are gone, and the kill
+  // is silent when tmux does not answer. A garden run inside an agent sandbox
+  // is denied the tmux socket yet may still write the registry, so going on
+  // there deletes the entry of a worker that keeps running (garden/
+  // weak-tough-lynx, 2026-09-17). A dashboard that tmux reports absent has no
+  // panes left to kill, so that removal goes ahead.
+  const reach = dashboardReach();
+  if (reach.state === "unreachable") {
+    log.warn("workers", "stop refused: tmux did not answer", {
+      worker: workerName,
+      data: { project: projectName, error: reach.detail },
+    });
+    throw new Error(
+      `Did not stop ${projectName}/${workerName}: tmux did not answer (${reach.detail}), `
+      + `so its panes cannot be killed or confirmed gone. Nothing was changed. `
+      + `Run \`garden workers stop ${workerName}\` from your own shell, outside any agent sandbox.`,
+    );
   }
   // Resolve active-vs-parked and kill the requested pane from the same locked
   // state snapshot. A focus change must never retarget this destructive verb.
