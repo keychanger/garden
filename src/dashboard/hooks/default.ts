@@ -607,8 +607,10 @@ function claudeTranscriptPath(ctx: HookContext): string | undefined {
   return typeof tp === "string" && tp ? tp : entry.transcriptPath;
 }
 
-// Fed by both Notification and the PreToolUse matchers (AskUserQuestion /
-// ExitPlanMode) — the two wire events signal the same condition.
+// Fed by PermissionRequest and the AskUserQuestion / ExitPlanMode PreToolUse
+// matchers, all routed as `pretooluse` (Codex relays its PermissionRequest
+// the same way), plus the dispatcher's `notification` route, which garden no
+// longer registers for claude-code: each signals a dialog waiting on the operator.
 const onBlockedOnOperator: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
   // A subagent's request still blocks the worker (isOtherThread's note);
