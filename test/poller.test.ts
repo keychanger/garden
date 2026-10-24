@@ -51,6 +51,8 @@ vi.mock("node:fs", () => ({
       if (content !== undefined) fsContents.set(to, content);
       fsContents.delete(from);
     }),
+    // The review backoff re-poke dates its marker to the poke's deadline.
+    utimesSync: vi.fn((p: string, _atime: Date, mtime: Date) => { fsMtimes.set(p, mtime.getTime()); }),
     readdirSync: vi.fn(() => []),
     constants: { O_CREAT: 0, O_EXCL: 0, O_WRONLY: 0 },
   },
@@ -384,6 +386,7 @@ beforeEach(() => {
   // Same for the review re-poke dedup markers, which live in the control tree.
   try { fs.rmSync(path.join(CONTROL_DIR, "review-cap-recheck-myproject")); } catch { /* not armed */ }
   try { fs.rmSync(path.join(CONTROL_DIR, "review-retry-recheck-myproject")); } catch { /* not armed */ }
+  try { fs.rmSync(path.join(CONTROL_DIR, "review-backoff-recheck-myproject")); } catch { /* not armed */ }
   // And the CI gate's check-run stamp, so no test inherits "this project has CI".
   try { fs.rmSync(path.join(CONTROL_DIR, "ci-seen-myproject")); } catch { /* never seen */ }
   // Re-establish factory defaults after reset
@@ -800,6 +803,73 @@ describe("poll — working state", () => {
     );
     // Re-schedules a delayed poke for the remaining time.
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", expect.any(Number));
+  });
+
+  // Every poke re-runs the backoff gate, and it armed a re-poke each time: one
+  // sleeper per backed-off worker per poll, all firing together when the
+  // backoff ran out. One outstanding poke, due at the earliest deadline, covers
+  // every worker; when it fires, a worker still backed off arms its own.
+  it("arms one backoff re-poke per project, due at the earliest deadline, across polls", () => {
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      registryMock._setEntries("myproject", [
+        makeWorker({
+          prState: "working", agentStatus: "idle", pendingReviewAt: t0,
+          reviewRetryCount: 1, reviewRetryAt: t0 + 60_000,
+        }),
+        makeWorker({
+          name: "calm-fen", branchName: "calm-fen", worktreePath: "/tmp/wt/myproject/calm-fen",
+          prState: "working", agentStatus: "idle", pendingReviewAt: t0,
+          reviewRetryCount: 1, reviewRetryAt: t0 + 150_000,
+        }),
+      ]);
+      const backoffPokes = () => vi.mocked(scheduleDelayedPoke).mock.calls.filter(c => c[1] < 1_000_000);
+
+      // Two backed-off workers, two polls (each its own process in production).
+      poll("myproject");
+      __simulatePollerRestartForTest();
+      nowSpy.mockReturnValue(t0 + 10_000);
+      poll("myproject");
+      expect(backoffPokes()).toEqual([["myproject", 60_000]]);
+
+      // The armed poke has fired: bold-ash's review launches, and calm-fen,
+      // still backed off, arms the poke for its own deadline.
+      nowSpy.mockReturnValue(t0 + 60_000);
+      poll("myproject");
+      expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("reviewing");
+      expect(backoffPokes()).toEqual([["myproject", 60_000], ["myproject", 90_000]]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("a backoff due before the armed re-poke arms its own instead of waiting", () => {
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      registryMock._setEntries("myproject", [
+        makeWorker({
+          name: "calm-fen", branchName: "calm-fen", worktreePath: "/tmp/wt/myproject/calm-fen",
+          prState: "working", agentStatus: "idle", pendingReviewAt: t0,
+          reviewRetryCount: 1, reviewRetryAt: t0 + 150_000,
+        }),
+        makeWorker({
+          prState: "working", agentStatus: "idle", pendingReviewAt: t0,
+          reviewRetryCount: 1, reviewRetryAt: t0 + 60_000,
+        }),
+      ]);
+      const backoffPokes = () => vi.mocked(scheduleDelayedPoke).mock.calls.filter(c => c[1] < 1_000_000);
+
+      poll("myproject");
+      __simulatePollerRestartForTest();
+      nowSpy.mockReturnValue(t0 + 10_000);
+      poll("myproject");
+
+      expect(backoffPokes()).toEqual([["myproject", 150_000], ["myproject", 60_000]]);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("clears pendingReviewAt and a stale blocked reason when commits no longer exist", () => {

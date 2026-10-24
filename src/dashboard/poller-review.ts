@@ -187,10 +187,10 @@ export function handleWorking(
   // delayed poke at reviewRetryAt, but the FIFO can also be poked by sibling
   // events (another worker's Stop hook, an operator kick) before the backoff
   // elapses. Without this check, an early poke would launch the review
-  // immediately and burn the budget on the same transient outage.
+  // immediately and burn the budget on the same transient outage. Every poke
+  // re-runs this gate, so its re-poke is deduped like the cap's.
   if (entry.reviewRetryAt && entry.reviewRetryAt > Date.now()) {
-    const remaining = entry.reviewRetryAt - Date.now();
-    scheduleDelayedPoke(projectName, remaining);
+    armReviewBackoffRecheck(projectName, entry.reviewRetryAt);
     return false;
   }
 
@@ -1587,6 +1587,33 @@ function armReviewRecheck(projectName: string, kind: "cap" | "retry"): void {
     });
   }
   scheduleDelayedPoke(projectName, delayMs);
+}
+
+// The backoff gate's re-poke, deduped per project like armReviewRecheck. Its
+// delay is the time left to a worker's reviewRetryAt rather than a fixed
+// cadence, so the marker's MTIME is set to the deadline its poke is due at. A
+// poke still outstanding and due no later than this deadline re-runs the gate
+// first, and the gate arms the next one then. Armed per poll instead, the
+// sleepers stacked up and all fired together when the backoff (up to 15 min
+// on a quota wait) ran out. A marker that cannot be read or written arms the
+// poke anyway.
+function armReviewBackoffRecheck(projectName: string, dueAt: number): void {
+  const marker = path.join(CONTROL_DIR, `review-backoff-recheck-${projectName}`);
+  try {
+    const armedFor = fs.statSync(marker).mtimeMs;
+    if (armedFor > Date.now() && armedFor <= dueAt) return;
+  } catch {
+    // No marker yet (or unreadable): nothing is armed.
+  }
+  try {
+    atomicWriteFile(marker, "", { durable: false });
+    fs.utimesSync(marker, new Date(dueAt), new Date(dueAt));
+  } catch (err) {
+    log.warn("poller", "review recheck marker unwritten", {
+      data: { project: projectName, kind: "backoff", error: String(err) },
+    });
+  }
+  scheduleDelayedPoke(projectName, dueAt - Date.now());
 }
 
 function launchReview(
