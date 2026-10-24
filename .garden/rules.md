@@ -54,6 +54,6 @@ These extend the global rules in `<garden-repo>/rules.md`.
 
 - Updating tests and documentation for code you changed is part of the task, not adjacent
   work. Do not skip it for scope reasons.
-- If your changes affect commands, flags, file layout, or architecture, update both DESIGN.md and CLAUDE.md.
+- If your changes affect commands, flags, file layout, or architecture, update DESIGN.md. Update AGENTS.md only when the module map, a command group, a convention, or an "Adding X" checklist changes: one line per module, no rationale or incident history (test/agents-md-size.test.ts holds it under 40,000 characters).
 - If your changes affect agent behavior or workflow, update rules.md.
-- DESIGN.md is the spec. CLAUDE.md is the quick-start for Claude sessions. Keep them in sync but not redundant.
+- DESIGN.md is the spec. AGENTS.md (CLAUDE.md is its `@AGENTS.md` import) is the map every agent session loads. Keep them in sync but not redundant: depth lives in DESIGN.md, AGENTS.md points at it.
