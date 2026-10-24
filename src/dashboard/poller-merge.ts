@@ -247,6 +247,14 @@ export function handleMergePending(
   // re-pokes on turn end, and the watchdog backstops a lost poke since
   // merge-pending is a watched state. Logged at info: a merge held by an agent
   // whose turn never ends (a missed Stop) otherwise leaves no trace.
+  //
+  // Pending background tasks (WorkerEntry.backgroundTasks) deliberately do not
+  // count as busy, as docs/STATUS.md "Delegated background work" specifies. A
+  // run_in_background dev server or watcher can outlive every turn, so waiting
+  // on them could hold this merge, and every younger one queued behind it,
+  // indefinitely. What such a process writes to a tracked file fires no hook
+  // and sets no review-interrupt mark, so cleanWorktree below discards it,
+  // saved first as a patch that `git apply` restores.
   if (isWorkerClaudeWorking(projectName, entry.name)) {
     log.info("poller", "merge deferred: worker active in worktree", {
       worker: entry.name,

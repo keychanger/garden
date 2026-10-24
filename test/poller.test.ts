@@ -3685,6 +3685,25 @@ describe("poll — merge-pending state", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", { mergeReadySha: "abc123" });
   });
 
+  // A decision, not an oversight (see handleMergePending's busy check): a
+  // run_in_background dev server or watcher can outlive every turn, so waiting
+  // on pending background tasks could hold the merge indefinitely.
+  it("merges a worker whose turn left background tasks running", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending", agentStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        backgroundTasks: { transcriptPath: "/tmp/transcript.jsonl", offset: 1024, pending: ["bash_1"] },
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "bold-ash", "main", expect.anything());
+  });
+
   // In-flight entries from before the stamp existed must not all bounce back
   // to review the moment the new code deploys.
   it("merges an entry written before mergeReadySha existed", () => {
