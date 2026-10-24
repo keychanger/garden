@@ -1178,6 +1178,37 @@ export function hasCommitsAhead(wtPath: string, baseBranch: string): boolean | n
   }
 }
 
+// Commits a worker's removal would delete that origin/<base> does not hold:
+// those on its branch, on origin's copy of the branch (read from the local
+// tracking ref), and on its worktree HEAD, which a rebase leaves detached.
+// Null when git cannot say, including when origin/<base> is missing, so a
+// caller deciding whether a removal is safe can fail closed.
+export function countUnlandedCommits(
+  repoPath: string,
+  wtPath: string | null,
+  branch: string,
+  baseBranch: string,
+): number | null {
+  if (!isValidBranchName(branch) || !isValidBranchName(baseBranch)) return null;
+  const base = remoteBranchRef(baseBranch);
+  if (!resolveCommitSha(repoPath, base)) return null;
+  // A tip that does not exist (a branch never pushed, or deleted by hand)
+  // holds nothing to lose, so --ignore-missing drops it; the trailing -- keeps
+  // git from reading a missing ref as a path.
+  const tips = [...(wtPath ? ["HEAD"] : []), branchRef(branch), remoteBranchRef(branch)];
+  try {
+    const out = runGit(
+      wtPath ?? repoPath,
+      ["rev-list", "--count", "--ignore-missing", "--end-of-options", ...tips, `^${base}`, "--"],
+      { timeout: 10_000 },
+    ).trim();
+    const n = Number.parseInt(out, 10);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
 export function getNewCommitSummary(wtPath: string, sinceSha: string | undefined): string {
   if (!sinceSha) return "";
   try {

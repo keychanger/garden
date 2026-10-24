@@ -94,8 +94,13 @@ import {
 import {
   intakeStampPath, intakePokePath, writeIntakeError, clearIntakeError,
 } from "./intake-paths.js";
-import { getWorkers, updateWorkerTask, type WorkerEntry } from "./registry.js";
+import {
+  getWorkers, updateWorkerFields, updateWorkerTask, type WorkerEntry,
+} from "./registry.js";
 import { newWorker, stopWorkerByName } from "./workers.js";
+import {
+  countUnlandedCommits, getWorkerBaseBranch, isWorktreeDirty, worktreeExists, worktreePath,
+} from "./git.js";
 import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { log } from "./log.js";
@@ -384,6 +389,13 @@ export interface IntakeDeps {
   // Remove a worker end-to-end (the `garden workers stop` back end); false
   // when the stop failed. The reconcile step is the only caller.
   stopWorker(name: string): boolean;
+  // What that removal would discard that has not landed, stated for the
+  // operator: commits its base lacks, or uncommitted changes. Null when there
+  // is none. A git failure is stated too, never read as nothing to lose.
+  unlandedWork(worker: WorkerEntry): string | null;
+  // Record on the worker that the operator was told its closed bead waits on
+  // that work, so later passes do not tell them again.
+  noteUnlandedNotice(worker: string, bead: string): void;
   workers(): WorkerEntry[];
   alert(input: Parameters<typeof addAlert>[0]): void;
   nowMs(): number;
@@ -579,19 +591,20 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
 
   // Reconcile (DELEGATION.md Decision 7): stop registry workers whose bead no
   // longer backs them. Closed bead: the intended lifecycle GC for
-  // background-spawned bead workers — this deliberately sweeps COMPLETED
-  // intake workers too (worker merges, closes its bead, goes done → the next
-  // pass retires it); the Decision-12 guard in the removal tail leaves a
-  // closed bead untouched, so retirement never disturbs the graph.
+  // background-spawned bead workers — it retires COMPLETED intake workers
+  // (worker merges, closes its bead, goes done → the next pass retires it),
+  // and only those: a worker whose work has not landed is kept (below). The
+  // Decision-12 guard in the removal tail leaves a closed bead untouched, so
+  // retirement never disturbs the graph.
   // Foreign-assigned bead: the operator's board-side recall — their claim is
   // the durable cancel marker, and the same guard preserves it. Keyed on
   // entry.bead (the registry→bd join), independent of the gated-epic set, so
   // handoff --bead workers reconcile too; and it runs BEFORE the governor
-  // count so a freed slot is usable in this same pass. Two guards: an
-  // UNASSIGNED bead is skipped (the worker's own claim may still be in flight
-  // after a failed post-spawn claim — not a recall), and workers in pipeline
-  // states are deferred, never yanked mid-headless-pipeline — the next pass
-  // catches them once they exit it.
+  // count so a freed slot is usable in this same pass. Two guards apply to
+  // both: an UNASSIGNED bead is skipped (the worker's own claim may still be
+  // in flight after a failed post-spawn claim — not a recall), and workers in
+  // pipeline states are deferred, never yanked mid-headless-pipeline — the
+  // next pass catches them once they exit it.
   const beadWorkers = workers.filter(w => w.bead);
   if (beadWorkers.length > 0) {
     const beadDetails = new Map(
@@ -621,6 +634,49 @@ export function runIntakeOnce(deps: IntakeDeps): boolean {
           data: { project: deps.projectName, bead: beadId, reason, prState },
         });
         continue;
+      }
+      // A closed bead's stop deletes the worker's branch, origin's copy of it,
+      // and its worktree, and a bead can close before its work merges: an
+      // agent's early `bd close`, the operator's x in board, a multi-merge
+      // worker closing after its first merge. prState cannot say whether the
+      // work landed (a merged worker that was auto-continued has new work), so
+      // git is asked, and a mid-turn agent may be writing as it answers, so it
+      // is left to finish first. A recall is not held: the operator's claim
+      // asks for the worker to stop, and its alert below says when that
+      // discards work.
+      if (closed) {
+        if (worker.agentStatus === "working") {
+          log.debug("intake", "bead reconcile deferred: worker is mid-turn", {
+            worker: worker.name,
+            data: { project: deps.projectName, bead: beadId },
+          });
+          continue;
+        }
+        const unlanded = deps.unlandedWork(worker);
+        if (unlanded !== null) {
+          log.debug("intake", "bead reconcile deferred: work not landed", {
+            worker: worker.name,
+            data: { project: deps.projectName, bead: beadId, unlanded },
+          });
+          // Once per closure: the condition can stand for days, and the
+          // alert dedup alone would repeat it every hour.
+          if (worker.unlandedNoticeBead !== beadId) {
+            deps.alert({
+              level: "warn",
+              source: "intake",
+              project: deps.projectName,
+              worker: worker.name,
+              message:
+                `Bead ${beadId} is closed, but worker '${worker.name}' was not removed: `
+                + `${unlanded}. Removing it deletes its branch and worktree, so garden `
+                + `waits until its work has landed. \`garden workers stop ${worker.name}\` `
+                + `removes it now.`,
+              dedupKey: `intake-unlanded:${deps.projectName}:${worker.name}`,
+            });
+            deps.noteUnlandedNotice(worker.name, beadId);
+          }
+          continue;
+        }
       }
       if (!deps.stopWorker(worker.name)) {
         log.warn("intake", "bead reconcile: failed to stop worker", {
@@ -1034,10 +1090,47 @@ function runIntakeOnceReal(projectName: string, project: ProjectConfig): boolean
         return false;
       }
     },
+    unlandedWork: (worker) => describeUnlandedWork(projectName, project.path, worker),
+    noteUnlandedNotice: (name, bead) => {
+      // Best-effort: a failed write repeats the notice, which the alert's
+      // dedup key holds to once an hour.
+      try {
+        updateWorkerFields(projectName, name, { unlandedNoticeBead: bead });
+      } catch (err) {
+        log.warn("intake", "could not record the unlanded-work notice", {
+          worker: name,
+          data: { project: projectName, bead, error: String(err) },
+        });
+      }
+    },
     workers: () => getWorkers(projectName),
     alert: addAlert,
     nowMs: () => Date.now(),
   });
+}
+
+// The unlandedWork dep: reads what the removal tail deletes — the branch named
+// after the worker, origin's copy of it, and the canonical worktree — never
+// the registry's worktreePath, so a moved or forged path cannot hide work the
+// cleanup would still delete. Returns the facts for the operator, or null.
+export function describeUnlandedWork(
+  projectName: string,
+  projectPath: string,
+  worker: WorkerEntry,
+): string | null {
+  const base = getWorkerBaseBranch(worker, projectPath);
+  const wt = worktreePath(projectName, worker.name);
+  const hasTree = worktreeExists(wt);
+  const commits = countUnlandedCommits(projectPath, hasTree ? wt : null, worker.name, base);
+  const dirty = hasTree ? isWorktreeDirty(wt) : false;
+  const facts: string[] = [];
+  // Only a count names the base: countUnlandedCommits checked it is a valid
+  // branch name first, and the base comes from the worker-writable registry.
+  if (commits === null) facts.push("git could not count its commits against its base");
+  else if (commits > 0) facts.push(`it has ${commits} commit${commits === 1 ? "" : "s"} not on origin/${base}`);
+  if (dirty === null) facts.push("git could not read its worktree");
+  else if (dirty) facts.push("its worktree has uncommitted changes");
+  return facts.length > 0 ? facts.join("; ") : null;
 }
 
 export function spawnBeadWorker(projectName: string, req: IntakeSpawnRequest): string | null {

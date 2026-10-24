@@ -443,6 +443,13 @@ export interface WorkerEntry {
   // before a hand-run handoff's claim lands. A top-level optional scalar —
   // no readRegistry migration (the crew/effort precedent).
   bead?: string;
+  // The closed bead whose reconcile the intake loop is holding off on because
+  // this worker still has work that has not landed (poller-intake.ts). Set
+  // when the operator is told, so they are told once rather than on every
+  // pass for as long as the work stays unlanded. Read only by that equality
+  // check, so no guard: a forged value can suppress or repeat the notice,
+  // never cause a removal.
+  unlandedNoticeBead?: string;
   // Workflow definition that drives this worker's poller lifecycle (state
   // machine and state handlers). Set to "default" by newWorker. Absent on
   // legacy entries from before the workflow registry shipped — poller

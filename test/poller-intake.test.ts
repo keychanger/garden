@@ -1,10 +1,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+
+// The real stop kills tmux windows and deletes the worktree; runBeadIntake's
+// real deps reach it, so it is observed rather than run.
+vi.mock("../src/dashboard/workers.js", () => ({
+  newWorker: vi.fn(() => null),
+  stopWorkerByName: vi.fn(),
 }));
 
 // runBeadIntake's real deps shell out to bd; the error-stamp tests drive the
@@ -29,15 +37,19 @@ vi.mock("../src/dashboard/beads.js", async (importOriginal) => ({
 
 import {
   parseDispatchState, retryCount, failedCount, shouldReap, shouldReapFailing,
-  isIntakeLive, buildBeadSeed, buildPlannerSeed,
+  isIntakeLive, buildBeadSeed, buildPlannerSeed, describeUnlandedWork,
   runIntakeOnce, runBeadIntake, intakeDue, intakeStampPath, intakePokePath,
   BREAKER_THRESHOLD, DEFAULT_BEAD_INTAKE_CAP, INTAKE_MIN_INTERVAL_MS, REAPER_GRACE_MS,
   type IntakeDeps, type IntakeSpawnRequest,
 } from "../src/dashboard/poller-intake.js";
 import { log } from "../src/dashboard/log.js";
 import { intakeErrorPath, readIntakeStatus } from "../src/dashboard/intake-paths.js";
-import type { BeadDetail, SwarmStatus } from "../src/dashboard/beads.js";
-import type { WorkerEntry } from "../src/dashboard/registry.js";
+import { showBeads, type BeadDetail, type SwarmStatus } from "../src/dashboard/beads.js";
+import {
+  addWorker, findWorkerByName, removeWorker, type WorkerEntry,
+} from "../src/dashboard/registry.js";
+import { worktreePath } from "../src/dashboard/git.js";
+import { stopWorkerByName } from "../src/dashboard/workers.js";
 
 function entry(over: Partial<WorkerEntry> & { name: string }): WorkerEntry {
   return { sessionId: "s", task: "", ...over };
@@ -323,6 +335,10 @@ interface FakeWorld {
   labelsAdded: Array<{ id: string; label: string }>;
   labelsRemoved: Array<{ id: string; label: string }>;
   alerts: Array<{ level: string; message: string; dedupKey?: string }>;
+  // unlandedWork's answer per worker name; a worker absent here has landed
+  // everything it did.
+  unlanded: Record<string, string>;
+  notices: Array<{ worker: string; bead: string }>;
   // Interleaved log of label writes and spawns, for ordering assertions
   // (the budget pre-charge must land before the spawn).
   ops: string[];
@@ -345,6 +361,8 @@ function makeWorld(over: Partial<FakeWorld> = {}): FakeWorld {
     labelsAdded: [],
     labelsRemoved: [],
     alerts: [],
+    unlanded: {},
+    notices: [],
     ops: [],
     ...over,
   };
@@ -379,6 +397,14 @@ function makeDeps(w: FakeWorld, over: Partial<IntakeDeps> = {}): IntakeDeps {
       w.stops.push(name);
       w.ops.push(`stop:${name}`);
       return w.stopResult;
+    },
+    unlandedWork: (worker) => w.unlanded[worker.name] ?? null,
+    noteUnlandedNotice: (name, beadId) => {
+      w.notices.push({ worker: name, bead: beadId });
+      // Persisted on the entry, as the registry write does, so a later pass
+      // reads it back.
+      const target = w.workers.find(e => e.name === name);
+      if (target) target.unlandedNoticeBead = beadId;
     },
     workers: () => w.workers,
     alert: (input) => {
@@ -1273,6 +1299,72 @@ describe("runIntakeOnce", () => {
     )).toBe(true);
   });
 
+  it.each(["working", "failing", "merged", "done"] as const)(
+    "reconcile keeps a closed-bead worker (%s) whose work has not landed, saying why once",
+    (prState) => {
+      // A bead closed before its worker's work merged: an agent's early
+      // `bd close`, or the operator's x in board. A stop deletes the branch
+      // and worktree, and prState does not say whether the work landed (a
+      // merged worker that was auto-continued holds new work again).
+      const w = makeWorld({
+        epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+        statuses: { e1: st() },
+        details: { b1: bead({ id: "b1", status: "closed", assignee: "w1" }) },
+        workers: [entry({ name: "w1", bead: "b1", prState, agentStatus: "idle" })],
+        unlanded: { w1: "it has 2 commits not on origin/main" },
+      });
+      const changed = runIntakeOnce(makeDeps(w));
+      expect(w.stops).toHaveLength(0);
+      expect(changed).toBe(false);
+      expect(w.alerts).toHaveLength(1);
+      expect(w.alerts[0].level).toBe("warn");
+      expect(w.alerts[0].dedupKey).toBe("intake-unlanded:board:w1");
+      expect(w.alerts[0].message).toContain("Bead b1 is closed");
+      expect(w.alerts[0].message).toContain("it has 2 commits not on origin/main");
+      expect(w.notices).toEqual([{ worker: "w1", bead: "b1" }]);
+
+      // Later passes keep it without telling the operator again.
+      runIntakeOnce(makeDeps(w));
+      expect(w.stops).toHaveLength(0);
+      expect(w.alerts).toHaveLength(1);
+      expect(w.notices).toHaveLength(1);
+    },
+  );
+
+  it("reconcile defers a closed-bead worker whose agent is mid-turn, saying nothing", () => {
+    // An integration worker closes its bead mid-turn, as its seed tells it
+    // to; the turn may still be writing to the worktree.
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st() },
+      details: { b1: bead({ id: "b1", status: "closed", assignee: "w1" }) },
+      workers: [entry({ name: "w1", bead: "b1", prState: "working", agentStatus: "working" })],
+    });
+    const changed = runIntakeOnce(makeDeps(w));
+    expect(w.stops).toHaveLength(0);
+    expect(changed).toBe(false);
+    expect(w.alerts).toHaveLength(0);
+  });
+
+  it("reconcile retires a kept closed-bead worker once its work lands", () => {
+    const w = makeWorld({
+      epics: [epic({ id: "e1", labels: ["dispatch:auto"] })],
+      statuses: { e1: st() },
+      details: { b1: bead({ id: "b1", status: "closed", assignee: "w1" }) },
+      workers: [entry({ name: "w1", bead: "b1", prState: "working", agentStatus: "idle" })],
+      unlanded: { w1: "its worktree has uncommitted changes" },
+    });
+    runIntakeOnce(makeDeps(w));
+    expect(w.stops).toHaveLength(0);
+
+    // Committed, reviewed and merged: nothing is left that a stop would lose.
+    delete w.unlanded.w1;
+    w.workers[0].prState = "done";
+    expect(runIntakeOnce(makeDeps(w))).toBe(true);
+    expect(w.stops).toEqual(["w1"]);
+    expect(w.alerts).toHaveLength(1);
+  });
+
   it("reconcile ignores workers without a bead field", () => {
     const w = makeWorld({
       epics: [epic({ id: "e1", labels: ["dispatch:dispatched"] })],
@@ -1316,7 +1408,8 @@ describe("runIntakeOnce", () => {
         b1: bead({ id: "b1", status: "closed", assignee: "w1" }),
         b2: bead({ id: "b2", title: "next" }),
       },
-      workers: [entry({ name: "w1", bead: "b1", prState: "working", agentStatus: "working" })],
+      // Idle with nothing unlanded, so the reconcile does reach the stop.
+      workers: [entry({ name: "w1", bead: "b1", prState: "working", agentStatus: "idle" })],
       stopResult: false,
     });
     runIntakeOnce(makeDeps(w, { cap: 1 }));
@@ -1343,7 +1436,8 @@ describe("runIntakeOnce", () => {
         b1: bead({ id: "b1", status: "closed", assignee: "w1" }),
         b2: bead({ id: "b2", title: "next" }),
       },
-      workers: [entry({ name: "w1", bead: "b1", prState: "working", agentStatus: "working" })],
+      // Its turn over and its work landed: the closed bead retires it.
+      workers: [entry({ name: "w1", bead: "b1", prState: "merged", agentStatus: "idle" })],
     });
     runIntakeOnce(makeDeps(w, { cap: 1 }));
     expect(w.stops).toEqual(["w1"]);
@@ -1594,5 +1688,127 @@ describe("runBeadIntake error stamp", () => {
     expect(runBeadIntake(project, { ...config })).toBe(false);
     expect(bd.listOpenEpics).not.toHaveBeenCalled();
     expect(readIntakeStatus(project).lastIntakeError).toContain("still broken");
+  });
+});
+
+// The closed-bead guard's real reads, against real git: the branch, origin's
+// copy of it, and the canonical worktree that a reconcile stop deletes.
+describe("describeUnlandedWork / reconcile against real git", () => {
+  let root: string;
+  let repo: string;
+  let project: string;
+  let wt: string;
+  let seq = 0;
+
+  function git(cwd: string, ...args: string[]): string {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  }
+
+  function commitFile(name: string): void {
+    fs.writeFileSync(path.join(wt, name), `${name}\n`);
+    git(wt, "add", name);
+    git(wt, "commit", "-q", "-m", name);
+  }
+
+  const w1 = (over: Partial<WorkerEntry> = {}): WorkerEntry =>
+    entry({ name: "w1", bead: "b1", baseBranch: "main", ...over });
+
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "intake-unlanded-")));
+    repo = path.join(root, "repo");
+    const origin = path.join(root, "origin.git");
+    git(root, "init", "-q", "--bare", "-b", "main", origin);
+    git(root, "init", "-q", "-b", "main", repo);
+    git(repo, "config", "user.email", "test@garden.local");
+    git(repo, "config", "user.name", "garden-test");
+    fs.writeFileSync(path.join(repo, "README.md"), "# test\n");
+    git(repo, "add", "README.md");
+    git(repo, "commit", "-q", "-m", "init");
+    git(repo, "remote", "add", "origin", origin);
+    git(repo, "push", "-q", "origin", "main");
+    project = `unlanded-${process.pid}-${++seq}`;
+    wt = worktreePath(project, "w1");
+    git(repo, "worktree", "add", "-q", "-b", "w1", wt, "refs/remotes/origin/main");
+  });
+
+  afterEach(() => {
+    fs.rmSync(path.dirname(wt), { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("finds nothing on a branch at its base with a clean worktree", () => {
+    expect(describeUnlandedWork(project, repo, w1())).toBeNull();
+  });
+
+  it("counts commits its base lacks, including ones only a detached HEAD holds", () => {
+    commitFile("a.txt");
+    expect(describeUnlandedWork(project, repo, w1())).toBe("it has 1 commit not on origin/main");
+    // A rebase leaves HEAD detached, on commits no branch names yet.
+    git(wt, "checkout", "-q", "--detach");
+    commitFile("b.txt");
+    expect(describeUnlandedWork(project, repo, w1())).toBe("it has 2 commits not on origin/main");
+  });
+
+  it("names uncommitted changes, tracked or new, but not garden's excluded files", () => {
+    // The bootstrap keeps garden's own sentinels out of git through info/exclude.
+    fs.appendFileSync(path.join(repo, ".git", "info", "exclude"), ".garden-done\n");
+    fs.writeFileSync(path.join(wt, ".garden-done"), "");
+    expect(describeUnlandedWork(project, repo, w1())).toBeNull();
+    fs.writeFileSync(path.join(wt, "new.txt"), "new\n");
+    expect(describeUnlandedWork(project, repo, w1())).toBe("its worktree has uncommitted changes");
+    fs.rmSync(path.join(wt, "new.txt"));
+    fs.appendFileSync(path.join(wt, "README.md"), "edit\n");
+    expect(describeUnlandedWork(project, repo, w1())).toBe("its worktree has uncommitted changes");
+  });
+
+  it("still counts the branch once its worktree is gone, then origin's copy of it", () => {
+    commitFile("a.txt");
+    git(wt, "push", "-q", "origin", "w1");
+    git(repo, "worktree", "remove", "--force", wt);
+    expect(describeUnlandedWork(project, repo, w1())).toBe("it has 1 commit not on origin/main");
+    // The cleanup deletes origin's branch too, so that copy counts on its own.
+    git(repo, "branch", "-D", "w1");
+    expect(describeUnlandedWork(project, repo, w1())).toBe("it has 1 commit not on origin/main");
+  });
+
+  it("finds nothing once the branch has merged to its base", () => {
+    commitFile("a.txt");
+    git(wt, "push", "-q", "origin", "HEAD:main");
+    expect(describeUnlandedWork(project, repo, w1())).toBeNull();
+  });
+
+  it("states a git failure rather than reading it as nothing to lose", () => {
+    expect(describeUnlandedWork(project, repo, w1({ baseBranch: "gone" })))
+      .toBe("git could not count its commits against its base");
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${path.join(root, "missing")}\n`);
+    expect(describeUnlandedWork(project, repo, w1()))
+      .toBe("git could not count its commits against its base; git could not read its worktree");
+  });
+
+  it("runBeadIntake keeps a closed-bead worker until its commit lands, then retires it", () => {
+    bd.listOpenEpics.mockReset();
+    bd.listOpenEpics.mockReturnValue([]);
+    vi.mocked(showBeads).mockReturnValue([bead({ id: "b1", status: "closed", assignee: "w1" })]);
+    vi.mocked(stopWorkerByName).mockClear();
+    fs.mkdirSync(path.dirname(intakeStampPath(project)), { recursive: true });
+    const config = { path: repo, beadIntake: true } as const;
+    addWorker(project, w1({ worktreePath: wt, branchName: "w1", agentStatus: "idle" }));
+    try {
+      commitFile("a.txt");
+      runBeadIntake(project, config);
+      expect(readIntakeStatus(project).lastIntakeError).toBeUndefined();
+      expect(stopWorkerByName).not.toHaveBeenCalled();
+      expect(findWorkerByName(project, "w1")?.unlandedNoticeBead).toBe("b1");
+
+      // The merge lands it on origin's base; the next pass retires it.
+      git(wt, "push", "-q", "origin", "HEAD:main");
+      fs.unlinkSync(intakeStampPath(project));
+      runBeadIntake(project, config);
+      expect(stopWorkerByName).toHaveBeenCalledWith(project, "w1");
+    } finally {
+      vi.mocked(showBeads).mockReset();
+      vi.mocked(showBeads).mockReturnValue([]);
+      removeWorker(project, "w1");
+    }
   });
 });
