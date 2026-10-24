@@ -297,8 +297,9 @@ export interface WorkerEntry {
   // CI-fix state (see poller-ci-fix.ts). preCiFixSha is the HEAD SHA captured
   // before the ci-fix agent launches; the poller verifies the agent actually
   // pushed by comparing post-agent HEAD against it. ciFixAttempts counts
-  // launches for the current merge; budget is 3, resets on worker push or
-  // successful merge. lastCiFixBody carries the agent's last output body for
+  // launches for the current merge; budget is 3, reset with the rest of
+  // FRESH_CI_FIX_CYCLE (cycle-resets.ts) on a worker push, a successful merge,
+  // or a park in `failing` from the ci-fix path. lastCiFixBody carries the agent's last output body for
   // alert text. failingCheckSummary is the formatted list of failed
   // check-runs (name + conclusion) seeded into the agent's prompt.
   preCiFixSha?: string;
