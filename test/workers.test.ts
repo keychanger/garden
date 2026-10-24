@@ -689,6 +689,57 @@ describe("newWorker", () => {
     expect(cmd).toContain("'/tmp/seed.txt'");
   });
 
+  // Everything after the pane exists is best-effort. A throw there used to skip
+  // the seed dispatch and report a spawn failure for a worker that was already
+  // running: the child of a handoff sat idle with no task, and ⌥n reported
+  // "New worker failed" for a worker on screen.
+  it.each([
+    ["the poller start", () => vi.mocked(ensureProjectPoller)],
+    ["the dashboard refresh", () => vi.mocked(refreshDashboard)],
+  ])("still seeds a live worker when %s throws, and reports it created", (_step, step) => {
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+    step().mockImplementationOnce(() => { throw new Error("lock timed out"); });
+
+    const name = newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
+
+    expect(name).toBe("bold-ash");
+    const seeded = vi.mocked(spawn).mock.calls.some(c =>
+      Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_seed-worker"));
+    expect(seeded).toBe(true);
+    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(killWindowSafe)).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the seed as soon as the pane is live, before the best-effort steps", () => {
+    // A dispatcher that dies between the pane and the seed leaves a live worker
+    // with no task, so the seed does not wait on telemetry, the poller, or the
+    // refresh.
+    vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });
+
+    newWorker({ projectName: "other", seedMessageFile: "/tmp/seed.txt", background: true });
+
+    const seedIndex = vi.mocked(spawn).mock.calls.findIndex(c =>
+      Array.isArray(c[1]) && (c[1] as string[])[1]?.includes("_seed-worker"));
+    const seededAt = vi.mocked(spawn).mock.invocationCallOrder[seedIndex];
+    expect(seededAt).toBeLessThan(vi.mocked(recordWorkerCreated).mock.invocationCallOrder[0]);
+    expect(seededAt).toBeLessThan(vi.mocked(ensureProjectPoller).mock.invocationCallOrder[0]);
+  });
+
+  it("does not tell the operator a visible new worker failed when the refresh after it throws", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(parkToHidden).mockReturnValue("%99");
+    vi.mocked(restoreFromHidden).mockImplementation((_name, state) => { state.activePaneId = "%10"; });
+    vi.mocked(refreshDashboard).mockImplementationOnce(() => { throw new Error("registry lock timed out"); });
+
+    newWorkerFromHotkey();
+
+    const failed = vi.mocked(tmuxDisplay).mock.calls.some(c => String(c[0]).startsWith("New worker failed"));
+    expect(failed).toBe(false);
+    expect(vi.mocked(removeWorker)).not.toHaveBeenCalled();
+  });
+
   it("rolls back the registry entry when newDashboardWindowPaned throws so a sandbox-blocked spawn doesn't leave a ghost", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ activeProject: "myproject" }));
     vi.mocked(tryGetProject).mockReturnValueOnce({ name: "other", path: "/repo/other" });

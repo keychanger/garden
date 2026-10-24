@@ -812,6 +812,13 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     data: { project: targetProject, branch: branchName, model: effectiveModel, background },
   });
 
+  // The pane is live from here on, so nothing below may abort the spawn: a
+  // throw would skip the seed and report a failure for a worker that is
+  // running. The seed goes first, and the steps after it are best-effort.
+  if (opts.seedMessageFile) {
+    dispatchDelayedSeed(gardenRunner, targetProject, workerName, opts.seedMessageFile);
+  }
+
   // Ledger the launch now that the pane has actually spawned — emitting
   // before the pane-creation try/catch above would leave a phantom
   // worker.created in the append-only (never-truncated) ledger whenever that
@@ -857,12 +864,23 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     });
   }
 
-  ensureProjectPoller(targetProject, gardenRunner);
-
-  refreshDashboard({ state: stateForRefresh });
-
-  if (opts.seedMessageFile) {
-    dispatchDelayedSeed(gardenRunner, targetProject, workerName, opts.seedMessageFile);
+  // The watchdog starts a missing poller on its next tick, and the next event
+  // repaints the dashboard.
+  try {
+    ensureProjectPoller(targetProject, gardenRunner);
+  } catch (err) {
+    log.warn("workers", "poller start failed after spawn", {
+      worker: workerName,
+      data: { project: targetProject, error: String(err) },
+    });
+  }
+  try {
+    refreshDashboard({ state: stateForRefresh });
+  } catch (err) {
+    log.warn("workers", "dashboard refresh failed after spawn", {
+      worker: workerName,
+      data: { project: targetProject, error: String(err) },
+    });
   }
 
   return workerName;
