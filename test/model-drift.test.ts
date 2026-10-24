@@ -268,6 +268,34 @@ describe("sweepWorkerModels", () => {
     expect(hasModelDrift(workers.garden[0])).toBe(false);
   });
 
+  it("answers a context-suffixed claude-code pin in its own vocabulary", () => {
+    // Ultracode pins `opus[1m]`; the transcript records the bare id. Every
+    // healthy ultracode worker logged drift (2026-10-01: five wolf workers).
+    workers.garden = [
+      worker({ name: "ultra", harness: "claude-code", model: "opus[1m]",
+        transcriptPath: transcript("ultra", ["claude-opus-5-5"]) }),
+      worker({ name: "pinned", harness: "claude-code", model: "claude-opus-5-5[1m]",
+        transcriptPath: transcript("pinned-1m", ["claude-opus-5-5"]) }),
+    ];
+
+    expect(sweepWorkerModels({ workers } as never)).toBe(2);
+    expect(workers.garden.map(w => w.runningModel)).toEqual(["opus[1m]", "claude-opus-5-5[1m]"]);
+    expect(workers.garden.some(hasModelDrift)).toBe(false);
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("still catches a substitution behind a context-suffixed concrete pin", () => {
+    workers.garden = [worker({
+      harness: "claude-code",
+      model: "claude-opus-4-6[1m]",
+      transcriptPath: transcript("concrete-1m-drift", ["claude-opus-4-5"]),
+    })];
+
+    expect(sweepWorkerModels({ workers } as never)).toBe(1);
+    expect(workers.garden[0].runningModel).toBe("claude-opus-4-5");
+    expect(hasModelDrift(workers.garden[0])).toBe(true);
+  });
+
   it("catches a claude-code worker running a different family than its pin", () => {
     // 2026-09-09: four live workers launched `claude --rc --model opus` whose
     // transcripts report claude-fable-5-1 from their first assistant message.

@@ -182,12 +182,15 @@ export const claudeCodeCore: HarnessCore = {
     if (!family) return null;
     const pin = entry.model;
     if (!pin) return family;
-    const alias = modelAlias(pin);
+    // A bracketed suffix (`opus[1m]`, ultracode's pin) picks a context window,
+    // not a model, and the transcript records the id without it.
+    const bare = pin.replace(/\[[^\]]*\]$/, "");
+    const alias = modelAlias(bare);
     if (alias) return alias === family ? pin : family;
     // Only aliases may compare at family granularity. A concrete pin must
     // remain exact: treating `claude-opus-4-6` and `claude-opus-4-5` as the
     // same model would hide a real substitution within the Opus family.
-    return observed === pin ? pin : observed;
+    return observed === bare ? pin : observed;
   },
 };
 
