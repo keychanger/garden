@@ -795,25 +795,15 @@ export function loadConfig(): GardenConfig {
   }
   const parsed = (loaded as GardenConfig | null) ?? { projects: {} };
   if (!parsed.projects) parsed.projects = {};
-  let dirty = false;
-  if (migratePlots(parsed)) dirty = true;
-  if (migrateLogColors(parsed)) dirty = true;
-  if (dirty) {
-    // loadConfig is a read path — hotkey plot cycling, the poller, and every
-    // command call it — so a bare unlocked save here turns every reader into a
-    // writer that can clobber a concurrent operator or poller config write
-    // (e.g. the poller's auto-continue threshold trip). Persist the one-time,
-    // idempotent migration only when the config lock is free, and skip on
-    // contention: it re-runs harmlessly on the next load, and whoever holds the
-    // lock persists the migrated shape via its own save. The short deadline also
-    // avoids a re-entrant self-deadlock when loadConfig runs inside a
-    // withConfigLock'd mutation (setAutoContinueConfig / setLogsMode).
-    try {
-      withFileLock(CONFIG_LOCK_FILE, () => saveConfig(parsed), { deadlineMs: 250, name: "config-migrate" });
-    } catch {
-      /* lock contended or self-held — migration persists on a later load */
-    }
-  }
+  // Migrate in memory only; the next mutateConfig persists the result, since
+  // it saves what it loaded under the lock. Saving here made every reader a
+  // writer of a snapshot read outside the lock: it reverted a mutation that
+  // committed after the read, and it persisted a file caught mid-rewrite by
+  // an editor that truncates in place (an empty file has no plots, so it
+  // always migrates), replacing the whole config. Both migrations are
+  // deterministic, so every reader computes the same result meanwhile.
+  migratePlots(parsed);
+  migrateLogColors(parsed);
   return parsed;
 }
 

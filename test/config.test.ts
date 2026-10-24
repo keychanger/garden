@@ -81,6 +81,55 @@ describe("mutateConfig", () => {
   });
 });
 
+// Every hook, poller and command reads the config. A read that saved its
+// migrations wrote back a snapshot taken outside the lock.
+describe("loadConfig writes nothing", () => {
+  it("leaves a file that needs migrating exactly as it found it", async () => {
+    const { loadConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    // An empty file, and the head of a config an editor is rewriting in place:
+    // neither has reached `plots:`, so both need migrating.
+    for (const content of ["", "projects:\n  a:\n    path: /a\n"]) {
+      fs.writeFileSync(CONFIG_PATH, content);
+      loadConfig();
+      expect(fs.readFileSync(CONFIG_PATH, "utf-8")).toBe(content);
+    }
+  });
+
+  it("does not revert a mutation that commits after it read the file", async () => {
+    const config = await importConfig();
+    fs.mkdirSync(config.GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(config.CONFIG_PATH, "projects:\n  a:\n    path: /a\n    logColor: cyan\n");
+    const realRead = fs.readFileSync;
+    let fired = false;
+    const spy = vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) => {
+      const out = realRead(...args);
+      if (!fired && args[0] === config.CONFIG_PATH) {
+        fired = true;
+        config.setAutoContinueConfig({ enabled: false });
+      }
+      return out;
+    }) as typeof fs.readFileSync);
+    try {
+      config.loadConfig();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(fired).toBe(true);
+    expect(config.getAutoContinueConfig().enabled).toBe(false);
+  });
+
+  it("leaves persisting its migrations to the next mutateConfig", async () => {
+    const { mutateConfig, GARDEN_DIR, CONFIG_PATH } = await importConfig();
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, "projects:\n  a:\n    path: /a\n");
+    mutateConfig(() => {});
+    const raw = fs.readFileSync(CONFIG_PATH, "utf-8");
+    expect(raw).toMatch(/^plots:/m);
+    expect(raw).toMatch(/logColor: /);
+  });
+});
+
 describe("getProject", () => {
   it("returns a registered project", async () => {
     const { getProject, saveConfig, GARDEN_DIR } = await importConfig();
