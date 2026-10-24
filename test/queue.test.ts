@@ -70,6 +70,19 @@ describe("garden queue", () => {
     expect(text).not.toMatch(/2\.\s+later\s+merging.*← next/);
   });
 
+  // The merge gate passes over a worker whose agent is mid-turn; it keeps its
+  // number, but the worker behind it is the one that merges next.
+  it("marks the earliest worker whose agent is not mid-turn as next", async () => {
+    h.registry = { workers: { p: [
+      w("later", { prState: "merge-pending", agentStatus: "idle", mergePendingAt: "2026-01-01T00:05:00Z" }),
+      w("earlier", { prState: "merge-pending", agentStatus: "working", mergePendingAt: "2026-01-01T00:01:00Z" }),
+    ] } };
+    const text = (await captureConsoleLog(() => queue([]))).map(strip).join("\n");
+    expect(text).toMatch(/1\.\s+earlier\s+merging/);
+    expect(text).not.toMatch(/1\.\s+earlier\s+merging.*← next/);
+    expect(text).toMatch(/2\.\s+later\s+merging.*← next/);
+  });
+
   it("shows CI markers for ci-fixing and failing-ci rows", async () => {
     h.registry = { workers: { p: [
       w("fixing", { prState: "ci-fixing", ciFixAttempts: 2 }),

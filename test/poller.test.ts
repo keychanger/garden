@@ -3224,6 +3224,41 @@ describe("poll — merge-pending state", () => {
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
+  // wolf, 2026-09-23: stark-dense-oath went merge-pending, was prompted, and
+  // stayed mid-turn for 90 min. green-gaunt-bolt reached merge-pending behind it
+  // and waited 43 min, though nothing stopped it merging: the older worker's own
+  // deferral held the whole queue.
+  it("merges a younger worker past an older one whose agent is mid-turn", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        name: "stark-dense-oath", worktreePath: "/tmp/wt/myproject/stark-dense-oath", branchName: "stark-dense-oath",
+        prState: "merge-pending", agentStatus: "working",
+        mergePendingAt: new Date(Date.now() - 60 * 60_000).toISOString(),
+      }),
+      makeWorker({
+        name: "green-gaunt-bolt", worktreePath: "/tmp/wt/myproject/green-gaunt-bolt", branchName: "green-gaunt-bolt",
+        prState: "merge-pending", agentStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalledTimes(1);
+    expect(mergeToBase).toHaveBeenCalledWith("/repo/myproject", "green-gaunt-bolt", "main", expect.anything());
+    // The busy worker keeps its place: it goes first once its turn ends.
+    expect(findWorkerByName("myproject", "stark-dense-oath")).toMatchObject({
+      prState: "merge-pending", mergePendingAt: expect.any(String),
+    });
+    // The configured log level drops debug, so a defer logged there left no trace.
+    expect(log.info).toHaveBeenCalledWith("poller", "merge deferred: worker active in worktree", {
+      worker: "stark-dense-oath",
+      data: { project: "myproject" },
+    });
+  });
+
   it("merges when HEAD is the SHA cleared for merge, and clears the rebased tip", () => {
     registryMock._setEntries("myproject", [
       makeWorker({

@@ -2,9 +2,9 @@
 // post-merge auto-continue gate, postMerge command execution, sibling
 // notification.
 //
-// The serial merge gate (only the earliest mergePendingAt worker proceeds)
-// lives here. When a rebase conflict appears, control transfers to the
-// resolver lifecycle in poller-resolve.ts.
+// The serial merge gate (the earliest mergePendingAt worker whose agent is not
+// mid-turn proceeds) lives here. When a rebase conflict appears, control
+// transfers to the resolver lifecycle in poller-resolve.ts.
 import { execSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -150,11 +150,15 @@ export function handleMergePending(
   baseBranch: string,
   entry: WorkerEntry,
 ): boolean {
-  // Serial merge gate: only the earliest merge-pending worker proceeds
+  // Serial merge gate: the earliest merge-pending worker proceeds, passing over
+  // one whose agent is mid-turn. That worker defers below until its turn ends,
+  // which can take hours, and waiting on it held every younger merge in the
+  // project for as long. It keeps its place, so it goes first once idle.
   const projectWorkers = getWorkers(projectName);
   const olderPending = projectWorkers.some(w =>
     w.name !== entry.name &&
     w.prState === "merge-pending" &&
+    w.agentStatus !== "working" &&
     (w.mergePendingAt ?? "") < (entry.mergePendingAt ?? ""),
   );
   if (olderPending) return false;
@@ -197,9 +201,10 @@ export function handleMergePending(
   // identical shared-worktree hazard. Defer past the resume check (an
   // already-pushed merge is safe to finalize regardless): the worker's Stop hook
   // re-pokes on turn end, and the watchdog backstops a lost poke since
-  // merge-pending is a watched state.
+  // merge-pending is a watched state. Logged at info: a merge held by an agent
+  // whose turn never ends (a missed Stop) otherwise leaves no trace.
   if (isWorkerClaudeWorking(projectName, entry.name)) {
-    log.debug("poller", "merge deferred: worker active in worktree", {
+    log.info("poller", "merge deferred: worker active in worktree", {
       worker: entry.name,
       data: { project: projectName },
     });

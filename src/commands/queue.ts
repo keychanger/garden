@@ -20,7 +20,8 @@ interface QueueRow {
   state: string;       // display state ("merging" for merge-pending)
   prState: string;
   sinceMs: number | null;
-  queuePos?: number;   // 1-based serial position for merge-pending (1 merges next)
+  queuePos?: number;   // 1-based serial position for merge-pending
+  next?: boolean;      // the merge-pending worker the gate takes next
   ci?: string;         // CI marker for ci-fixing / failing-ci rows
 }
 
@@ -40,12 +41,14 @@ function ciMarker(e: WorkerEntry): string | undefined {
 
 function buildRows(entries: WorkerEntry[], now: number): QueueRow[] {
   const pipeline = entries.filter(isPipeline);
-  // Serial merge order: merge-pending workers by mergePendingAt ascending
-  // (earliest merges first) — the poller's own gate ordering.
-  const mergeOrder = pipeline
+  // Serial merge order: merge-pending workers by mergePendingAt ascending —
+  // the poller's own gate ordering, which passes over a worker whose agent is
+  // mid-turn, so the earliest one that is not merges next.
+  const pending = pipeline
     .filter(e => e.prState === "merge-pending")
-    .sort((a, b) => (a.mergePendingAt ?? "").localeCompare(b.mergePendingAt ?? ""))
-    .map(e => e.name);
+    .sort((a, b) => (a.mergePendingAt ?? "").localeCompare(b.mergePendingAt ?? ""));
+  const mergeOrder = pending.map(e => e.name);
+  const nextName = pending.find(e => e.agentStatus !== "working")?.name;
 
   return pipeline
     .map(e => {
@@ -56,6 +59,7 @@ function buildRows(entries: WorkerEntry[], now: number): QueueRow[] {
         prState: e.prState!,
         sinceMs: e.lastStateChangeAt !== undefined ? now - e.lastStateChangeAt : null,
         queuePos: pos,
+        next: e.prState === "merge-pending" && e.name === nextName ? true : undefined,
         ci: ciMarker(e),
       };
     })
@@ -102,7 +106,7 @@ export async function queue(args: string[]): Promise<void> {
       // padStart to a stable width so a two-digit queue position (10+ workers
       // in merge-pending at once) doesn't shift the name column right by one.
       const pos = (r.queuePos ? `${r.queuePos}.` : "").padStart(3);
-      const next = r.queuePos === 1 ? " \x1b[2m← next\x1b[0m" : "";
+      const next = r.next ? " \x1b[2m← next\x1b[0m" : "";
       // Pad the visible age (not the ANSI-wrapped string) so the CI column lines up.
       const since = `\x1b[2m${(r.sinceMs !== null ? formatAgo(r.sinceMs) : "").padEnd(4)}\x1b[0m`;
       const ci = r.ci ? `  ${colorCi(r.ci)}` : "";
