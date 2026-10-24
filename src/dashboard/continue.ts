@@ -464,10 +464,18 @@ export function paneHasBlockingOperatorDraft(
 // What currently blocks a paste into the worker's input box, if anything. Used
 // by the backoff re-arm to tell a draft- or menu-deferred skip apart from the
 // other skip reasons (no pane, agent mid-turn) that should not retry on this loop.
-export function workerInputBlocker(projectName: string, workerName: string): InputBlocker | null {
+// Given the worker's entry, garden's own stuck paste is not a blocker: the
+// continue path submits it rather than waiting on it (isOwnStuckPaste).
+export function workerInputBlocker(
+  projectName: string,
+  workerName: string,
+  entry?: { continueSentAt?: number },
+): InputBlocker | null {
   const paneId = resolveWorkerPaneId(projectName, workerName);
   if (!paneId) return null;
-  return inputBlocker(readPaneInput(paneId));
+  const input = readPaneInput(paneId);
+  if (entry && !input.menu && isOwnStuckPaste(entry, input.text)) return null;
+  return inputBlocker(input);
 }
 
 // Re-arm a deferred auto-continue after DRAFT_BACKOFF_MS when — and only when —

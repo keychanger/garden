@@ -101,7 +101,7 @@ import {
   donePath, isDoneSet, clearDoneSentinel,
   awaitingInputPath, isAwaitingInput, setAwaitingInput, clearAwaitingInput,
   extractOperatorDraft, extractDraftInfo, isOwnStuckPaste,
-  paneHasBlockingOperatorDraft, rearmContinueIfDrafting,
+  paneHasBlockingOperatorDraft, rearmContinueIfDrafting, workerInputBlocker,
 } from "../src/dashboard/continue.js";
 import { readDashState } from "../src/dashboard/state.js";
 import { findWorkerByName, updateWorkerFields } from "../src/dashboard/registry.js";
@@ -807,6 +807,24 @@ describe("paneHasBlockingOperatorDraft", () => {
     vi.mocked(capturePaneText).mockReturnValue(PARKED_CARET_SUGGESTION_BOX);
     vi.mocked(capturePaneCursor).mockReturnValue(PARKED_CARET);
     expect(paneHasBlockingOperatorDraft("%9", {})).toBe(false);
+  });
+});
+
+describe("workerInputBlocker", () => {
+  it("reports an operator draft or an open menu", () => {
+    vi.mocked(capturePaneText).mockReturnValue(DRAFT_BOX);
+    expect(workerInputBlocker("myproject", "bold-ash", { continueSentAt: 123 })).toBe("operator draft");
+
+    vi.mocked(capturePaneText).mockReturnValue(CODEX_MENU_BOX);
+    vi.mocked(capturePaneCursor).mockReturnValue(CODEX_MENU_CARET);
+    expect(workerInputBlocker("myproject", "bold-ash", { continueSentAt: 123 })).toBe("selection menu");
+  });
+
+  it("given the entry, does not count garden's own stuck paste, which the continue path submits", () => {
+    vi.mocked(capturePaneText).mockReturnValue(STUCK_PLACEHOLDER_BOX);
+    expect(workerInputBlocker("myproject", "bold-ash", { continueSentAt: 123 })).toBeNull();
+    // Without the entry (the re-arm and sibling-notice callers) it still blocks.
+    expect(workerInputBlocker("myproject", "bold-ash")).toBe("operator draft");
   });
 });
 

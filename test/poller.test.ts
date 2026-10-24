@@ -3582,6 +3582,28 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  it("dispatches the merge-time continue into a drafting pane, whose own re-arm waits", () => {
+    // Only the sweep holds back for a draft. The one merge-time chain is what
+    // delivers within seconds of a draft the operator abandons.
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+    vi.mocked(isDoneSet).mockReturnValue(false);
+    vi.mocked(workerInputBlocker).mockReturnValue("operator draft");
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).toHaveBeenCalledWith(
+      expect.any(String), "myproject", "bold-ash",
+    );
+  });
+
   it("sets prState=done (not merged) and skips auto-continue when .garden-done is set at merge time", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
@@ -6221,6 +6243,30 @@ describe("poll — merged state", () => {
     poll("myproject");
 
     expect(dispatchDelayedAutoContinue).toHaveBeenCalled();
+  });
+
+  it("sweep does not dispatch while the operator has a draft in the box", () => {
+    // Every dispatch's paste found the draft and started its own 15-step
+    // re-arm chain (12s apart), so each poke past the stranded window added
+    // another chain of detached CLI starts for a worker driven by hand.
+    vi.mocked(workerInputBlocker).mockReturnValue("operator draft");
+    registryMock._setEntries("myproject", [
+      strandedWorker({ lastAutoContinueAt: Date.now() - 61_000 }),
+    ]);
+
+    poll("myproject");
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).not.toHaveBeenCalled();
+    // The worker's entry is passed so garden's own stuck paste, which the
+    // continue path submits rather than waits on, does not count as a draft.
+    expect(workerInputBlocker).toHaveBeenCalledWith(
+      "myproject", "bold-ash", expect.objectContaining({ name: "bold-ash" }),
+    );
+    const stamped = vi.mocked(updateWorkerFields).mock.calls.some(
+      c => (c[2] as Record<string, unknown>).lastAutoContinueAt !== undefined,
+    );
+    expect(stamped).toBe(false);
   });
 
   it("sweep skips done-sentinel workers", () => {

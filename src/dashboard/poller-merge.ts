@@ -1073,6 +1073,21 @@ function maybeAutoContinue(
       return true;
     }
   }
+  // Sweep only: a draft or menu in the box means the operator is driving this
+  // worker by hand. A dispatch would only find it too and start its own
+  // 3-minute re-arm chain (rearmContinueIfDrafting), one more chain per poke
+  // for as long as the draft sits there. The next poke after it clears
+  // dispatches; the merge-time dispatch keeps its single chain.
+  if (trigger === "sweep") {
+    const blocker = workerInputBlocker(projectName, entry.name, entry);
+    if (blocker) {
+      log.debug("poller", "auto-continue skipped", {
+        worker: entry.name,
+        data: { project: projectName, reason: blocker, trigger },
+      });
+      return false;
+    }
+  }
   updateWorkerFields(projectName, entry.name, { lastAutoContinueAt: Date.now() });
   log.info("poller", "auto-continued worker after merge", {
     worker: entry.name,
