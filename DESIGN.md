@@ -220,7 +220,7 @@ Hidden windows follow the convention: `_<project>-worker-<N>`, `_<project>-shell
 6. Switching projects parks everything in hidden windows; switching back restores
 
 ### Poller and Auto-Merge
-Each project gets its own background poller (`_<project>-poller`) running in a hidden tmux window. Pollers are independent — one project's reviews never block another. Each poller watches its project's worker branches for new commits and drives the review/merge lifecycle using local git operations (no GitHub PRs). Pollers start when a project's first worker is created and stop when the last worker is killed.
+Each project gets its own background poller (`_<project>-poller`) running in a hidden tmux window. Pollers are independent — one project's reviews never block another. Each poller watches its project's worker branches for new commits and drives the review/merge lifecycle using local git operations (no GitHub PRs). Pollers start when a project's first worker is created and stop when the last worker is killed. A stop unlinks the poll FIFO only once tmux answers that no poller window is left, or that no dashboard is running (`stopProjectPoller`): the poller holds the FIFO open, so unlinking it under a poller that survived the kill (any kill from an agent sandbox, which is denied the tmux socket) leaves that poller deaf to every poke, and nothing recreates the path while its window exists.
 
 **State machine per worker:**
 ```

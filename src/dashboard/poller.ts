@@ -17,7 +17,7 @@ import {
   readRegistry, getWorkers, type WorkerEntry,
 } from "./registry.js";
 import { tryGetProject, loadConfig } from "../config.js";
-import { DASHBOARD_SESSION } from "../session.js";
+import { DASHBOARD_SESSION, dashboardReach } from "../session.js";
 import { addAlert } from "./alerts.js";
 import { getWorkerBaseBranch } from "./git.js";
 import { healStatusPane, sweepGhostEntries } from "./validate.js";
@@ -348,10 +348,29 @@ export function restartDriftedPollers(projects: Iterable<string>, gardenRunner: 
 
 export function stopProjectPoller(projectName: string): void {
   const window = pollerWindowName(projectName);
+  // The FIFO is the poller's only wake source and the poller holds it open, so
+  // unlinking it under a poller that survived leaves that poller deaf: no poke
+  // reaches it, and nothing recreates the path while its window exists. It
+  // goes only once tmux answers that no poller window is left, or that no
+  // dashboard is running. Inside an agent sandbox the socket is denied, the
+  // kill below does nothing, and the window list reads empty.
+  const reach = dashboardReach();
+  if (reach.state === "unreachable") {
+    log.warn("poller", "kept poll FIFO: tmux did not answer", {
+      data: { project: projectName, error: reach.detail },
+    });
+    return;
+  }
   // Kill all windows of this name (by index), not just one — a prior spawn
   // race may have left duplicates, and a single name-targeted kill can't
   // remove them (the target is ambiguous).
   killWindowsByName(window);
+  if (reach.state === "present" && windowIndices(window).length > 0) {
+    log.warn("poller", "kept poll FIFO: poller window survived", {
+      data: { project: projectName },
+    });
+    return;
+  }
   const fifo = signalFifoPath(projectName);
   try { fs.unlinkSync(fifo); } catch { /* ignore */ }
   log.info("poller", "stopped", { data: { project: projectName } });

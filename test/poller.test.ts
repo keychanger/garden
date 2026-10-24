@@ -309,7 +309,7 @@ vi.mock("../src/dashboard/poller-fifo.js", async () => {
 });
 
 import fs from "node:fs";
-import { poll, postPush, restartLongLivedPollers, startProjectPoller } from "../src/dashboard/poller.js";
+import { poll, postPush, restartLongLivedPollers, startProjectPoller, stopProjectPoller } from "../src/dashboard/poller.js";
 import {
   __resetFfStateForTest, __simulatePollerRestartForTest, _resetGateBlockThrottleForTest,
 } from "../src/dashboard/poller-merge.js";
@@ -6467,6 +6467,64 @@ describe("startProjectPoller — window convergence", () => {
     const releaseOrder = vi.mocked(fs.unlinkSync).mock.invocationCallOrder[lockUnlinkIdx];
     expect(acquireOrder).toBeLessThan(spawnOrder);
     expect(spawnOrder).toBeLessThan(releaseOrder);
+  });
+});
+
+// The poll FIFO is a live poller's only wake source, and the poller holds its
+// inode open: unlinked under a poller that survived, no poke reaches it again
+// and nothing recreates the path while its window exists.
+describe("stopProjectPoller — the poll FIFO", () => {
+  const FIFO = "/tmp/fake-sessions/solo-poll-signal";
+  const fifoUnlinked = () => vi.mocked(fs.unlinkSync).mock.calls.some(c => c[0] === FIFO);
+
+  // What has-session prints when it fails; every other tmux call is mocked.
+  function hasSessionFails(stderr: string): void {
+    vi.mocked(execFileSync).mockImplementation(((cmd: string, args?: readonly string[]) => {
+      if (cmd === "tmux" && args?.[0] === "has-session") {
+        throw Object.assign(new Error("Command failed: tmux has-session"), {
+          status: 1, stderr: Buffer.from(`${stderr}\n`),
+        });
+      }
+      return "";
+    }) as typeof execFileSync);
+  }
+
+  // A garden run inside an agent sandbox: the socket is denied, so the kill
+  // below it does nothing and the window list reads empty.
+  it("keeps the FIFO when tmux does not answer", () => {
+    hasSessionFails("error connecting to /private/tmp/tmux-501/default (Operation not permitted)");
+    vi.mocked(windowIndices).mockReturnValue([]);
+
+    stopProjectPoller("solo");
+
+    expect(fifoUnlinked()).toBe(false);
+  });
+
+  it("keeps the FIFO when the poller window survives the kill", () => {
+    vi.mocked(windowIndices).mockReturnValue([4]);
+
+    stopProjectPoller("solo");
+
+    expect(killWindowsByName).toHaveBeenCalledWith("_solo-poller");
+    expect(fifoUnlinked()).toBe(false);
+  });
+
+  it("unlinks the FIFO once tmux answers that no poller window is left", () => {
+    vi.mocked(windowIndices).mockReturnValue([]);
+
+    stopProjectPoller("solo");
+
+    expect(killWindowsByName).toHaveBeenCalledWith("_solo-poller");
+    expect(fifoUnlinked()).toBe(true);
+  });
+
+  it("unlinks the FIFO when tmux answers that no dashboard is running", () => {
+    hasSessionFails("can't find session: garden-dashboard");
+    vi.mocked(windowIndices).mockReturnValue([]);
+
+    stopProjectPoller("solo");
+
+    expect(fifoUnlinked()).toBe(true);
   });
 });
 
