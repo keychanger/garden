@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { describe, it, expect, vi } from "vitest";
 import { useTmpHome } from "./helpers.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
@@ -12,6 +14,26 @@ vi.mock("../src/dashboard/header.js", async (orig) => ({
   ...(await orig<typeof import("../src/dashboard/header.js")>()),
   refreshDashboard: vi.fn(),
 }));
+// The fleet review cap counts live reviewer windows from tmux, and a deferral
+// re-pokes through a detached sleeper. Stub both; the rest stays real. A mock
+// factory's result outlives useTmpHome's per-test module reset, so the real
+// poller-fifo it spreads would keep reading the first test's registry; the
+// working check reads the current test's instead (`current.registry`).
+const { listAllWindowNames, scheduleDelayedPoke, current } = vi.hoisted(() => ({
+  listAllWindowNames: vi.fn((): string[] => []),
+  scheduleDelayedPoke: vi.fn(),
+  current: { registry: undefined as undefined | typeof import("../src/dashboard/registry.js") },
+}));
+vi.mock("../src/dashboard/tmux.js", async (orig) => ({
+  ...(await orig<typeof import("../src/dashboard/tmux.js")>()),
+  listAllWindowNames,
+}));
+vi.mock("../src/dashboard/poller-fifo.js", async (orig) => ({
+  ...(await orig<typeof import("../src/dashboard/poller-fifo.js")>()),
+  scheduleDelayedPoke,
+  isWorkerClaudeWorking: (project: string, worker: string) =>
+    current.registry?.findWorkerByName(project, worker)?.agentStatus === "working",
+}));
 
 const env = useTmpHome();
 
@@ -21,6 +43,7 @@ async function setup(mode: "off" | "shadow" | "fix", over: Partial<WorkerEntry>)
   const cfg = await import("../src/config.js");
   cfg.saveConfig({ projects: { proj: { path: "/tmp/proj", holisticReview: mode } } });
   const reg = await import("../src/dashboard/registry.js");
+  current.registry = reg;
   reg.addWorker("proj", {
     name: "multi-phase",
     sessionId: "s",
@@ -131,6 +154,7 @@ describe("interposed final review launch (touched files present)", () => {
       },
     });
     const reg = await import("../src/dashboard/registry.js");
+    current.registry = reg;
     reg.addWorker("proj", {
       name: "codex-reviewed", sessionId: "s", task: "t", prState: "done",
       workflow: "default", mergeCount: 2, baseBranchSha: "basesha",
@@ -154,6 +178,7 @@ describe("default holisticReview mode (unset project)", () => {
     cfg.saveConfig({ projects: { proj: { path: "/tmp/proj" } } });
     expect(cfg.DEFAULT_HOLISTIC_REVIEW).toBe("fix");
     const reg = await import("../src/dashboard/registry.js");
+    current.registry = reg;
     reg.addWorker("proj", {
       name: "multi-phase", sessionId: "s", task: "t", prState: "done",
       workflow: "default", mergeCount: 3, baseBranchSha: "basesha",
@@ -180,5 +205,95 @@ describe("dispatch deferral (leaves the guard unset → retries next poke)", () 
     expect(reg.findWorkerByName("proj", "multi-phase")!.holisticReviewedThroughMergeCount).toBeUndefined();
     expect(reg.findWorkerByName("proj", "multi-phase")!.prState).toBe("done");
     expect(launchHeadlessAgent).not.toHaveBeenCalled();
+  });
+});
+
+// limits.maxConcurrentReviews counts every live `-review-` window, this pass's
+// included, so the pass waits for a slot like a per-phase review does.
+describe("fleet review cap (limits.maxConcurrentReviews)", () => {
+  const BUSY = ["_other-review-calm-bay", "_third-review-swift-oak"];
+
+  async function atCap(windows: string[]) {
+    launchHeadlessAgent.mockClear();
+    scheduleDelayedPoke.mockClear();
+    listAllWindowNames.mockReturnValue(windows);
+    const cfg = await import("../src/config.js");
+    cfg.saveConfig({
+      projects: { proj: { path: "/tmp/proj", holisticReview: "fix" } },
+      limits: { maxConcurrentReviews: 2 },
+    });
+    const reg = await import("../src/dashboard/registry.js");
+    current.registry = reg;
+    reg.addWorker("proj", {
+      name: "multi-phase", sessionId: "s", task: "t", prState: "done",
+      workflow: "default", mergeCount: 3, baseBranchSha: "basesha",
+      holisticTouchedFiles: ["src/a.ts"],
+    });
+    const hol = await import("../src/dashboard/poller-holistic-review.js");
+    const dispatch = (entryPath: "transitionToTerminal" | "trailoff-handleDone") =>
+      hol.maybeDispatchHolisticReview(
+        "proj", env.gardenDir, "main", reg.findWorkerByName("proj", "multi-phase")!, entryPath,
+      );
+    return { reg, dispatch };
+  }
+
+  it("defers at the cap with the guard unset, and arms a re-poke", async () => {
+    const { reg, dispatch } = await atCap(BUSY);
+    dispatch("transitionToTerminal");
+
+    const after = reg.findWorkerByName("proj", "multi-phase")!;
+    expect(launchHeadlessAgent).not.toHaveBeenCalled();
+    expect(after.prState).toBe("done");
+    expect(after.holisticReviewedThroughMergeCount).toBeUndefined();
+    // A quiet done worker gets no other poke: a slot freed in another project
+    // wakes only that project's poller.
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("proj", 20_000);
+  });
+
+  it("launches once a slot is free", async () => {
+    const { reg, dispatch } = await atCap(BUSY.slice(0, 1));
+    dispatch("trailoff-handleDone");
+
+    expect(launchHeadlessAgent).toHaveBeenCalledTimes(1);
+    expect(reg.findWorkerByName("proj", "multi-phase")!.prState).toBe("reviewing");
+    expect(scheduleDelayedPoke).not.toHaveBeenCalled();
+  });
+
+  // Every poke re-runs the deferred dispatch (handleDone), so a re-poke armed
+  // per deferral would multiply. The dedup is on disk, as each poll is a fresh
+  // process: the module reset below stands in for that process boundary.
+  it("arms one re-poke per window across repeated deferrals, and re-arms once it lapses", async () => {
+    const first = await atCap(BUSY);
+    first.dispatch("transitionToTerminal");
+    vi.resetModules();
+    const reg = await import("../src/dashboard/registry.js");
+    current.registry = reg;
+    const hol = await import("../src/dashboard/poller-holistic-review.js");
+    const again = () => hol.maybeDispatchHolisticReview(
+      "proj", env.gardenDir, "main", reg.findWorkerByName("proj", "multi-phase")!, "trailoff-handleDone",
+    );
+    again();
+    expect(scheduleDelayedPoke).toHaveBeenCalledTimes(1);
+
+    // The armed poke has fired by now; still capped, the next deferral re-arms.
+    const lapsed = (Date.now() - 21_000) / 1000;
+    fs.utimesSync(path.join(env.controlDir, "review-cap-recheck-proj"), lapsed, lapsed);
+    again();
+    expect(scheduleDelayedPoke).toHaveBeenCalledTimes(2);
+    expect(launchHeadlessAgent).not.toHaveBeenCalled();
+  });
+
+  // A dropped poke would leave the pass waiting on nothing, so a marker that
+  // cannot be written costs at most a duplicate poke, never the poke itself.
+  it("still arms the re-poke when the dedup marker cannot be written", async () => {
+    const { dispatch } = await atCap(BUSY);
+    fs.chmodSync(env.controlDir, 0o500);
+    try {
+      dispatch("transitionToTerminal");
+    } finally {
+      fs.chmodSync(env.controlDir, 0o700);
+    }
+    expect(fs.existsSync(path.join(env.controlDir, "review-cap-recheck-proj"))).toBe(false);
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("proj", 20_000);
   });
 });

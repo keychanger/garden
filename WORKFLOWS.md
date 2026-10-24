@@ -1619,7 +1619,10 @@ Claude still working (`isWorkerClaudeWorking`, shared worktree), or the shared u
 gate closed (`autoContinueGateReason(projectName)` — project-scoped, so a
 usage-triggered closure does not defer a project on a separate token pool via
 `provider` or a non-default `claudeProfile`; an explicit `garden auto off` defers
-everyone).
+everyone), or the fleet review cap (`limits.maxConcurrentReviews`) already met — the
+pass's window counts against the cap like a per-phase review's, so it waits for a
+slot through the same `deferForReviewCap` gate, which arms the re-poke a quiet `done`
+worker otherwise never gets.
 
 Launch is a routine lifecycle beat — `holisticReview` defaults to `fix`, so a
 review fires on nearly every multi-phase `done`. It is logged (`garden logs`,

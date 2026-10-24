@@ -5,7 +5,9 @@
 // worker's worktree, in a hidden tmux window. GARDEN_REVIEWER=1 marks its
 // hooks so they don't get treated as worker hooks.
 import fs from "node:fs";
+import path from "node:path";
 import { type ProjectConfig, tryGetProject, getMaxConcurrentReviews } from "../config.js";
+import { CONTROL_DIR } from "../paths.js";
 import { addAlert } from "./alerts.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { resolveReviewRole, SAFE_REVIEW_MODEL } from "./roles.js";
@@ -221,17 +223,8 @@ export function handleWorking(
   // the configured number of reviewers, defer this launch rather than
   // oversubscribing. pendingReviewAt stays set, so the re-poke (or any sibling
   // FIFO event, e.g. a review finishing and freeing a slot) re-drives this
-  // handler and the launch proceeds once a slot opens. 0 = unlimited (default),
-  // in which case the count is not even taken.
-  const reviewCap = getMaxConcurrentReviews();
-  if (reviewCap > 0 && countActiveReviewWindows() >= reviewCap) {
-    log.debug("poller", "review deferred: fleet review cap reached", {
-      worker: entry.name,
-      data: { project: projectName, cap: reviewCap },
-    });
-    scheduleDelayedPoke(projectName, REVIEW_CAP_RETRY_MS);
-    return false;
-  }
+  // handler and the launch proceeds once a slot opens.
+  if (deferForReviewCap(projectName, entry.name)) return false;
 
   // Launch-point backstop for the Stop hook's clean-tree gate: pendingReviewAt
   // can outlive the clean tree it was set on (a later turn dirtied the
@@ -1558,10 +1551,10 @@ export function handleReviewTimeout(
 // name-distinct `-ci-fix-` window and are excluded here — the cap throttles
 // the pipeline's inflow, not its drain. Resolvers reuse the review window name
 // (`reviewWindowName` in poller-resolve.ts), so a running resolver DOES count;
-// that is benign because resolver launches are never gated by this cap (the
-// gate lives only in handleWorking), so a deferred review simply waits for the
-// resolver to drain and free the slot — it can never deadlock — and resolvers
-// (rebase-conflict only) are rare.
+// that is benign because resolver launches are never gated by this cap (only
+// new reviews are: deferForReviewCap below), so a deferred review simply waits
+// for the resolver to drain and free the slot — it can never deadlock — and
+// resolvers (rebase-conflict only) are rare.
 export function countActiveReviewWindows(): number {
   return listAllWindowNames().filter(
     (n) => n.includes("-review-") && !n.includes("-worker-") && !n.includes("-ci-fix-"),
@@ -1572,6 +1565,49 @@ export function countActiveReviewWindows(): number {
 // cap. Short enough that a freed slot is picked up promptly, long enough not to
 // spin — the poll is also woken by any sibling FIFO event (a review finishing).
 const REVIEW_CAP_RETRY_MS = 20_000;
+
+// The fleet-wide review cap (garden-level limits.maxConcurrentReviews), asked
+// by every launch of a new review: a per-phase review (handleWorking) and the
+// holistic whole-task pass (poller-holistic-review.ts), whose window counts
+// against the cap like any other. When the cap is met it logs the deferral,
+// arms the re-poke, and returns true: the caller stands down, leaving its
+// arming state in place for the re-poke to re-drive. 0 = unlimited, in which
+// case the count is not even taken.
+export function deferForReviewCap(projectName: string, workerName: string): boolean {
+  const cap = getMaxConcurrentReviews();
+  if (cap <= 0 || countActiveReviewWindows() < cap) return false;
+  log.debug("poller", "review deferred: fleet review cap reached", {
+    worker: workerName,
+    data: { project: projectName, cap },
+  });
+  armReviewCapRecheck(projectName);
+  return true;
+}
+
+// Every poke re-runs every deferred launch, so a re-poke armed per deferral
+// multiplies: each poke landing during the stall starts another self-
+// perpetuating sleeper, the amplification armCiRecheck (poller-merge.ts) was
+// fixed for. One outstanding re-poke per project re-drives all of them. The
+// marker's MTIME is the arming time, and it lives in the control tree, where no
+// worker sandbox can hold it fresh to starve the re-poke. When it cannot be read
+// or written the poke is armed anyway: a duplicate poke is harmless, while a
+// dropped one leaves a quiet done worker's holistic pass waiting on nothing.
+function armReviewCapRecheck(projectName: string): void {
+  const marker = path.join(CONTROL_DIR, `review-cap-recheck-${projectName}`);
+  try {
+    if (Date.now() - fs.statSync(marker).mtimeMs < REVIEW_CAP_RETRY_MS) return;
+  } catch {
+    // No marker yet (or unreadable): nothing is armed.
+  }
+  try {
+    atomicWriteFile(marker, "", { durable: false });
+  } catch (err) {
+    log.warn("poller", "review cap: recheck marker unwritten", {
+      data: { project: projectName, error: String(err) },
+    });
+  }
+  scheduleDelayedPoke(projectName, REVIEW_CAP_RETRY_MS);
+}
 
 function launchReview(
   projectName: string,

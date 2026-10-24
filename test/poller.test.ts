@@ -310,6 +310,7 @@ vi.mock("../src/dashboard/poller-fifo.js", async () => {
 });
 
 import fs from "node:fs";
+import path from "node:path";
 import { poll, postPush, restartLongLivedPollers, startProjectPoller, stopProjectPoller } from "../src/dashboard/poller.js";
 import {
   __resetFfStateForTest, __simulatePollerRestartForTest, _resetGateBlockThrottleForTest,
@@ -344,6 +345,7 @@ import {
 } from "../src/dashboard/prompt-compose.js";
 import { buildRulesContext } from "../src/rules.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
+import { CONTROL_DIR } from "../src/paths.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
   _setEntries: (project: string, list: WorkerEntry[]) => void;
@@ -368,6 +370,8 @@ beforeEach(() => {
   // The CI recheck-poke dedup marker is a real file under SESSIONS_DIR (it has
   // to outlive the poll process). Clear it so each test starts unarmed.
   try { fs.rmSync("/tmp/fake-sessions/ci-recheck-myproject"); } catch { /* not armed */ }
+  // Same for the review-cap re-poke dedup marker, which lives in the control tree.
+  try { fs.rmSync(path.join(CONTROL_DIR, "review-cap-recheck-myproject")); } catch { /* not armed */ }
   // Re-establish factory defaults after reset
   vi.mocked(windowExists).mockReturnValue(true);
   // Review cap defaults to unlimited with no live reviewer windows, so the
@@ -1070,6 +1074,39 @@ describe("poll — working state", () => {
     );
     expect(launched).toBe(false);
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 20_000);
+  });
+
+  // Every poke re-runs each deferred launch, and a re-poke armed per deferral
+  // multiplied: each poke landing during the stall started another
+  // self-perpetuating sleeper, the shape armCiRecheck was fixed for.
+  it("arms one review-cap re-poke per window across repeated deferrals", () => {
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      vi.mocked(getMaxConcurrentReviews).mockReturnValue(2);
+      vi.mocked(listAllWindowNames).mockReturnValue(["_other-review-calm-bay", "_third-review-swift-oak"]);
+      registryMock._setEntries("myproject", [
+        makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: t0 }),
+        makeWorker({
+          name: "calm-fen", branchName: "calm-fen", worktreePath: "/tmp/wt/myproject/calm-fen",
+          prState: "working", agentStatus: "idle", pendingReviewAt: t0,
+        }),
+      ]);
+      const capPokes = () => vi.mocked(scheduleDelayedPoke).mock.calls.filter(c => c[1] === 20_000);
+
+      // Two deferred workers, two polls (each its own process in production).
+      poll("myproject");
+      __simulatePollerRestartForTest();
+      poll("myproject");
+      expect(capPokes()).toEqual([["myproject", 20_000]]);
+
+      // The armed poke has fired by now; a launch still over the cap re-arms.
+      nowSpy.mockReturnValue(t0 + 20_000);
+      poll("myproject");
+      expect(capPokes()).toHaveLength(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("launches under the cap when a review slot is free", () => {

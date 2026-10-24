@@ -38,7 +38,7 @@ import { signalFifoPath, isWorkerClaudeWorking } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
 import { autoContinueGateReason } from "./poller-merge.js";
 import {
-  reviewPromptPath, reviewResultPath, scheduleReviewTimeoutPoke,
+  deferForReviewCap, reviewPromptPath, reviewResultPath, scheduleReviewTimeoutPoke,
 } from "./poller-review.js";
 import { MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes } from "./prompt-compose.js";
 import { addAlert } from "./alerts.js";
@@ -150,6 +150,12 @@ export function maybeDispatchHolisticReview(
     });
     return;
   }
+  // The fleet review cap gates this pass like a per-phase review: its reviewer
+  // takes a `-review-` window that counts against the cap. Unlike the two
+  // deferrals above, no event of this worker's own ends the wait, and a slot
+  // freed in another project wakes only that project's poller, so
+  // deferForReviewCap arms the re-poke that retries this dispatch.
+  if (deferForReviewCap(projectName, entry.name)) return;
 
   setGuard();
   launchHolisticFinalReview(projectName, projectPath, baseBranch, entry, mode);
