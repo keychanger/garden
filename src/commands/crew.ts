@@ -19,6 +19,7 @@ import {
   type CrewSpec,
 } from "../dashboard/crew.js";
 import { applyCrewToProject } from "./config.js";
+import { parseFlags } from "./launch-flags.js";
 import { isTTY, output } from "../output.js";
 
 const USAGE = "Usage: garden crew [list|show|add|edit|remove|apply]";
@@ -144,26 +145,26 @@ interface WriteFlags {
   from?: string;
 }
 
+const WRITE_FLAGS: Readonly<Record<string, keyof WriteFlags>> = {
+  "--designer": "designer",
+  "--designer-model": "designerModel",
+  "--designer-effort": "designerEffort",
+  "--worker": "worker",
+  "--model": "model",
+  "--effort": "effort",
+  "--review": "review",
+  "--review-model": "reviewModel",
+  "--review-effort": "reviewEffort",
+  "--from": "from",
+};
+
+// The same parser `workers new` and `garden handoff` use, so a repeated flag is
+// refused rather than keeping its last value, and `--model --effort high` is
+// refused rather than storing `--effort` as the model.
 function parseWriteFlags(args: string[]): WriteFlags {
   const flags: WriteFlags = {};
-  const map: Record<string, keyof WriteFlags> = {
-    "--designer": "designer",
-    "--designer-model": "designerModel",
-    "--designer-effort": "designerEffort",
-    "--worker": "worker",
-    "--model": "model",
-    "--effort": "effort",
-    "--review": "review",
-    "--review-model": "reviewModel",
-    "--review-effort": "reviewEffort",
-    "--from": "from",
-  };
-  for (let i = 0; i < args.length; i++) {
-    const key = map[args[i]];
-    if (!key) throw new Error(`Unknown flag: ${args[i]}. ${USAGE}`);
-    const value = args[++i];
-    if (value === undefined) throw new Error(`${args[i - 1]} requires a value.`);
-    flags[key] = value;
+  for (const [flag, value] of parseFlags(args, { values: Object.keys(WRITE_FLAGS) }).flags) {
+    flags[WRITE_FLAGS[flag]] = value;
   }
   return flags;
 }

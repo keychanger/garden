@@ -400,13 +400,13 @@ describe("garden handoff command", () => {
 
   it("rejects a repeated value-carrying flag rather than honouring only the first", async () => {
     await expect(handoff(["other", "--model", "opus", "--model", "sonnet", "-m", "msg"]))
-      .rejects.toThrow(/Unknown or repeated handoff option '--model'/);
+      .rejects.toThrow(/Unknown or repeated option '--model'/);
     expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
   });
 
   it("rejects an unknown flag instead of ignoring it as briefing noise", async () => {
     await expect(handoff(["other", "--efort", "xhigh", "-m", "msg"]))
-      .rejects.toThrow(/Unknown or repeated handoff option '--efort'/);
+      .rejects.toThrow(/Unknown or repeated option '--efort'/);
     expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
   });
 
@@ -456,7 +456,48 @@ describe("garden handoff command", () => {
 
   it.each(["--expect-callback", "--ultracode", "-m"])("rejects repeated %s", async (flag) => {
     const args = flag === "-m" ? ["-m", "first", "-m", "second"] : [flag, flag, "-m", "msg"];
-    await expect(handoff(["other", ...args])).rejects.toThrow(/Unknown or repeated handoff option/);
+    await expect(handoff(["other", ...args])).rejects.toThrow(/Unknown or repeated option/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  // ===== --effort in the ladder of the harness the child builds with =====
+  //
+  // The rung is read against the child's builder, which its crew (explicit or
+  // inherited) or the target project decides, so a Codex child can be given
+  // Codex's max and a claude-code child cannot.
+
+  it("accepts Codex's max when the child's crew or the target project builds with Codex", async () => {
+    await captureConsoleLog(() => handoff(["other", "--crew", "codex-claude", "--effort", "max", "-m", "msg"]));
+    expect(vi.mocked(submitHandoffRequest).mock.calls[0][0])
+      .toMatchObject({ crew: "codex-claude", effort: "max", ultracode: false });
+
+    vi.mocked(tryGetProject).mockReturnValue({ name: "other", path: "/repo/other", harness: "codex" });
+    await captureConsoleLog(() => handoff(["other", "--effort", "max", "-m", "msg"]));
+    expect(vi.mocked(submitHandoffRequest).mock.calls[1][0]).toMatchObject({ effort: "max", ultracode: false });
+  });
+
+  it("reads the rung in the ladder of the crew the child inherits", async () => {
+    process.env.GARDEN_PROJECT = "src";
+    process.env.GARDEN_WORKER = "blue-pine";
+    vi.mocked(findWorkerByName).mockReturnValue({ name: "blue-pine", crew: "codex-claude" } as ReturnType<typeof findWorkerByName>);
+    await captureConsoleLog(() => handoff(["other", "--effort", "max", "-m", "msg"]));
+    expect(vi.mocked(submitHandoffRequest).mock.calls[0][0]).toMatchObject({ crew: "codex-claude", effort: "max" });
+  });
+
+  it("sends a Codex child's ultra as Codex's own rung, never the claude-code ultracode preset", async () => {
+    const lines = await captureConsoleLog(() => handoff(["other", "--crew", "all-codex", "--effort", "ultra", "-m", "msg"]));
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.effort).toBe("ultra");
+    expect(call.ultracode).toBe(false);
+    expect(lines.join("\n")).toMatch(/effort ultra/);
+    expect(lines.join("\n")).not.toMatch(/ultracode mode/);
+  });
+
+  it("refuses Codex's max for a child that builds with claude-code, before dispatching", async () => {
+    await expect(handoff(["other", "--effort", "max", "-m", "msg"]))
+      .rejects.toThrow("--effort must be one of: low, medium, high, xhigh, ultra for a claude-code worker, got 'max'");
+    await expect(handoff(["other", "--crew", "claude-codex", "--effort", "max", "-m", "msg"]))
+      .rejects.toThrow(/for a claude-code worker, got 'max'/);
     expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
   });
 });

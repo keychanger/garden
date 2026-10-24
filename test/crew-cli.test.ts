@@ -147,7 +147,21 @@ describe("garden crew add/edit", () => {
   it("rejects an unknown flag rather than silently ignoring it", async () => {
     const { crew } = await setup();
     await expect(crew(["add", "x", "--worker", "claude", "--review", "claude", "--reviewer", "codex"]))
-      .rejects.toThrow(/Unknown flag: --reviewer/);
+      .rejects.toThrow(/Unknown or repeated option '--reviewer'/);
+  });
+
+  // The same rules `workers new` and `garden handoff` hold their flags to: a
+  // flag where a value belongs is not taken as the value, and a repeated or
+  // blank one is not quietly resolved to one reading.
+  it("refuses a flag in place of a value, a repeated flag, or a blank value, saving nothing", async () => {
+    const { crew, loadConfig } = await setup();
+    await expect(crew(["add", "heavy", "--worker", "claude", "--model", "--effort", "high", "--review", "claude"]))
+      .rejects.toThrow(/^--model requires a value$/);
+    await expect(crew(["add", "heavy", "--worker", "claude", "--model", "opus", "--model", "sonnet", "--review", "claude"]))
+      .rejects.toThrow(/^Unknown or repeated option '--model'/);
+    await expect(crew(["add", "heavy", "--worker", "", "--review", "claude"]))
+      .rejects.toThrow(/^--worker requires a value$/);
+    expect(loadConfig().crews?.heavy).toBeUndefined();
   });
 });
 

@@ -7,6 +7,9 @@ vi.mock("../src/config.js", () => ({
   // The crew check resolves names against config; an empty one still carries
   // the generated builtins, which is what these tests name.
   loadConfig: vi.fn(() => ({ projects: {} })),
+  // The effort check reads the target's builder; an unknown target is left to
+  // newWorker, so the rung check is skipped unless a case names a project.
+  tryGetProject: vi.fn(() => null),
   SESSIONS_DIR: "",
 }));
 
@@ -49,7 +52,7 @@ import { newWorker, workerPaneLive } from "../src/dashboard/workers.js";
 import { dispatchDelayedSeed } from "../src/dashboard/continue.js";
 import { getWorkers } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, tryGetProject } from "../src/config.js";
 
 const cfg = await import("../src/config.js") as unknown as { SESSIONS_DIR: string };
 const gardenPaths = await import("../src/paths.js") as unknown as { CONTROL_DIR: string };
@@ -81,6 +84,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(workerPaneLive).mockReset().mockReturnValue(true);
   vi.mocked(loadConfig).mockReturnValue({ projects: {} });
+  vi.mocked(tryGetProject).mockReset().mockReturnValue(null);
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-handoff-dispatch-test-"));
   cfg.SESSIONS_DIR = tmpDir;
   controlDir = path.join(tmpDir, "control");
@@ -664,6 +668,33 @@ describe("processPendingHandoffs", () => {
     processPendingHandoffs();
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error).toMatch(/shape guard/i);
+  });
+
+  // The rung must belong to the harness the child builds with: its crew's
+  // builder, else the target project's.
+  it("passes Codex's max through when the child's crew builds with Codex", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    vi.mocked(tryGetProject).mockReturnValue({ name: "wolf", path: "/repo/wolf" });
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, crew: "codex-claude", effort: "max" });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({ crew: "codex-claude", effort: "max" }));
+  });
+
+  it("passes Codex's own ultra through when the target project builds with Codex", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    vi.mocked(tryGetProject).mockReturnValue({ name: "wolf", path: "/repo/wolf", harness: "codex" });
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, effort: "ultra" });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({ effort: "ultra" }));
+  });
+
+  it.each(["max", "ultra"])("refuses %s for a child that builds with claude-code", (effort) => {
+    vi.mocked(tryGetProject).mockReturnValue({ name: "wolf", path: "/repo/wolf", harness: "codex" });
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, crew: "claude-codex", effort });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(new RegExp(`^effort '${effort}' is not a rung of claude-code`));
   });
 
   it("refuses a request that sets both effort and ultracode (the preset already fixes the rung)", () => {

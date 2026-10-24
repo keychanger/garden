@@ -1,6 +1,7 @@
 // The model and effort names a build member takes, for the menus that offer
-// them (the ⌥⇧N spawn composer, the ⌥, project menu) and the project effort
-// setter that accepts them.
+// them (the ⌥⇧N spawn composer, the ⌥, project menu), the project effort
+// setter that accepts them, and the per-spawn `--effort` of `workers new` and
+// `garden handoff`.
 //
 // Model / effort vocabularies belong to the build MEMBER, not to garden: Codex
 // names concrete slugs (gpt-5.6-sol) where Anthropic names aliases (opus), a
@@ -48,4 +49,12 @@ export function composerModels(harness: string, providerAliases?: string[]): str
 
 export function composerEfforts(harness: string): string[] {
   return harness === CODEX_HARNESS ? CODEX_EFFORT_LEVELS : COMPOSER_EFFORTS;
+}
+
+// The rungs a worker on `harness` launches with: the values WorkerEntry.effort
+// carries and the adapter renders. claude-code's composer "ultra" is not one of
+// them, since it names the ultracode preset, which travels as `ultracode`;
+// Codex's own "ultra" is.
+export function workerEffortRungs(harness: string): readonly string[] {
+  return harness === CODEX_HARNESS ? CODEX_EFFORT_LEVELS : WORKER_EFFORT_LEVELS;
 }

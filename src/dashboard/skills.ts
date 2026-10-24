@@ -282,7 +282,7 @@ EOF
 
 ### Model and reasoning rung (\`--model\`, \`--effort\`)
 
-Pass \`--model <alias-or-id>\` and/or \`--effort low|medium|high|xhigh|ultra\` when the operator names how strong the new worker should be ("hand this to astra at xhigh"). Both outrank the crew's builder seat and the target project's default, so you can keep the crew you inherited — including its reviewer — and still change one dimension.
+Pass \`--model <alias-or-id>\` and/or \`--effort <rung>\` when the operator names how strong the new worker should be ("hand this to astra at xhigh"). Both outrank the crew's builder seat and the target project's default, so you can keep the crew you inherited — including its reviewer — and still change one dimension. The rung is in the ladder of the harness the new worker builds with: \`low|medium|high|xhigh|ultra\` on Claude Code, and Codex adds \`max\`.
 
 \`--model\` does not select a harness: the model must belong to the inherited or selected crew's build member. If that member is Claude and the operator asks for Astra, select a Codex-building crew with the intended reviewer as well:
 
@@ -292,7 +292,7 @@ garden handoff <target-project> --crew codex-claude --model gpt-6-astra --effort
 EOF
 \`\`\`
 
-\`--effort ultra\` IS the ultracode preset, so it cannot be combined with \`--ultracode\`. An unknown rung, an empty value, or any flag this command does not have is an error — nothing is spawned — so a mistyped option can never quietly produce a worker on the wrong configuration.
+On a Claude Code builder \`--effort ultra\` IS the ultracode preset, so it cannot be combined with \`--ultracode\`; on a Codex builder \`ultra\` is Codex's own top rung. An unknown rung, a rung the builder's harness does not have, an empty value, or any flag this command does not have is an error — nothing is spawned — so a mistyped option can never quietly produce a worker on the wrong configuration.
 
 ### Callback mode (\`--expect-callback\`)
 

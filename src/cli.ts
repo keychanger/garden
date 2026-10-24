@@ -199,9 +199,11 @@ Dashboard:
                                  Add --crew <name> to spawn it under that crew; without it the worker inherits the calling
                                    worker's own crew (a designer's builder lands on the crew that designed); otherwise the
                                    target project's binding applies
-                                 Add --model <alias-or-id> and/or --effort low|medium|high|xhigh|ultra to pin the new
-                                   worker's model and reasoning rung (they outrank the crew's builder seat; 'ultra' is the
-                                   ultracode preset, so it cannot be combined with --ultracode)
+                                 Add --model <alias-or-id> and/or --effort <rung> to pin the new worker's model and
+                                   reasoning rung (they outrank the crew's builder seat). The rung is in the ladder of the
+                                   harness the worker builds with: low|medium|high|xhigh|ultra on Claude Code, where 'ultra'
+                                   is the ultracode preset and so cannot be combined with --ultracode; Codex adds max, and its
+                                   own ultra is a plain rung
                                  Add --bead <id> to stamp the bead↔worker join on the new worker's registry entry (no bd claim is made)
   reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate
@@ -220,7 +222,7 @@ Dashboard:
   version, --version, -v         Print the garden build version (git short SHA, or "dev" under tsx)
 
 Workers:
-  workers new <project> [--workflow default|grow|designer|planner] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra]
+  workers new <project> [--workflow default|grow|designer|planner] [--model <alias-or-id>] [--effort <rung>]
                         [--harness codex] [--crew <name>] [--base <branch>]
                         [--seed <text> | --seed-file <path>] [--max-iterations N]
                                  Spawn a new worker. default plants an interactive worker;
@@ -234,8 +236,11 @@ Workers:
                                  (Opus/xhigh seat, normally intake-spawned from a plan:pending
                                  epic — see DESIGN.md "Bead intake"). --model overrides
                                  the workflow's default worker model. --effort sets the reasoning
-                                 rung (ultra = max effort + dynamic workflows; default/grow/
-                                 designer/planner). --harness picks the agent CLI (default
+                                 rung in the ladder of the harness the worker builds with
+                                 (low|medium|high|xhigh, or ultra = max effort + dynamic
+                                 workflows on claude-code; codex adds max, and its own ultra
+                                 is a plain rung; default/grow/designer/planner).
+                                 --harness picks the agent CLI (default
                                  claude-code; codex = a sandboxed Codex worker; default and
                                  designer workflows). --crew spawns under a crew (default: its
                                  build + review halves; designer: its design seat, forwarded to

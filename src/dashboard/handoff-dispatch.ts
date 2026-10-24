@@ -14,15 +14,16 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { SESSIONS_DIR } from "../config.js";
+import { SESSIONS_DIR, tryGetProject } from "../config.js";
 import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { getWorkers } from "./registry.js";
 import { newWorker, workerPaneLive } from "./workers.js";
 import { dispatchDelayedSeed } from "./continue.js";
 import { resolveGardenRunner } from "./runner.js";
-import { getCrew } from "./crew.js";
-import { isWorkerEffort } from "./worker-effort.js";
+import { getCrew, spawnBuildHarness } from "./crew.js";
+import { harnessNames } from "./harness/core.js";
+import { workerEffortRungs } from "./harness/vocabulary.js";
 import { loadConfig } from "../config.js";
 import { log } from "./log.js";
 import { MAX_SEED_BYTES } from "./seed-files.js";
@@ -131,9 +132,10 @@ export interface HandoffRequest {
   // seat and the target project's default. Opaque to garden, like every other
   // model pin. See `NewWorkerOptions.model`.
   model?: string;
-  // Set when the source worker invoked `garden handoff --effort <rung>`. One
-  // of WORKER_EFFORT_LEVELS; `--effort ultra` arrives as `ultracode` instead,
-  // so the two are never both set. See `NewWorkerOptions.effort`.
+  // Set when the source worker invoked `garden handoff --effort <rung>`. A
+  // rung of the harness the child builds with (workerEffortRungs); on
+  // claude-code `--effort ultra` arrives as `ultracode` instead, so the two
+  // are never both set. See `NewWorkerOptions.effort`.
   effort?: string;
 }
 
@@ -256,10 +258,14 @@ function isHandoffRequest(value: unknown): value is HandoffRequest {
     && (request.crew === undefined || boundedString(request.crew, 128))
     && (request.bead === undefined || validBeadId(request.bead))
     && (request.model === undefined || validModelId(request.model))
-    // An effort outside the worker vocabulary would be dropped at launch, so
-    // the request is refused rather than spawning on the harness default.
+    // An effort no harness launches with is malformed. Whether it is a rung of
+    // the harness this child builds with is checked once its crew resolves.
     && (request.effort === undefined
-        || (typeof request.effort === "string" && isWorkerEffort(request.effort)));
+        || (typeof request.effort === "string" && isLaunchRung(request.effort)));
+}
+
+function isLaunchRung(value: string): boolean {
+  return harnessNames().some(harness => workerEffortRungs(harness).includes(value));
 }
 
 function parseJson(data: Buffer): unknown {
@@ -467,6 +473,27 @@ function processClaim(claimFile: string, filenameId: string): void {
       }
     } catch (err) {
       rejectClaim(claimFile, filenameId, `could not resolve crew '${request.crew}': ${String(err)}`);
+      return;
+    }
+  }
+
+  // The rung must belong to the harness the child builds with, which its crew
+  // decides, else the target project: Codex's ladder adds `max`, and on
+  // claude-code "ultra" is the ultracode preset, sent as `ultracode`. A rung the
+  // harness lacks would reach its command line as a value it does not take, so
+  // the request is refused rather than launched. An unknown project is left to
+  // newWorker, which refuses it.
+  const target = request.effort === undefined ? null : tryGetProject(request.targetProject);
+  if (request.effort !== undefined && target) {
+    const harness = spawnBuildHarness(target, { workflow: "default", crew: request.crew }, loadConfig());
+    const rungs = workerEffortRungs(harness);
+    if (!rungs.includes(request.effort)) {
+      rejectClaim(
+        claimFile,
+        filenameId,
+        `effort '${request.effort}' is not a rung of ${harness}, the harness this worker would build with `
+        + `(rungs: ${rungs.join(", ")})`,
+      );
       return;
     }
   }

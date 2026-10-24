@@ -24,7 +24,7 @@ vi.mock("../src/dashboard/header.js", () => ({ refreshDashboard: vi.fn() }));
 const { listMembers, reviewerMembers, listCrews, getCrew, deriveCrew, applyCrew,
   workerMemberName, projectWorkerMemberName, projectWorkerModel, projectModelFor, builtinCrews, storedCrews,
   resolveProjectCrew, crewOverridden, clearCrew, saveCrew, deleteCrew,
-  isBuiltinCrew, validateCrewDef, formatRecipe, designerSeat } =
+  isBuiltinCrew, validateCrewDef, formatRecipe, designerSeat, spawnBuildHarness } =
   await import("../src/dashboard/crew.js");
 const { buildCrewPickerPlan, buildCrewComposerPlan, buildCrewDimSubmenuPlan, buildStoredCrewPickerPlan } =
   await import("../src/dashboard/crew-picker.js");
@@ -176,6 +176,40 @@ describe("projectModelFor", () => {
 
   it("returns nothing when the project sets no model", () => {
     expect(projectModelFor({}, null, "claude-code")).toBeUndefined();
+  });
+});
+
+// The harness a spawn builds with is the ladder a per-spawn --effort is read
+// in, so it follows newWorker's own resolution.
+describe("spawnBuildHarness", () => {
+  const c = cfg({
+    crews: { studio: { designer: { member: "codex" }, worker: { member: "claude" }, review: { member: "claude" } } },
+  } as Partial<GardenConfig>);
+  const build = (project: Pick<ProjectConfig, "harness" | "crew">, workflow: string, spawn: { harness?: string; crew?: string } = {}) =>
+    spawnBuildHarness(project, { workflow, ...spawn }, c);
+
+  it("builds a default worker on the explicit harness, else its crew's builder, else the project's", () => {
+    expect(build({}, "default")).toBe("claude-code");
+    expect(build({ harness: "codex" }, "default", { harness: "claude" })).toBe("claude-code");
+    expect(build({}, "default", { crew: "codex-claude" })).toBe("codex");
+    expect(build({ harness: "codex" }, "default", { crew: "all-claude" })).toBe("claude-code");
+    expect(build({ harness: "codex" }, "default")).toBe("codex");
+    expect(build({ crew: "all-codex" }, "default")).toBe("codex");
+    expect(build({ crew: "all-codex", harness: "claude-code" }, "default")).toBe("claude-code");
+    // A crew that no longer resolves falls through to the project.
+    expect(build({ harness: "codex" }, "default", { crew: "gone" })).toBe("codex");
+  });
+
+  it("builds a designer on its crew's design seat, and never on the project's builder", () => {
+    expect(build({}, "designer", { crew: "studio" })).toBe("codex");
+    expect(build({ crew: "studio" }, "designer")).toBe("codex");
+    expect(build({ crew: "studio" }, "designer", { harness: "claude" })).toBe("claude-code");
+    expect(build({ harness: "codex" }, "designer")).toBe("claude-code");
+  });
+
+  it("builds grow and planner workers on claude-code whatever the project builds with", () => {
+    expect(build({ harness: "codex" }, "grow")).toBe("claude-code");
+    expect(build({ crew: "all-codex" }, "planner")).toBe("claude-code");
   });
 });
 

@@ -5,9 +5,9 @@ import { tryGetProject, loadConfig } from "../config.js";
 import { newWorker, stopWorkerByName } from "../dashboard/workers.js";
 import { resolveWorkerArg } from "./resolve-worker.js";
 import { WORKER_EFFORT_LEVELS } from "../dashboard/create.js";
-import { requireModelValue, parseEffortFlag } from "./launch-flags.js";
+import { requireModelValue, parseEffortFlag, parseFlags } from "./launch-flags.js";
 import { isRegisteredHarness, harnessNames, canonicalHarnessName } from "../dashboard/harness/core.js";
-import { getCrew, listCrews } from "../dashboard/crew.js";
+import { getCrew, listCrews, spawnBuildHarness } from "../dashboard/crew.js";
 import { buildGrowIteration1Seed, GROW_GOAL_FILE_REL } from "../dashboard/grow-continue.js";
 import { buildDesignerSeed } from "../dashboard/designer-prompts.js";
 import {
@@ -39,49 +39,19 @@ export async function workers(args: string[]): Promise<void> {
   throw new Error(
     `Usage:\n`
     + `  garden workers new <project> [--workflow grow|designer|planner] [--base <branch>] `
-    + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--effort low|medium|high|xhigh|ultra] [--harness <name>] [--max-iterations N]\n`
+    + `[--seed <text> | --seed-file <path>] [--model <alias-or-id>] [--effort <rung>] [--harness <name>] [--max-iterations N]\n`
     + `  garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>] `
     + `[--max-iterations N]\n`
     + `  garden workers stop <worker>`,
   );
 }
 
-// Splits `<positional...> --flag value ...`, accepting only the flags a command
-// takes, once each. A misspelled flag (`--modle opus`) used to be stored and
-// never read, so the worker spawned on the default the operator meant to
-// override; `garden handoff` refuses the same way.
-function parseFlags(
-  args: string[], allowed: readonly string[],
-): { positional: string[]; flags: Map<string, string> } {
-  const positional: string[] = [];
-  const flags = new Map<string, string>();
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (!a.startsWith("--")) {
-      positional.push(a);
-      continue;
-    }
-    const key = a.slice(2);
-    if (!allowed.includes(key) || flags.has(key)) {
-      throw new Error(
-        `Unknown or repeated option '${a}'. Supported once each: ${allowed.map(f => `--${f}`).join(", ")}.`,
-      );
-    }
-    const val = args[i + 1];
-    if (val === undefined || val.startsWith("--")) {
-      throw new Error(`--${key} requires a value`);
-    }
-    flags.set(key, val);
-    i++;
-  }
-  return { positional, flags };
-}
-
 // Every flag `workers new` takes. A workflow that does not use one of these
 // refuses it by name below.
 const NEW_FLAGS = [
-  "workflow", "base", "seed", "seed-file", "model", "effort", "harness", "crew", "max-iterations",
-] as const;
+  "--workflow", "--base", "--seed", "--seed-file", "--model", "--effort", "--harness", "--crew",
+  "--max-iterations",
+];
 
 async function newCommand(args: string[]): Promise<void> {
   // Positional: <project>. Flags: --workflow, --max-iterations, and the
@@ -91,7 +61,7 @@ async function newCommand(args: string[]): Promise<void> {
   if (args.includes("--trellis")) {
     throw new Error("--trellis was removed along with the trellis workflow");
   }
-  const { positional, flags } = parseFlags(args, NEW_FLAGS);
+  const { positional, flags } = parseFlags(args, { values: NEW_FLAGS, positional: true });
 
   const projectName = positional[0];
   if (!projectName) {
@@ -110,7 +80,7 @@ async function newCommand(args: string[]): Promise<void> {
     throw new Error(`Unknown project '${projectName}'. Run 'garden list' to see registered projects.`);
   }
 
-  const workflow = flags.get("workflow") ?? "default";
+  const workflow = flags.get("--workflow") ?? "default";
   if (workflow !== "default" && workflow !== "grow" && workflow !== "designer" && workflow !== "planner") {
     throw new Error(`--workflow must be 'default', 'grow', 'designer', or 'planner', got '${workflow}'`);
   }
@@ -120,7 +90,7 @@ async function newCommand(args: string[]): Promise<void> {
   // Accept the "claude" alias for the claude-code harness (the crew member
   // name) and canonicalize at the boundary so this pre-check, the persisted
   // entry, and the log line all use the registry name.
-  const rawHarness = flags.get("harness");
+  const rawHarness = flags.get("--harness");
   const harness = rawHarness === undefined ? undefined : canonicalHarnessName(rawHarness);
   if (harness && !isRegisteredHarness(harness)) {
     throw new Error(`--harness must be one of: ${harnessNames().join(", ")}, got '${harness}'`);
@@ -132,7 +102,7 @@ async function newCommand(args: string[]): Promise<void> {
   // Per-worker base-branch override (all workflows). Precedence over the
   // project's configured baseBranch; validated/published at spawn via the
   // newWorker branchExistsOnOrigin + tryPublishBranch chain.
-  const base = flags.get("base");
+  const base = flags.get("--base");
   if (base !== undefined && !base.trim()) {
     throw new Error("--base requires a non-empty branch name");
   }
@@ -145,7 +115,7 @@ async function newCommand(args: string[]): Promise<void> {
   // --harness would be contradictory. On designer, --harness is an allowed
   // per-run override of the crew's design seat while the crew remains stamped
   // for the downstream builder to inherit.
-  const crew = flags.get("crew");
+  const crew = flags.get("--crew");
   if (crew !== undefined) {
     const cfg = loadConfig();
     const spec = getCrew(crew, cfg);
@@ -160,15 +130,23 @@ async function newCommand(args: string[]): Promise<void> {
     }
   }
 
+  // --effort names a rung of the harness this worker builds with: Codex's
+  // ladder adds `max`, and only claude-code has the ultracode preset.
+  const effortFlag = (): { effort?: string; ultracode?: boolean } => {
+    const raw = flags.get("--effort");
+    if (raw === undefined) return {};
+    return parseEffortFlag(raw, spawnBuildHarness(project, { workflow, harness, crew }, loadConfig()));
+  };
+
   if (workflow === "default") {
-    if (flags.has("seed") || flags.has("seed-file")) {
+    if (flags.has("--seed") || flags.has("--seed-file")) {
       throw new Error("--seed and --seed-file can only be used with --workflow grow");
     }
-    if (flags.has("max-iterations")) {
+    if (flags.has("--max-iterations")) {
       throw new Error("--max-iterations can only be used with --workflow grow");
     }
-    const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
-    const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
+    const model = flags.has("--model") ? requireModelValue(flags.get("--model")!) : undefined;
+    const effortOpts = effortFlag();
     const newName = newWorker({ projectName, workflow, model, ...effortOpts, ...(harness ? { harness } : {}), ...(base ? { base } : {}), ...(crew ? { crew } : {}) });
     if (!newName) {
       throw new Error(
@@ -182,14 +160,14 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   if (workflow === "grow") {
-    if (flags.has("seed") && flags.has("seed-file")) {
+    if (flags.has("--seed") && flags.has("--seed-file")) {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
     }
     let seed: string | undefined;
-    if (flags.has("seed")) {
-      seed = flags.get("seed")!;
-    } else if (flags.has("seed-file")) {
-      const seedFilePath = flags.get("seed-file")!;
+    if (flags.has("--seed")) {
+      seed = flags.get("--seed")!;
+    } else if (flags.has("--seed-file")) {
+      const seedFilePath = flags.get("--seed-file")!;
       try {
         seed = fs.readFileSync(seedFilePath, "utf-8");
       } catch (err) {
@@ -207,8 +185,8 @@ async function newCommand(args: string[]): Promise<void> {
 
     let maxIter = 5;
     if (project.maxGrowIterations !== undefined) maxIter = project.maxGrowIterations;
-    if (flags.has("max-iterations")) {
-      const raw = flags.get("max-iterations")!;
+    if (flags.has("--max-iterations")) {
+      const raw = flags.get("--max-iterations")!;
       const n = Number.parseInt(raw, 10);
       if (!Number.isFinite(n) || n < 1) {
         throw new Error(`--max-iterations must be a positive integer, got '${raw}'`);
@@ -224,8 +202,8 @@ async function newCommand(args: string[]): Promise<void> {
     // itself across the bounded loop.
     const seedFile = writeSeedFile(buildGrowIteration1Seed(seed, maxIter), "grow");
 
-    const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
-    const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
+    const model = flags.has("--model") ? requireModelValue(flags.get("--model")!) : undefined;
+    const effortOpts = effortFlag();
     const newName = newWorker({
       projectName,
       workflow: "grow",
@@ -250,13 +228,13 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   if (workflow === "designer") {
-    if (flags.has("max-iterations")) {
+    if (flags.has("--max-iterations")) {
       throw new Error("--max-iterations can only be used with --workflow grow");
     }
     // --crew names the design seat (newWorker reads the crew's designer half)
     // and is stamped on the entry so the designer's handoff forwards the same
     // crew to the builder it spawns.
-    if (flags.has("seed") && flags.has("seed-file")) {
+    if (flags.has("--seed") && flags.has("--seed-file")) {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
     }
     // The seed is optional: with one, the ask is inlined and the worker starts
@@ -266,10 +244,10 @@ async function newCommand(args: string[]): Promise<void> {
     // the operator's first message in the pane, the same instant-spawn
     // behavior as the workflow picker's row.
     let seed: string | undefined;
-    if (flags.has("seed")) {
-      seed = flags.get("seed")!;
-    } else if (flags.has("seed-file")) {
-      const seedFilePath = flags.get("seed-file")!;
+    if (flags.has("--seed")) {
+      seed = flags.get("--seed")!;
+    } else if (flags.has("--seed-file")) {
+      const seedFilePath = flags.get("--seed-file")!;
       try {
         seed = fs.readFileSync(seedFilePath, "utf-8");
       } catch (err) {
@@ -291,8 +269,8 @@ async function newCommand(args: string[]): Promise<void> {
     // Designer model/effort come from the crew's design seat, else the
     // workflow's Opus / xhigh default (newWorker resolution); --model /
     // --effort override per run.
-    const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
-    const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
+    const model = flags.has("--model") ? requireModelValue(flags.get("--model")!) : undefined;
+    const effortOpts = effortFlag();
     const newName = newWorker({
       projectName,
       workflow: "designer",
@@ -317,10 +295,10 @@ async function newCommand(args: string[]): Promise<void> {
   }
 
   if (workflow === "planner") {
-    if (flags.has("max-iterations")) {
+    if (flags.has("--max-iterations")) {
       throw new Error("--max-iterations can only be used with --workflow grow");
     }
-    if (flags.has("seed") && flags.has("seed-file")) {
+    if (flags.has("--seed") && flags.has("--seed-file")) {
       throw new Error("--seed and --seed-file are mutually exclusive; pass exactly one.");
     }
     // The seed is optional and delivered RAW (no framing wrapper): the normal
@@ -331,10 +309,10 @@ async function newCommand(args: string[]): Promise<void> {
     // into the system prompt (rules.ts planner branch + the bundled skill) and
     // the epic brief arrives as the operator's first message in the pane.
     let seed: string | undefined;
-    if (flags.has("seed")) {
-      seed = flags.get("seed")!;
-    } else if (flags.has("seed-file")) {
-      const seedFilePath = flags.get("seed-file")!;
+    if (flags.has("--seed")) {
+      seed = flags.get("--seed")!;
+    } else if (flags.has("--seed-file")) {
+      const seedFilePath = flags.get("--seed-file")!;
       try {
         seed = fs.readFileSync(seedFilePath, "utf-8");
       } catch (err) {
@@ -352,8 +330,8 @@ async function newCommand(args: string[]): Promise<void> {
 
     // Planner model/effort default to Opus / xhigh via the workflow definition
     // (newWorker resolution); --model / --effort override per run.
-    const model = flags.has("model") ? requireModelValue(flags.get("model")!) : undefined;
-    const effortOpts = flags.has("effort") ? parseEffortFlag(flags.get("effort")!) : {};
+    const model = flags.has("--model") ? requireModelValue(flags.get("--model")!) : undefined;
+    const effortOpts = effortFlag();
     const newName = newWorker({
       projectName,
       workflow: "planner",
@@ -410,7 +388,10 @@ async function stopCommand(args: string[]): Promise<void> {
 // conversation into `.garden/grow-goal.md`, then runs this command to flip
 // the workflow.
 async function growCommand(args: string[]): Promise<void> {
-  const { positional, flags } = parseFlags(args, ["seed", "seed-file", "goal-file", "max-iterations"]);
+  const { positional, flags } = parseFlags(args, {
+    values: ["--seed", "--seed-file", "--goal-file", "--max-iterations"],
+    positional: true,
+  });
 
   // Reject extra positional args — `garden workers grow w1 w2 --seed x`
   // would otherwise silently use w1 and discard w2. The user almost
@@ -485,11 +466,11 @@ async function growCommand(args: string[]): Promise<void> {
   // --seed-file and --goal-file are aliases — both read the same kind of
   // file. The slash skill uses --goal-file (matches the on-disk filename);
   // operators scripting the CLI can use whichever spelling they prefer.
-  const seedFlags = ["seed", "seed-file", "goal-file"].filter(k => flags.has(k));
+  const seedFlags = ["--seed", "--seed-file", "--goal-file"].filter(k => flags.has(k));
   if (seedFlags.length > 1) {
     throw new Error(
       `--seed, --seed-file, and --goal-file are mutually exclusive; pass exactly one. `
-      + `Got: ${seedFlags.map(f => "--" + f).join(", ")}`,
+      + `Got: ${seedFlags.join(", ")}`,
     );
   }
   if (seedFlags.length === 0) {
@@ -498,10 +479,10 @@ async function growCommand(args: string[]): Promise<void> {
     );
   }
   let seed: string;
-  if (flags.has("seed")) {
-    seed = flags.get("seed")!;
+  if (flags.has("--seed")) {
+    seed = flags.get("--seed")!;
   } else {
-    const filePath = flags.get("seed-file") ?? flags.get("goal-file")!;
+    const filePath = flags.get("--seed-file") ?? flags.get("--goal-file")!;
     try {
       seed = fs.readFileSync(filePath, "utf-8");
     } catch (err) {
@@ -522,8 +503,8 @@ async function growCommand(args: string[]): Promise<void> {
   // inputs before parseInt sees them.
   let maxIter = 5;
   if (project.maxGrowIterations !== undefined) maxIter = project.maxGrowIterations;
-  if (flags.has("max-iterations")) {
-    const raw = flags.get("max-iterations")!;
+  if (flags.has("--max-iterations")) {
+    const raw = flags.get("--max-iterations")!;
     if (!/^-?\d+$/.test(raw)) {
       throw new Error(`--max-iterations must be a positive integer, got '${raw}'`);
     }

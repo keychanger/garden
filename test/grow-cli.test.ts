@@ -191,7 +191,7 @@ describe("garden workers new --workflow grow", () => {
     const { workers } = await importWorkersCmd();
     await expect(
       workers(["new", "proj", "--workflow", "grow", "--seed", "   "]),
-    ).rejects.toThrow(/non-empty seed/);
+    ).rejects.toThrow(/^--seed requires a value$/);
   });
 
   it("requires --seed or --seed-file", async () => {
@@ -242,7 +242,7 @@ describe("garden workers new --workflow grow", () => {
         "--seed", "x",
         "--model", "  ",
       ]),
-    ).rejects.toThrow(/--model requires a non-empty value/);
+    ).rejects.toThrow(/^--model requires a value$/);
   });
 
   // The retired flag is named rather than refused as an unknown option.
@@ -358,7 +358,7 @@ describe("garden workers new --workflow designer", () => {
     const { workers } = await importWorkersCmd();
     await expect(
       workers(["new", "proj", "--workflow", "designer", "--seed", "   "]),
-    ).rejects.toThrow(/empty/);
+    ).rejects.toThrow(/^--seed requires a value$/);
   });
 
   it("accepts --harness codex — a Codex designer is default-shaped from the harness's side", async () => {
@@ -527,7 +527,7 @@ describe("garden workers new --workflow planner", () => {
     const { workers } = await importWorkersCmd();
     await expect(
       workers(["new", "proj", "--workflow", "planner", "--seed", "   "]),
-    ).rejects.toThrow(/--seed \/ --seed-file was given but empty/);
+    ).rejects.toThrow(/^--seed requires a value$/);
   });
 });
 
@@ -766,11 +766,11 @@ describe("garden workers grow (convert)", () => {
     const { workers } = await importWorkersCmd();
     await expect(
       workers(["grow", "w", "--seed", "   "]),
-    ).rejects.toThrow(/non-empty/);
+    ).rejects.toThrow(/^--seed requires a value$/);
   });
 
   // The empty-seed guard runs after trim, so a file containing only
-  // whitespace must trip it the same way --seed "   " does. The skill
+  // whitespace must trip it, as a whitespace-only --seed is refused. The skill
   // tells operators to write goals via heredoc; a stray blank file
   // (operator typo, mid-edit save) shouldn't silently flip the workflow
   // with an empty seed that would later inline as "Original task: ".
@@ -1241,6 +1241,55 @@ describe("garden workers new --effort", () => {
     expect(newWorker).not.toHaveBeenCalled();
   });
 
+  // The rung is read in the ladder of the harness the worker builds with, so a
+  // Codex worker can be given Codex's max, and only claude-code has the
+  // ultracode preset.
+  it("gives a Codex worker Codex's max, and its own ultra as a plain rung", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() => workers(["new", "proj", "--harness", "codex", "--effort", "max"]));
+    await captureConsoleLog(() => workers(["new", "proj", "--harness", "codex", "--effort", "ultra"]));
+
+    const [maxOpts, ultraOpts] = vi.mocked(newWorker).mock.calls.map(c => c[0] as Record<string, unknown>);
+    expect(maxOpts).toMatchObject({ harness: "codex", effort: "max" });
+    expect(ultraOpts).toMatchObject({ harness: "codex", effort: "ultra" });
+    expect(ultraOpts.ultracode).toBeUndefined();
+  });
+
+  it("reads the ladder of the crew's builder, the project's builder, or a designer's seat", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await captureConsoleLog(() => workers(["new", "proj", "--crew", "codex-claude", "--effort", "max"]));
+    await captureConsoleLog(() => workers(["new", "proj", "--workflow", "designer", "--crew", "all-codex", "--effort", "max"]));
+    const cfg = await importConfig();
+    const config = cfg.loadConfig();
+    config.projects.proj.harness = "codex";
+    cfg.saveConfig(config);
+    await captureConsoleLog(() => workers(["new", "proj", "--effort", "max"]));
+
+    expect(vi.mocked(newWorker).mock.calls.map(c => c[0]?.effort)).toEqual(["max", "max", "max"]);
+  });
+
+  it("refuses Codex's max for a claude-code worker, a grow worker on a Codex project included", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+
+    await expect(workers(["new", "proj", "--effort", "max"]))
+      .rejects.toThrow("--effort must be one of: low, medium, high, xhigh, ultra for a claude-code worker, got 'max'");
+    const cfg = await importConfig();
+    const config = cfg.loadConfig();
+    config.projects.proj.harness = "codex";
+    cfg.saveConfig(config);
+    await expect(workers(["new", "proj", "--workflow", "grow", "--seed", "x", "--effort", "max"]))
+      .rejects.toThrow(/for a claude-code worker, got 'max'/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+
 });
 
 // A flag the parser stored but never read let `--modle opus` spawn an unpinned
@@ -1264,6 +1313,15 @@ describe("unknown, repeated, and stray arguments", () => {
     const { newWorker } = await importDashboardWorkers();
     await expect(workers(["new", "proj", "--model", "opus", "--model", "sonnet"]))
       .rejects.toThrow(/Unknown or repeated option '--model'/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+
+  it("workers new refuses a blank value rather than spawning on the default it was meant to set", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+    await expect(workers(["new", "proj", "--harness", ""])).rejects.toThrow(/^--harness requires a value$/);
+    await expect(workers(["new", "proj", "--crew", " "])).rejects.toThrow(/^--crew requires a value$/);
     expect(newWorker).not.toHaveBeenCalled();
   });
 

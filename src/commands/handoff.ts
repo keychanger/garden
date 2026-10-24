@@ -15,13 +15,30 @@ import {
   submitHandoffRequest, waitForHandoffResponse, withdrawPendingHandoffRequest,
 } from "../dashboard/handoff-dispatch.js";
 import { triggerProjectPoll } from "../dashboard/poller-fifo.js";
-import { getCrew, listCrews } from "../dashboard/crew.js";
+import { getCrew, listCrews, spawnBuildHarness } from "../dashboard/crew.js";
 import { findWorkerByName } from "../dashboard/registry.js";
-import { WORKER_EFFORT_LEVELS } from "../dashboard/worker-effort.js";
-import { requireModelValue, parseEffortFlag } from "./launch-flags.js";
+import { composerEfforts } from "../dashboard/harness/vocabulary.js";
+import { requireModelValue, parseEffortFlag, parseFlags, type FlagTable } from "./launch-flags.js";
 
 const HANDOFF_CLAIM_TIMEOUT_MS = 15_000;
 const HANDOFF_PROCESSING_TIMEOUT_MS = 75_000;
+
+// The briefing is prose, taken verbatim even when it equals an option, so `-m`
+// is the one option whose value is not held to the parser's value rules.
+const HANDOFF_FLAGS: FlagTable = {
+  values: ["--crew", "--model", "--effort", "--bead", "-m"],
+  switches: ["--expect-callback", "--ultracode"],
+  opaque: ["-m"],
+  usage: "--expect-callback, --ultracode, --crew <name>, --model <alias-or-id>, "
+    + "--effort <rung>, --bead <id>, -m \"<message>\"",
+  missing: {
+    "--bead": "--bead requires a bead id argument.",
+    "--crew": "--crew requires a crew name argument.",
+    "--model": "--model requires a value (an alias like 'opus', or a concrete model id).",
+    "--effort": "--effort requires a value (a reasoning rung of the harness the new worker builds with).",
+    "-m": "-m requires a message argument.",
+  },
+};
 
 export async function handoff(args: string[]): Promise<void> {
   const targetProject = args[0];
@@ -37,19 +54,21 @@ export async function handoff(args: string[]): Promise<void> {
       + "                     the worker inherits the crew stamped on the calling worker's own entry, if any\n"
       + "  --model <m>        pin the new worker's model (an alias like 'opus', or a concrete model id);\n"
       + "                     outranks the crew's builder seat and the target project's default\n"
-      + `  --effort <rung>    pin the new worker's reasoning rung: ${[...WORKER_EFFORT_LEVELS, "ultra"].join(", ")}\n`
-      + "                     ('ultra' is the ultracode preset, so it cannot be combined with --ultracode)\n"
+      + "  --effort <rung>    pin the new worker's reasoning rung, in the ladder of the harness it builds with:\n"
+      + `                     ${composerEfforts("claude-code").join(", ")} on Claude Code ('ultra' is the ultracode preset,\n`
+      + `                     so it cannot be combined with --ultracode); ${composerEfforts("codex").join(", ")} on Codex\n`
       + "  --bead <id>        stamp the bead id on the new worker's registry entry (the bead↔worker join;\n"
       + "                     makes no bd claim — the worker's own briefed claim is the claim)\n"
       + "  --expect-callback  receive a one-shot prompt at this pane when the child reaches a terminal state",
     );
   }
 
-  if (!tryGetProject(targetProject)) {
+  const project = tryGetProject(targetProject);
+  if (!project) {
     throw new Error(`Unknown project '${targetProject}'. Run 'garden list' to see registered projects.`);
   }
 
-  const flags = parseHandoffFlags(args.slice(1));
+  const { flags } = parseFlags(args.slice(1), HANDOFF_FLAGS);
   const expectCallback = flags.has("--expect-callback");
   const ultracode = flags.has("--ultracode");
   const bead = flags.get("--bead");
@@ -77,26 +96,8 @@ export async function handoff(args: string[]): Promise<void> {
       + "max effort. Use --effort ultra for the preset, or --ultracode on its own.",
     );
   }
-  // "ultra" names the ultracode preset rather than a rung, so at most one of
-  // the two fields below is ever set — the same split `workers new` makes.
-  const effortOpts = effortRaw !== undefined ? parseEffortFlag(effortRaw) : {};
-  const effort = effortOpts.effort;
-  const ultracodeRequested = ultracode || effortOpts.ultracode === true;
-
-  const briefing = await readBriefing(flags.get("-m"));
-  if (!briefing.trim()) {
-    throw new Error("Empty briefing. Pass -m \"<text>\" or pipe a message via stdin.");
-  }
-
   const sourceProject = process.env.GARDEN_PROJECT;
   const sourceWorker = process.env.GARDEN_WORKER;
-  if (expectCallback && !(sourceProject && sourceWorker)) {
-    throw new Error(
-      "--expect-callback requires running inside a garden worker pane "
-      + "(GARDEN_PROJECT and GARDEN_WORKER must be set). There's no parent "
-      + "to call back to from a bare shell.",
-    );
-  }
   // Without --crew, the child inherits the crew stamped on THIS worker's
   // entry. A designer's design seat came from that crew, so its builder gets
   // the same crew's build and review halves with nothing in the brief to
@@ -110,6 +111,30 @@ export async function handoff(args: string[]): Promise<void> {
       crew = own;
       inheritedCrew = true;
     }
+  }
+
+  // The rung is named in the ladder of the harness the child builds with,
+  // which that crew decides, else the target project. On claude-code "ultra"
+  // is the ultracode preset rather than a rung, so at most one of the two
+  // fields below is ever set — the same split `workers new` makes. Config and
+  // the registry are all this reads, both open to the worker sandbox.
+  const effortOpts = effortRaw === undefined
+    ? {}
+    : parseEffortFlag(effortRaw, spawnBuildHarness(project, { workflow: "default", crew }, loadConfig()));
+  const effort = effortOpts.effort;
+  const ultracodeRequested = ultracode || effortOpts.ultracode === true;
+
+  const briefing = await readBriefing(flags.get("-m"));
+  if (!briefing.trim()) {
+    throw new Error("Empty briefing. Pass -m \"<text>\" or pipe a message via stdin.");
+  }
+
+  if (expectCallback && !(sourceProject && sourceWorker)) {
+    throw new Error(
+      "--expect-callback requires running inside a garden worker pane "
+      + "(GARDEN_PROJECT and GARDEN_WORKER must be set). There's no parent "
+      + "to call back to from a bare shell.",
+    );
   }
   const callbackTag = expectCallback ? " — callback requested" : "";
   const prefix = sourceProject && sourceWorker
@@ -194,38 +219,6 @@ export async function handoff(args: string[]): Promise<void> {
   ].filter(Boolean);
   const suffix = notes.length ? ` (${notes.join("; ")})` : "";
   console.log(`Handed off to ${targetProject}/${resp.workerName}.${suffix}`);
-}
-
-function parseHandoffFlags(args: string[]): Map<string, string> {
-  const missingMessages: Record<string, string> = {
-    "--bead": "--bead requires a bead id argument.",
-    "--crew": "--crew requires a crew name argument.",
-    "--model": "--model requires a value (an alias like 'opus', or a concrete model id).",
-    "--effort": `--effort requires a value (${[...WORKER_EFFORT_LEVELS, "ultra"].join(", ")}).`,
-    "-m": "-m requires a message argument.",
-  };
-  const flags = new Map<string, string>();
-  for (let i = 0; i < args.length; i++) {
-    const flag = args[i];
-    const boolean = flag === "--expect-callback" || flag === "--ultracode";
-    if (flags.has(flag) || (!boolean && !Object.hasOwn(missingMessages, flag))) {
-      throw new Error(
-        `Unknown or repeated handoff option '${flag}'. Supported once each: `
-        + "--expect-callback, --ultracode, --crew <name>, --model <alias-or-id>, "
-        + "--effort <rung>, --bead <id>, -m \"<message>\".",
-      );
-    }
-    if (boolean) {
-      flags.set(flag, "");
-      continue;
-    }
-    const value = args[++i];
-    if (value === undefined || (flag !== "-m" && (!value.trim() || value.trimStart().startsWith("-")))) {
-      throw new Error(missingMessages[flag]);
-    }
-    flags.set(flag, flag === "-m" ? value : value.trim());
-  }
-  return flags;
 }
 
 async function readBriefing(message: string | undefined): Promise<string> {

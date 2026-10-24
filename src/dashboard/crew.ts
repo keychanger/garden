@@ -228,6 +228,32 @@ export function resolveProjectCrew(
   return project.crew ? getCrew(project.crew, config) : null;
 }
 
+// The harness a new worker builds with, read through the chain newWorker
+// resolves: an explicit harness; else, on a designer, the design seat of its
+// crew (the per-worker one, else the project's); else the per-worker crew's
+// builder; else, on the default workflow only, the project's flat key and then
+// its bound crew's builder. Grow and planner workers take neither project key,
+// so they build with claude-code. The CLI reads a per-spawn `--effort` in this
+// harness's vocabulary, and the handoff dispatcher checks the forwarded rung
+// against it.
+export function spawnBuildHarness(
+  project: Pick<ProjectConfig, "harness" | "crew">,
+  spawn: { workflow: string; harness?: string; crew?: string },
+  config: GardenConfig,
+): string {
+  const projectCrew = resolveProjectCrew(project, config);
+  const workerCrew = spawn.crew ? getCrew(spawn.crew, config) : null;
+  const designCrew = spawn.workflow === "designer" ? workerCrew ?? projectCrew : null;
+  const projectHarness = spawn.workflow === "default"
+    ? project.harness ?? projectCrew?.worker.harness
+    : undefined;
+  const harness = spawn.harness
+    || (designCrew ? designerSeat(designCrew).harness : undefined)
+    || workerCrew?.worker.harness
+    || projectHarness;
+  return canonicalHarnessName(harness || DEFAULT_HARNESS);
+}
+
 function memberFor(harness: string, provider: string | undefined): CrewMember {
   return provider ? { name: provider, harness, provider } : { name: harnessMemberName(harness), harness };
 }
