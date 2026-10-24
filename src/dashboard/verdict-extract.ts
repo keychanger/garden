@@ -34,10 +34,13 @@ const EXTRACT_TIMEOUT_MS = 45_000;
 // even when the reviewer dumped a large test log.
 const MAX_INPUT_CHARS = 20_000;
 
+// FAILED is a judgement of the code. A review that never reached one (an API
+// or auth error, a cutoff) is UNKNOWN, so it takes the bounded unparseable
+// retry rather than parking the worker as a code failure.
 const REVIEW_VERDICT_MEANINGS: readonly string[] = [
   "CLEAN  — the reviewer found no issues; the code is ready to merge as-is.",
   "FIXED  — the reviewer found issues and fixed them itself in the worktree.",
-  "FAILED — the reviewer found issues it could not fix, or could not finish the review.",
+  "FAILED — the reviewer found issues in the code that it could not fix.",
 ];
 
 const REVIEW_EXTRACT_VOCAB = ["CLEAN", "FIXED", "FAILED"] as const;
@@ -47,13 +50,15 @@ export type ReviewVerdictToken = (typeof REVIEW_EXTRACT_VOCAB)[number];
 // reply names none (e.g. "UNKNOWN") or more than one (e.g. it echoed the option
 // list). Requiring exactly one distinct token is the conservative guard: a
 // waffling or non-compliant answer yields null and the caller re-reviews rather
-// than merging on a coin-flip. Pure and vocab-generic so it is unit-testable
-// without spawning a process.
+// than merging on a coin-flip. An UNKNOWN anywhere names no verdict, even when
+// its explanation uses a verdict word ("the reviewer failed to authenticate").
+// Pure and vocab-generic so it is unit-testable without spawning a process.
 export function selectVerdictFromResponse<V extends string>(
   response: string,
   vocabulary: readonly V[],
 ): V | null {
   const upper = response.toUpperCase();
+  if (/\bUNKNOWN\b/.test(upper)) return null;
   const present = vocabulary.filter((v) => new RegExp(`\\b${v}\\b`).test(upper));
   return present.length === 1 ? present[0] : null;
 }
@@ -76,8 +81,9 @@ function buildExtractionPrompt(reviewerOutput: string): string {
     "  FIXED",
     "  FAILED",
     "",
-    "If the reviewer's conclusion is genuinely unclear, reply with the single word",
-    "UNKNOWN. Do not guess, and never list more than one token.",
+    "If the reviewer's conclusion is genuinely unclear, or it never reached one",
+    "(its output is an error message, or it stopped before finishing), reply",
+    "with the single word UNKNOWN. Do not guess, and never list more than one token.",
     "",
     "===== BEGIN REVIEWER OUTPUT =====",
     reviewerOutput,
@@ -109,7 +115,9 @@ export function extractReviewVerdict(
 
   let res: ReturnType<typeof spawnSync>;
   try {
-    res = spawnSync("claude", ["-p", "--model", opts.model ?? EXTRACT_MODEL], {
+    // No tools: this reads text it is handed. The reviewer output is derived
+    // from worker-written content and this process runs unsandboxed.
+    res = spawnSync("claude", ["-p", "--model", opts.model ?? EXTRACT_MODEL, "--tools", ""], {
       input: prompt,
       env: opts.env,
       encoding: "utf-8",
@@ -123,6 +131,14 @@ export function extractReviewVerdict(
   if (res.error) {
     log.warn("poller", "verdict extraction did not complete", {
       data: { error: String(res.error), signal: res.signal ?? undefined },
+    });
+    return null;
+  }
+  // The CLI prints its own failures, such as an expired login, to stdout and
+  // exits non-zero; "Failed to authenticate: ..." would otherwise read as FAILED.
+  if (res.status !== 0) {
+    log.warn("poller", "verdict extraction exited unsuccessfully", {
+      data: { status: res.status, signal: res.signal ?? undefined },
     });
     return null;
   }
