@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -148,6 +148,44 @@ describe("worker bootstrap (real fs + real git)", () => {
     // Byte-for-byte the existing dialect: no codex install, launches claude.
     expect(claude).not.toContain("_install-worker-runtime");
     expect(claude).toContain("claude --rc");
+  });
+
+  // The script runs under set -e with an ERR trap that reports a failed
+  // bootstrap. An agent exiting non-zero (a crash, a kill) is not one, and must
+  // still reach the command that records the exit.
+  it("records the agent's exit when the agent exits non-zero", async () => {
+    const bin = path.join(env.home, "bin");
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, "claude"), "#!/bin/sh\nexit 137\n", { mode: 0o755 });
+    const recorded = path.join(env.home, "recorded");
+    const recorder = path.join(env.home, "record.sh");
+    fs.writeFileSync(recorder, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${recorded}'\n`, { mode: 0o755 });
+    vi.doMock("../../src/dashboard/runner.js", async (importOriginal) => ({
+      ...await importOriginal<typeof import("../../src/dashboard/runner.js")>(),
+      resolveGardenRunner: () => recorder,
+    }));
+    try {
+      const { buildWorktreeBootstrapScript } = await import("../../src/dashboard/create.js");
+      const lines = fs.readFileSync(
+        buildWorktreeBootstrapScript(PROJECT, projectPath, WORKER, WORKER, "sid", worktreePath, "main"),
+        "utf-8",
+      ).split("\n");
+      // The script's own error handling, then its launch tail; the worktree
+      // setup between them is not what this checks.
+      const trapAt = lines.findIndex(l => l.startsWith("trap ") && l.endsWith(" ERR"));
+      const launchAt = lines.indexOf("# Launch the agent");
+      expect(trapAt).toBeGreaterThan(0);
+      expect(launchAt).toBeGreaterThan(trapAt);
+      const r = spawnSync("sh", ["-c", [...lines.slice(0, trapAt + 1), ...lines.slice(launchAt)].join("\n")], {
+        encoding: "utf8",
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SHELL: "/usr/bin/true" },
+      });
+      expect(r.stderr).not.toContain("Bootstrap aborted");
+      expect(fs.existsSync(recorded) ? fs.readFileSync(recorded, "utf-8") : "")
+        .toContain(`dashboard _agent-exited ${PROJECT} ${WORKER}`);
+    } finally {
+      vi.doUnmock("../../src/dashboard/runner.js");
+    }
   });
 
   // Garden's settings file for the worktree (outside it, under ~/.garden/control).

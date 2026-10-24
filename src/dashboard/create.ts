@@ -297,10 +297,12 @@ export function ensureDashboard(): void {
 
   setupStatusBar(gardenRunner);
 
-  // tmux pane-died hook: when a worker pane process exits, write
-  // agentStatus="exited" to the registry. This is the only mechanism in
-  // the new status model that observes process liveness — and tmux delivers
-  // it as an event, not a poll.
+  // tmux pane-died hook: writes agentStatus="exited" for a worker pane whose
+  // program exited. tmux runs it only while remain-on-exit keeps such a pane
+  // open, which garden never sets, so it is inert unless the operator does.
+  // A worker's agent exiting is recorded by its launch wrapper instead
+  // (agentExitedCommand): the wrapper `exec $SHELL`s afterwards, so the pane
+  // lives on when the agent dies.
   // gardenRunner is already pre-escaped per token by resolveGardenRunner();
   // wrap the inner shell command with tmuxDoubleQuote so $, `, and \ in the
   // runner path don't get re-interpreted by tmux's command parser.
@@ -369,9 +371,9 @@ export function ensureDashboard(): void {
     for (const entry of entries) {
       if (!entry.sessionId) continue;
       // Capture mid-turn interruption before we overwrite agentStatus below.
-      // pane-died sets interruptedWhileWorking when agentStatus was "working"
-      // at exit; if pane-died never fired (tmux server crash), agentStatus
-      // itself will still be "working".
+      // The launch wrapper's exit record sets interruptedWhileWorking when
+      // agentStatus was "working" at exit; if it never ran (tmux server crash,
+      // dashboard kill), agentStatus itself will still be "working".
       // SessionStart DOES fire on --resume (source="resume"), but the hook now
       // preserves whatever we write here rather than resetting it (see
       // hooks/default.ts) — so this write is the authoritative post-resume
@@ -726,7 +728,15 @@ export function buildWorktreeWorkerCommand(
     settingsFile: claudeSettingsPath(wtPath),
     worktreeGitDirs: codexWorktreeGitDirs(launchPlan.harness, projectPath, wtPath),
   });
-  return `${agentCmd}; ${pollSignalSnippet(projectName)} exec $SHELL`;
+  const exitRecord = agentExitedCommand(resolveGardenRunner(), projectName, workerName);
+  return `${agentCmd}; ${exitRecord}; ${pollSignalSnippet(projectName)} exec $SHELL`;
+}
+
+// The worker launch wrapper's record of its agent exiting (handleAgentExited).
+// The pane outlives the agent, since `exec $SHELL` follows it, so tmux reports
+// no event for this; the wrapper's next command is the only witness.
+function agentExitedCommand(gardenRunner: string, projectName: string, workerName: string): string {
+  return `${gardenRunner} dashboard _agent-exited ${shellEscape(projectName)} ${shellEscape(workerName)} 2>/dev/null || true`;
 }
 
 // The project view a WORKER's runtime is built from: the real project with its
@@ -1165,8 +1175,11 @@ cd ${wtPathLit}
 printf '  Ready.\\n\\n'
 
 # Launch the agent
-${agentCmd}
-${gardenRunnerLit} dashboard _claude-hook stop 2>/dev/null || true
+# Its exit status is not a bootstrap failure: under set -e a non-zero exit
+# (a crash, a kill) would fire the ERR trap above, which reports an aborted
+# bootstrap and skips recording that the agent is gone.
+${agentCmd} || true
+${agentExitedCommand(gardenRunnerLit, projectName, workerName)}
 ${pollSignal}
 exec $SHELL
 `;
@@ -1327,8 +1340,8 @@ export function buildWorktreeResumeCommand(
     settingsFile: claudeSettingsPath(wtPath),
     worktreeGitDirs: codexWorktreeGitDirs(launchPlan.harness, projectPath, wtPath),
   });
-  const exitHook = `${gardenRunner} dashboard _claude-hook stop 2>/dev/null || true`;
-  return `${identityExports} ${claudeCmd}; ${exitHook}; ${pollSignalSnippet(projectName)} exec $SHELL`;
+  const exitRecord = agentExitedCommand(gardenRunner, projectName, workerName);
+  return `${identityExports} ${claudeCmd}; ${exitRecord}; ${pollSignalSnippet(projectName)} exec $SHELL`;
 }
 
 // Injects worker identity into claude and the fallback shell so `garden whoami` and `garden logs -w $GARDEN_WORKER` work inside a worker pane.

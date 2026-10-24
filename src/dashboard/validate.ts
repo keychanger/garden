@@ -519,7 +519,7 @@ export function validateAndHeal(state: DashboardState): DashboardState {
   // rule (per the operator's standing feedback) means we must NOT remove
   // the registry entry: a transient tmux glitch (server crash + restart)
   // would otherwise discard the worker permanently. Mark `agentStatus =
-  // "exited"` (matching the pane-died hook's effect) and surface an alert
+  // "exited"` (what the launch wrapper's exit record writes) and surface an alert
   // so the operator can either resume manually or `⌥x` to clean up.
   // One locked read-modify-write for the whole registry pass. The per-entry
   // window/worktree probes (tmux/git forks) run inside the lock, so the hold is

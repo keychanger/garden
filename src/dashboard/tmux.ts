@@ -676,8 +676,8 @@ const SHELL_COMMANDS = new Set([
 // its agent process (`claude`, or `node` for an npm install) alongside the `sh`
 // launch wrapper and any Bash-tool `bash`, so it is never "all shells" and can
 // never be wrongly flagged — the failure mode that would break auto-continue.
-// A clean Claude exit `exec $SHELL`s the wrapper WITHOUT firing tmux pane-died
-// (so agentStatus can still read `idle`), leaving only the shell on the tty —
+// A clean Claude exit `exec $SHELL`s the wrapper (and one that recorded no exit
+// leaves agentStatus reading `idle`), leaving only the shell on the tty —
 // the exact state a live `#{pane_current_command}` probe can't distinguish
 // (Claude Code holds a `bash` in the pty foreground even while alive). Fails
 // OPEN (returns false → treat as live) on any probe error, empty output, or

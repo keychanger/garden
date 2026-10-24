@@ -17,9 +17,10 @@ import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
 import type { BackgroundTaskScan } from "./background-tasks.js";
 
-// agentStatus is written by Claude Code hooks, the tmux pane-died handler, and
-// the operator `hold` action (which writes "paused"). prState is written by
-// the poller. There are no other writers. See STATUS.md.
+// agentStatus is written by Claude Code hooks, the launch wrapper's record of
+// its agent exiting (handleAgentExited, "exited"), and the operator `hold`
+// action (which writes "paused"). prState is written by the poller. See
+// STATUS.md.
 export type AgentStatus = "loading" | "ready" | "working" | "asking" | "idle" | "paused" | "exited";
 export type PrState = "working" | "reviewing" | "merge-pending" | "resolving" | "ci-fixing" | "merged" | "done" | "failing";
 
@@ -350,8 +351,9 @@ export interface WorkerEntry {
   // reviewer, so codex resumes automatically once its window resets. See
   // poller-review.ts handleQuotaFallbackReview / launchReview.
   reviewFallbackHarness?: string;
-  // Set by handlePaneDied when agentStatus was "working" at the moment the
-  // pane died (dashboard kill, tmux server gone). Read by ensureDashboard's
+  // Set when agentStatus was "working" at the moment the agent exited: by
+  // handleAgentExited (the launch wrapper's record of that), or by
+  // handlePaneDied under remain-on-exit. Read by ensureDashboard's
   // resume loop to decide whether to auto-send a "continue" prompt after the
   // worker is brought back via `claude --resume`. Cleared by _continue-worker
   // once the prompt is dispatched.

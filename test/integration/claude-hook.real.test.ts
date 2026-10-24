@@ -412,3 +412,69 @@ describe("Codex missed-Stop heal (real fs + real git)", () => {
     expect(w.prState).toBe("done");
   });
 });
+
+// The launch wrapper's record of its agent exiting. The pane outlives the agent
+// (`exec $SHELL` follows it), so tmux reports nothing, and an agent that dies
+// mid-turn fires no Stop. STATUS.md: `exited` means the worker process is gone.
+describe("agent exit (real fs + real git)", () => {
+  type Row = {
+    agentStatus: string; interruptedWhileWorking?: boolean;
+    lastStateChangeAt?: number; pendingReviewAt?: number;
+  };
+
+  it("marks the worker exited, and interrupted when the agent died mid-turn", async () => {
+    seedRegistry("working");
+    process.chdir(worktreePath);
+    const { handleAgentExited } = await import("../../src/dashboard/hooks/default.js");
+
+    handleAgentExited(PROJECT, WORKER);
+
+    const w = readRegistryFile().workers[PROJECT][0] as Row;
+    expect(w.agentStatus).toBe("exited");
+    expect(w.interruptedWhileWorking).toBe(true);
+    expect(typeof w.lastStateChangeAt).toBe("number");
+  });
+
+  it("does not flag an agent that ended its turn before exiting", async () => {
+    seedRegistry("idle");
+    process.chdir(worktreePath);
+    const { handleAgentExited } = await import("../../src/dashboard/hooks/default.js");
+
+    handleAgentExited(PROJECT, WORKER);
+
+    const w = readRegistryFile().workers[PROJECT][0] as Row;
+    expect(w.agentStatus).toBe("exited");
+    expect(w.interruptedWhileWorking).toBeUndefined();
+  });
+
+  it("arms the review for commits the cut-short turn left behind", async () => {
+    seedRegistry("working");
+    fs.writeFileSync(path.join(worktreePath, "ahead.txt"), "x\n");
+    git(worktreePath, "add", "ahead.txt");
+    git(worktreePath, "commit", "-m", "ahead");
+    process.chdir(worktreePath);
+    const { handleAgentExited } = await import("../../src/dashboard/hooks/default.js");
+    const { triggerProjectPoll } = await import("../../src/dashboard/poller-fifo.js");
+    vi.mocked(triggerProjectPoll).mockClear();
+
+    handleAgentExited(PROJECT, WORKER);
+
+    const w = readRegistryFile().workers[PROJECT][0] as Row;
+    expect(w.agentStatus).toBe("exited");
+    expect(typeof w.pendingReviewAt).toBe("number");
+    expect(triggerProjectPoll).toHaveBeenCalledWith(PROJECT);
+  });
+
+  it("does nothing for a worker the registry does not hold", async () => {
+    seedRegistry("working");
+    process.chdir(worktreePath);
+    const before = readRegistryFile();
+    const { handleAgentExited } = await import("../../src/dashboard/hooks/default.js");
+
+    handleAgentExited(PROJECT, "not-a-worker");
+
+    expect(readRegistryFile()).toEqual(before);
+    const logFile = path.join(env.sessionsDir, "dashboard.log");
+    expect(fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf-8") : "").not.toContain("agent exited");
+  });
+});

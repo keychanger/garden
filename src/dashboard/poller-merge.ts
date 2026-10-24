@@ -1394,9 +1394,9 @@ function notifySiblingWorkers(
       continue;
     }
 
-    // A clean agent exit `exec $SHELL`s the launch wrapper without firing
-    // pane-died, so agentStatus can still read idle while the pane is the
-    // operator's unsandboxed shell. The paste would run there as commands, and
+    // A launch wrapper that recorded no exit (one older than the exit record,
+    // or whose record failed) leaves agentStatus reading idle while the pane is
+    // the operator's unsandboxed shell. The paste would run there as commands, and
     // the notice quotes a commit subject and file names workers wrote.
     // continueWorker skips the same pane for the same reason.
     if (paneRunningOnlyShell(paneId)) {

@@ -234,7 +234,7 @@ semantics):
 | Subsystem | Chokepoints | Dominant severity |
 |---|---|---|
 | Session launch | Five sibling builders in `create.ts` (`buildWorkerCommand`, `buildResumeCommand`, `buildWorktreeWorkerCommand`, `buildWorktreeBootstrapScript`, `buildWorktreeResumeCommand`) all string-concatenate the same `claude --rc [--session-id\|--resume] ... --append-system-prompt-file ...` shape | adapter-method |
-| Hook/status engine | `buildSettingsJson` (`create.ts:48-104`) binds six Claude hook events; `hook-dispatcher.ts` routes garden's already-shortened event names (`stop`, `prompt`, `posttooluse`, ..., plus a seventh, `notification`); `agentStatus` written by the hook handlers for in-session transitions, by the tmux pane-died handler and `validate.ts` reconciliation for `exited`, and by the bounce/attach resume paths via `resolveResumeAgentStatus` (the authoritative post-resume status the SessionStart resume/compact hook then preserves — `--resume` *does* fire SessionStart with `source="resume"`) | **architectural** |
+| Hook/status engine | `buildSettingsJson` (`create.ts:48-104`) binds six Claude hook events; `hook-dispatcher.ts` routes garden's already-shortened event names (`stop`, `prompt`, `posttooluse`, ..., plus a seventh, `notification`); `agentStatus` written by the hook handlers for in-session transitions, by the launch wrapper's exit record (`dashboard _agent-exited`) and `validate.ts` reconciliation for `exited`, and by the bounce/attach resume paths via `resolveResumeAgentStatus` (the authoritative post-resume status the SessionStart resume/compact hook then preserves — `--resume` *does* fire SessionStart with `source="resume"`) | **architectural** |
 | Headless agents | `launchHeadlessAgent` (`headless-agent.ts`) — already a single clean primitive, but hardcodes the `claude -p` contract and `"opus" \| "sonnet"` | adapter-method |
 | Transcript/history | `conversation.ts` parses Claude's JSONL envelope, content blocks, and tool-name vocabulary; the seam is two-part: `resolveTranscriptPath(entry)` (derives `~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl`) + `readConversation(path) → Turn[]` | adapter-method |
 | Credentials/usage | `credentials.ts` models every credential as a Claude OAuth blob (Keychain entry, refresh endpoint); `usage.ts` parses Anthropic's flat `five_hour`/`seven_day` buckets plus the model-scoped `weekly_scoped` entries in the `limits[]` array; consumed by the auto-continue gate (`poller-merge.ts checkUsageThreshold`) and trellis model fallback (`trellis-model.ts` via `findScopedMeter`); `usage-poller.ts` runs a dedicated hidden window polling Anthropic's usage endpoint | **architectural** |
@@ -456,10 +456,10 @@ migration treatment:
   |---|---|---|
   | `session-start(source)` | SessionStart hook | `ready`/preserve-on-resume |
   | `prompt-submitted` | UserPromptSubmit hook | `working`, clears sentinels/`merged` |
-  | `turn-ended` | Stop hook; adapters also fire it from the pane-exit shim (today `_claude-hook stop` appended to launch commands) as a best-effort flush on graceful exit | `idle`, commits-ahead + clean-worktree checks, review entry |
+  | `turn-ended` | Stop hook (the exit record below runs the same turn-end duties for a turn its exit cut short) | `idle`, commits-ahead + clean-worktree checks, review entry |
   | `blocked-on-operator` | PermissionRequest / PreToolUse matchers / Notification | `asking` |
   | `tool-activity` | PostToolUse | heartbeat, self-heal `asking`→`working` |
-  | `exited` | tmux pane-died handler (not a harness event) | `exited`, interrupt capture |
+  | `exited` | the launch wrapper's exit record, `dashboard _agent-exited` (not a harness event) | `exited`, interrupt capture |
 
   The dispatcher-to-workflow interface speaks only these events; each
   adapter translates its native payload into them. For Claude Code the

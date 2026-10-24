@@ -622,6 +622,20 @@ describe("buildWorktreeWorkerCommand", () => {
       .toContain(`${poke}; exec $SHELL`);
   });
 
+  // The pane outlives the agent (`exec $SHELL` follows it), so tmux reports
+  // nothing when the agent exits; the wrapper's next command records it.
+  it("records the agent's exit before the pane drops to a shell, in the fresh and resumed panes", () => {
+    const record = "dashboard _agent-exited myproject bold-ash 2>/dev/null || true";
+    for (const cmd of [
+      buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "s1"),
+      buildWorktreeResumeCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "s1"),
+    ]) {
+      expect(cmd).toContain(record);
+      expect(cmd.indexOf(record)).toBeLessThan(cmd.indexOf("exec $SHELL"));
+      expect(cmd).not.toContain("_claude-hook stop");
+    }
+  });
+
   it("includes session-id and context file", () => {
     const cmd = buildWorktreeWorkerCommand("myproject", "/repo/myproject", "bold-ash", "bold-ash", "session-123");
     expect(cmd).toContain("--session-id session-123");

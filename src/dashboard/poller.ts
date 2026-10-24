@@ -258,8 +258,8 @@ export function startProjectPoller(projectName: string, gardenRunner: string): v
 // Event-driven poller loop: poll once, then block on the FIFO until an
 // event arrives. Per STATUS.md invariant 6, there is no fallback poll.
 // Every transition is delivered by an event from one of these sources:
-// Claude Code hooks, worker push hook, merge queue completion, tmux
-// pane-died, or the auto-continue gate-reset wake (usage poller /
+// Claude Code hooks, worker push hook, merge queue completion, a launch
+// wrapper recording its agent's exit, or the auto-continue gate-reset wake (usage poller /
 // `garden auto on`). The poller is a pure dispatcher that does one unit
 // of work per wake.
 //

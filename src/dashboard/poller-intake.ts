@@ -117,7 +117,7 @@ export const DEFAULT_BEAD_INTAKE_CAP = 3;
 // gate keys) bypasses this via the marker file below.
 export const INTAKE_MIN_INTERVAL_MS = 60_000;
 // Grace before the reaper treats an exited worker's bead as abandoned — spans
-// a bounce's kill→relaunch gap and pane-died flapping.
+// a bounce's kill→relaunch gap and an agent relaunched soon after it exited.
 export const REAPER_GRACE_MS = 10 * 60_000;
 
 // The stamp paths live in intake-paths.ts (a hook-bundle-safe leaf, because

@@ -1391,7 +1391,7 @@ export function bounceActiveWorker(): void {
 }
 
 // Operator "hold": interrupt the worker's current Claude turn and mark it
-// `paused`. Unlike every other agentStatus writer (hooks, pane-died), this is
+// `paused`. Unlike every other agentStatus writer (hooks, the exit record), this is
 // operator-initiated — a hotkey / CLI keystroke is the event, which is exactly
 // as event-driven as a hook firing (STATUS.md invariant 6). There is no hook
 // for a user interrupt, so garden cannot observe a raw Escape; the operator

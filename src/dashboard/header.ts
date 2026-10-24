@@ -335,6 +335,9 @@ export function findWorkerPaneId(project: string, worker: string): string | null
 // look up the registry entry, and write agentStatus="exited". No-op when
 // the window name does not match a worker pattern (reviewer windows, garden
 // panes) or when the registry entry is missing (bootstrap-failure race).
+// tmux runs pane-died only while remain-on-exit holds a dead pane open, which
+// garden never sets; the worker's launch wrapper `exec $SHELL`s after its
+// agent anyway, so the agent exiting is handleAgentExited's (hooks/default.ts).
 export function handlePaneDied(windowName: string | undefined): void {
   if (!windowName) return;
   const parsed = parseWorkerWindow(windowName);

@@ -4,9 +4,11 @@
 //
 // 1) Interrupt recovery — when the dashboard is killed (or a worker is
 //    bounced) while agentStatus is "working", the worker has no way to
-//    resume on its own. The pane-died hook records `interruptedWhileWorking`
-//    on the registry entry; on resume, ensureDashboard fires a delayed
-//    subprocess that sends a "continue from where you left off" prompt.
+//    resume on its own. The launch wrapper's record of the agent exiting
+//    (handleAgentExited) sets `interruptedWhileWorking` on the registry entry,
+//    and a worker the rebuild found still `working` counts the same; on
+//    resume, ensureDashboard fires a delayed subprocess that sends a
+//    "continue from where you left off" prompt.
 //
 // 2) Post-merge auto-continue — when the poller successfully merges a
 //    worker's branch into its base, finalizeMerge dispatches a continue
@@ -855,9 +857,10 @@ export function continueWorker(
     });
     return false;
   }
-  // The worker's Claude has exited and the pane is now a bare shell. A clean
-  // exit `exec $SHELL`s the launch wrapper WITHOUT firing pane-died, so
-  // agentStatus can still read `idle` while the pane is an interactive shell.
+  // The worker's Claude has exited and the pane is now a bare shell. A launch
+  // wrapper that recorded no exit (one older than the exit record, or whose
+  // record failed) leaves agentStatus reading `idle` while the pane is an
+  // interactive shell.
   // Pasting the continue prompt — which carries backticked git commands
   // (`git reset --hard refs/remotes/origin/<base>`) — would execute it in that shell. Skip:
   // reviving an exited worker is `garden bounce` territory. Leave

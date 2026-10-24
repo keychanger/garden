@@ -79,8 +79,8 @@ export async function health(args: string[]): Promise<void> {
       }
 
       // Liveness comes from the registry's agentStatus, written by Claude
-      // Code hooks and the tmux pane-died handler. The registry is the
-      // single source of truth per STATUS.md.
+      // Code hooks and the launch wrapper's record of its agent exiting. The
+      // registry is the single source of truth per STATUS.md.
       const workerStatus = entry.agentStatus ?? "unknown";
       const task = entry.task ? ` (${entry.task})` : "";
       console.log(`  ${projectName}/${entry.name}: ${workerStatus}${task}`);
@@ -103,7 +103,7 @@ export async function health(args: string[]): Promise<void> {
       }
 
       // Dead-pane detection: if the pane PID is gone but agentStatus is
-      // not "exited", the tmux pane-died hook missed the death event.
+      // not "exited", nothing recorded the pane's death.
       // With --fix, write agentStatus="exited" to correct the registry.
       if (entry.agentStatus !== "exited") {
         const paneId = isActive

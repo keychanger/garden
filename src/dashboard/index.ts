@@ -8,6 +8,7 @@ import {
 import { readDashState } from "./state.js";
 import { printHeader, handlePaneDied, handleTitleChanged } from "./header.js";
 import { handleClaudeHook } from "./hook-dispatcher.js";
+import { handleAgentExited } from "./hooks/default.js";
 import { log } from "./log.js";
 import { ensureDashboard, resizeTerminal, cleanupContextFiles } from "./create.js";
 import { newWorkerFromHotkey, killPane, bounceActiveWorker, holdActiveWorker } from "./workers.js";
@@ -514,6 +515,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   // Back-compat: pre-auto-mode worktrees wired _judge-bash as a PreToolUse Bash hook; drop once no settings.local.json references it.
   if (sub === "_judge-bash") return;
   if (sub === "_pane-died") return handlePaneDied(args[1]);
+  if (sub === "_agent-exited") return handleAgentExited(args[1], args[2]);
   if (sub === "_title-changed") return handleTitleChanged(args[1], args[2]);
   if (sub === "_client-resized") {
     // Terminal resize: tmux redistributes pane sizes proportionally AND the

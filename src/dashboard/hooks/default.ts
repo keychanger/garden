@@ -559,6 +559,42 @@ const onTurnEnded: HookMethod = (ctx) => {
   // reviewer/resolver/ci-fix roles spend Codex quota without firing any hook.
 };
 
+// The agent process in a worker pane exited: its launch wrapper runs this next
+// (create.ts agentExitedCommand). The pane outlives the agent (`exec $SHELL`
+// follows), so tmux reports nothing, and a turn the exit cut short fired no
+// Stop. Records `exited` (STATUS.md: the worker process is gone), flagged as
+// interrupted when the agent died mid-turn so the next resume sends the
+// continue prompt, then runs the turn-end duties that Stop would have owed:
+// the cut-short turn may have left commits to review. The status lands first,
+// so a poller that routine wakes never reads the dead agent as mid-turn. Owed
+// handoff callbacks stay owed, since no agent is left to paste them into; the
+// resumed worker's next turn end delivers them.
+export function handleAgentExited(project: string | undefined, worker: string | undefined): void {
+  if (!project || !worker || !findWorkerByName(project, worker)) return;
+  const now = Date.now();
+  let interrupted = false;
+  try {
+    // Read under the lock, so a hook landing in between cannot be misread.
+    interrupted = updateWorkerFieldsIf(project, worker, entry => ({
+      fields: {
+        agentStatus: "exited",
+        lastEventAt: now,
+        lastStateChangeAt: now,
+        ...(entry.agentStatus === "working" ? { interruptedWhileWorking: true } : {}),
+      },
+      result: entry.agentStatus === "working",
+    })) === true;
+  } catch (err) {
+    log.warn("hook", "agent exit update failed", {
+      worker,
+      data: { project, error: String(err) },
+    });
+  }
+  log.info("hook", "agent exited", { worker, data: { project, interrupted } });
+  routeStopHookEnd(project, worker, process.cwd());
+  refreshDashboard();
+}
+
 // Background-task tracking reads Claude Code's transcript shapes; Codex has
 // no equivalent records (background-tasks.ts).
 function claudeTranscriptPath(ctx: HookContext): string | undefined {
