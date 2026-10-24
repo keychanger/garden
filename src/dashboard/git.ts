@@ -1165,13 +1165,16 @@ export function gardenInstallRepo(): string | null {
 // origin/<branch> ref — deliberately no fetch, since this feeds the status bar
 // and must never touch the network; the ref is advanced by fastForwardBase's
 // fetch on every merge, which is the same cadence the answer changes on.
+// Bounded at 10s: the watchdog runs it synchronously, and reads an iteration
+// that overran SLEEP_SLACK_MS (60s, runGit's default bound) as machine suspend.
 export function commitsBehindOrigin(
   repoPath: string,
   ref: string,
   branch: string,
 ): number | null {
   try {
-    const out = git(repoPath, "rev-list", "--count", "--end-of-options", `${assertRevision(ref)}..${remoteBranchRef(branch)}`);
+    const range = `${assertRevision(ref)}..${remoteBranchRef(branch)}`;
+    const out = runGit(repoPath, ["rev-list", "--count", "--end-of-options", range], { timeout: 10_000 });
     const n = Number(out.trim());
     return Number.isFinite(n) ? n : null;
   } catch {

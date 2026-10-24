@@ -61,6 +61,7 @@ import {
   getWorkerBaseBranch,
   getGitCommonDir,
   tryPublishBranch,
+  commitsBehindOrigin,
 } from "../src/dashboard/git.js";
 
 const mockExec = vi.mocked(execFileSync);
@@ -896,6 +897,20 @@ describe("fetchBaseBranch", () => {
       "git",
       safe("fetch", "--end-of-options", "origin", "refs/heads/main"),
       expect.objectContaining({ cwd: "/tmp/wt", timeout: 60_000 }),
+    );
+  });
+});
+
+describe("commitsBehindOrigin", () => {
+  it("bounds its count well under the watchdog's suspend slack", () => {
+    // The watchdog runs this synchronously and reads an iteration that overran
+    // SLEEP_SLACK_MS (60s) as machine suspend; git's default bound is 60s.
+    mockExec.mockReturnValue("3\n");
+    expect(commitsBehindOrigin("/repo", "a".repeat(40), "main")).toBe(3);
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      safe("rev-list", "--count", "--end-of-options", `${"a".repeat(40)}..refs/remotes/origin/main`),
+      expect.objectContaining({ cwd: "/repo", timeout: 10_000 }),
     );
   });
 });
