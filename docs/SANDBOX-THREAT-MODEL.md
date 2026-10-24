@@ -322,9 +322,10 @@ reads or runs.
   fast-forward check let onto the base. Garden's git now runs with
   `GIT_NO_REPLACE_OBJECTS=1`: `runGit` sets it for every command (`git-exec.ts`), the
   bootstrap script exports it before its first git command, and every headless agent gets
-  it inline, so a reviewer is not shown one tree while the queue pushes another under the
-  same commit. `info/grafts`, which git has deprecated in favor of replace refs, was not
-  tested.
+  it inline. That closes replace refs only. The rest of the shared git common dir is still
+  in the worker's write grant (see the write-confinement bullet above), so a SHA garden
+  takes from origin is no more trustworthy than that directory. Closing the class for good
+  means workers stop sharing the operator's git directory, which is an operator decision.
 - **Other state in the sessions dir is still trusted.** Besides the registry, garden
   keeps files there that sandboxed `garden` commands write: the dashboard state file,
   alerts, the pre-rendered pane files the status, usage, history and alerts panes replay,
