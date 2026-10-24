@@ -898,6 +898,23 @@ export function getChangedFiles(wtPath: string, baseBranch: string): string[] {
   }
 }
 
+// getChangedFiles for a check that must see every path a branch touches: the
+// designer's skip-review scope check, the only gate on a merge with no
+// reviewer. Rename detection is off, because with it `git mv src/x.ts
+// docs/x.md` lists only the docs/ destination, which hid the source deletion.
+// Null when git fails, so that check can fail closed instead of reading an
+// error as an empty diff.
+export function getChangedFilesNoRenames(wtPath: string, baseBranch: string): string[] | null {
+  try {
+    return nameList(wtPath, [
+      "diff", "--name-only", "--no-renames", "-z", "--end-of-options", `${remoteBranchRef(baseBranch)}...HEAD`,
+    ]);
+  } catch (err) {
+    log.warn("git", "getChangedFilesNoRenames failed", { data: { baseBranch, error: String(err) } });
+    return null;
+  }
+}
+
 export function getChangedFilesBetween(
   wtPath: string,
   fromSha: string,

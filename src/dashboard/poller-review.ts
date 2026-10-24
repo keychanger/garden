@@ -20,7 +20,7 @@ import { setDoneSentinel } from "./continue.js";
 import { CLEAR_HOLISTIC, FRESH_RESOLVE_CYCLE, FRESH_REVIEW_CYCLE } from "./cycle-resets.js";
 import {
   abortRebase, fetchBaseBranch, forcePushBranch, getBranchHeadSha, getCommitSummary, getRemoteTrackingSha,
-  getReviewFixNumstat, hasCommitsAhead, getChangedFiles, hasRebaseInProgress, isWorktreeDirty,
+  getReviewFixNumstat, hasCommitsAhead, getChangedFilesNoRenames, hasRebaseInProgress, isWorktreeDirty,
 } from "./git.js";
 import { gitTimedOut } from "./git-exec.js";
 import { getWorkflow } from "./workflows/index.js";
@@ -214,12 +214,9 @@ export function handleWorking(
   }
 
   // Skip-review workflows (designer): the branch carries a design artifact the
-  // operator already reviewed at the human gate, not code — so no reviewer runs.
-  // Route working -> merge-pending directly, after enforcing that the committed
-  // diff touches only publishable docs/ paths.
-  if (getWorkflow(entry.workflow ?? "default").skipsReviewMerge) {
-    return handleSkipReviewMerge(projectName, entry, wtPath, baseBranch);
-  }
+  // operator already reviewed at the human gate, not code — so no reviewer runs
+  // and no review slot is taken. It still waits on the clean-tree gate below.
+  const skipsReview = getWorkflow(entry.workflow ?? "default").skipsReviewMerge;
 
   // Fleet-wide review concurrency cap (garden-level limits.maxConcurrentReviews).
   // Reviews are the pipeline's entry point; when the machine is already running
@@ -227,15 +224,16 @@ export function handleWorking(
   // oversubscribing. pendingReviewAt stays set, so the re-poke (or any sibling
   // FIFO event, e.g. a review finishing and freeing a slot) re-drives this
   // handler and the launch proceeds once a slot opens.
-  if (deferForReviewCap(projectName, entry.name)) return false;
+  if (!skipsReview && deferForReviewCap(projectName, entry.name)) return false;
 
   // Launch-point backstop for the Stop hook's clean-tree gate: pendingReviewAt
   // can outlive the clean tree it was set on (a later turn dirtied the
   // worktree; that turn's dirty Stop skips re-arming but cannot unset the
-  // stale flag). launchReview rebases and force-pushes in this worktree, so
-  // never proceed unless it is provably clean — an indeterminate git result
-  // counts as dirty. pendingReviewAt stays set; the next clean-tree Stop (or
-  // any sibling poke) re-drives the launch.
+  // stale flag). launchReview rebases and force-pushes in this worktree, and a
+  // designer's publish goes to the merge queue, whose cleanWorktree discards
+  // uncommitted edits; so never proceed unless the tree is provably clean — an
+  // indeterminate git result counts as dirty. pendingReviewAt stays set; the
+  // next clean-tree Stop (or any sibling poke) re-drives the launch.
   const dirty = isWorktreeDirty(wtPath);
   if (dirty !== false) {
     log.info("poller", "review deferred: worktree not provably clean", {
@@ -254,6 +252,9 @@ export function handleWorking(
   // in the Stop hook's arming path, which the stale-working escape hatch above
   // bypasses entirely (no hook fires for a worker whose agent is hung).
   setReviewBlockedReason(projectName, entry, undefined);
+  // A skip-review worker routes working -> merge-pending directly, after
+  // enforcing that the committed diff touches only publishable docs/ paths.
+  if (skipsReview) return handleSkipReviewMerge(projectName, entry, wtPath, baseBranch);
   return launchReview(projectName, projectPath, baseBranch, entry);
 }
 
@@ -262,14 +263,25 @@ export function handleWorking(
 // reviewer, since the operator already reviewed the artifact at the gate. A
 // committed file outside docs/ (a designer that drifted into building code)
 // parks the worker in `failing` with an operator alert; removing the offending
-// files and re-pushing auto-retries the publish (see handleFailing).
+// files and re-pushing auto-retries the publish (see handleFailing). The diff
+// is read without rename detection, so the source side of a rename out of
+// src/ counts as a path outside docs/.
 function handleSkipReviewMerge(
   projectName: string,
   entry: WorkerEntry,
   wtPath: string,
   baseBranch: string,
 ): boolean {
-  const offending = getChangedFiles(wtPath, baseBranch).filter(f => !isPublishablePath(f));
+  const changed = getChangedFilesNoRenames(wtPath, baseBranch);
+  if (changed === null) {
+    // git could not list the diff (an error or a timeout). This check is all
+    // that stands between the branch and a merge with no reviewer, so an
+    // unread diff does not pass it: the review stays armed and the re-poke
+    // retries.
+    armReviewRecheck(projectName, "retry");
+    return false;
+  }
+  const offending = changed.filter(f => !isPublishablePath(f));
   if (offending.length > 0) {
     const shown = offending.slice(0, 5).join(", ");
     const more = offending.length > 5 ? ` (+${offending.length - 5} more)` : "";
@@ -1529,7 +1541,7 @@ export function countActiveReviewWindows(): number {
 // spin — the poll is also woken by any sibling FIFO event (a review finishing).
 const REVIEW_CAP_RETRY_MS = 20_000;
 // Re-poke cadence when a git step stopped the launch: the commit check failed,
-// or a designer publish's push did.
+// or a designer publish's scope-check diff or push did.
 const REVIEW_GIT_RETRY_MS = 30_000;
 
 // The fleet-wide review cap (garden-level limits.maxConcurrentReviews), asked

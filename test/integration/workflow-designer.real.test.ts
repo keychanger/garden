@@ -72,6 +72,12 @@ beforeEach(() => {
   git(projectPath, "add", ".");
   git(projectPath, "commit", "-m", "init");
   git(projectPath, "push", "-u", "origin", "main");
+  // The worker bootstrap's info/exclude entries (create.ts): the done sentinel
+  // a publish writes must not read as a change, since the skip route waits on
+  // the clean-tree gate.
+  fs.mkdirSync(path.join(projectPath, ".git", "info"), { recursive: true });
+  fs.appendFileSync(path.join(projectPath, ".git", "info", "exclude"),
+    [".claude/", ".garden-hooks/", ".garden/", ".garden-done", ".garden-awaiting-input"].join("\n") + "\n");
 
   worktreePath = path.join(env.home, ".garden", "worktrees", PROJECT, WORKER);
 
@@ -174,5 +180,37 @@ describe("designer workflow — skip-review merge on real fs/git", () => {
     expect(reviewWindowOpened).toBe(false);
     const mainFiles = git(projectPath, "ls-tree", "-r", "--name-only", "origin/main");
     expect(mainFiles).not.toContain("src-sneaky.ts");
+  });
+
+  // With rename detection on, `git diff --name-only` lists a rename by its
+  // destination alone, so moving a source file under docs/ read as a docs-only
+  // publish and merged the source deletion with no reviewer.
+  it("parks a designer that moved a source file under docs/ in failing with designer-scope", async () => {
+    const { createWorktree } = await import("../../src/dashboard/git.js");
+    const { poll } = await import("../../src/dashboard/poller.js");
+    const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+
+    fs.mkdirSync(path.join(projectPath, "src"), { recursive: true });
+    fs.writeFileSync(path.join(projectPath, "src", "engine.ts"),
+      "export const a = 1;\nexport const b = 2;\nexport const c = 3;\n");
+    git(projectPath, "add", "src/engine.ts");
+    git(projectPath, "commit", "-m", "add engine");
+    git(projectPath, "push", "origin", "main");
+
+    await plantDesigner({ pendingReviewAt: Date.now() });
+    createWorktree(projectPath, worktreePath, WORKER);
+    fs.mkdirSync(path.join(worktreePath, "docs"), { recursive: true });
+    git(worktreePath, "mv", "src/engine.ts", "docs/engine.md");
+    git(worktreePath, "commit", "-m", "move engine notes");
+    git(worktreePath, "push", "origin", WORKER);
+
+    poll(PROJECT);
+
+    const entry = findWorkerByName(PROJECT, WORKER);
+    expect(entry?.prState).toBe("failing");
+    expect(entry?.failingReason).toBe("designer-scope");
+    const mainFiles = git(projectPath, "ls-tree", "-r", "--name-only", "origin/main");
+    expect(mainFiles).toContain("src/engine.ts");
+    expect(mainFiles).not.toContain("docs/engine.md");
   });
 });

@@ -227,6 +227,7 @@ vi.mock("../src/dashboard/git.js", () => ({
   deleteRemoteBranch: vi.fn(),
   fastForwardBase: vi.fn(() => ({ ok: true, advanced: "worktree" })),
   getChangedFiles: vi.fn(() => []),
+  getChangedFilesNoRenames: vi.fn(() => [] as string[] | null),
   getChangedFilesBetween: vi.fn(() => []),
   getReviewFixNumstat: vi.fn(() => ({ files: 0, insertions: 0, deletions: 0 })),
   getCommitSummary: vi.fn(() => "abc123 fix something"),
@@ -330,7 +331,7 @@ import {
   getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
   forcePushBranch, mergeToBase, rebaseBranch, abortRebase, cleanWorktree,
   fastForwardBase,
-  getChangedFiles, getChangedFilesBetween, getHeadSubject, readCommittedFiles, fetchBaseBranch,
+  getChangedFiles, getChangedFilesNoRenames, getChangedFilesBetween, getHeadSubject, readCommittedFiles, fetchBaseBranch,
   getCommitSummary, hasCommitsAhead, getNewCommitSummary, getDiffAgainstBase, getDiffStat,
   isWorktreeDirty,
   listModifiedTrackedFiles, revertChurn,
@@ -393,6 +394,7 @@ beforeEach(() => {
   vi.mocked(listAllWindowNames).mockReturnValue([]);
   vi.mocked(getFirstPaneId).mockReturnValue("%5");
   vi.mocked(getChangedFiles).mockReturnValue([]);
+  vi.mocked(getChangedFilesNoRenames).mockReturnValue([]);
   vi.mocked(getDiffAgainstBase).mockReturnValue("diff --git a/file.ts b/file.ts");
   vi.mocked(getDiffStat).mockReturnValue(" file.ts | 2 +-\n 1 file changed");
   vi.mocked(buildRulesContext).mockReturnValue("test rules");
@@ -837,7 +839,7 @@ describe("poll — working state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
     ]);
-    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/notification-levels.md"]);
+    vi.mocked(getChangedFilesNoRenames).mockReturnValue(["docs/future/notification-levels.md"]);
 
     poll("myproject");
 
@@ -860,7 +862,7 @@ describe("poll — working state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
     ]);
-    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/notification-levels.md"]);
+    vi.mocked(getChangedFilesNoRenames).mockReturnValue(["docs/future/notification-levels.md"]);
 
     poll("myproject");
 
@@ -874,7 +876,7 @@ describe("poll — working state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
     ]);
-    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/notification-levels.md"]);
+    vi.mocked(getChangedFilesNoRenames).mockReturnValue(["docs/future/notification-levels.md"]);
     vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("remote hung up"); });
 
     poll("myproject");
@@ -892,7 +894,7 @@ describe("poll — working state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
     ]);
-    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/notification-levels.md"]);
+    vi.mocked(getChangedFilesNoRenames).mockReturnValue(["docs/future/notification-levels.md"]);
     vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("remote hung up"); });
 
     poll("myproject");
@@ -907,7 +909,7 @@ describe("poll — working state", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
     ]);
-    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/ok.md", "src/dashboard/sneaky.ts"]);
+    vi.mocked(getChangedFilesNoRenames).mockReturnValue(["docs/future/ok.md", "src/dashboard/sneaky.ts"]);
 
     poll("myproject");
 
@@ -920,6 +922,62 @@ describe("poll — working state", () => {
     expect(addAlert).toHaveBeenCalledWith(
       expect.objectContaining({ level: "error", worker: "bold-ash" }),
     );
+  });
+
+  // The scope check is the only gate on a merge with no reviewer, and the old
+  // diff helper answered every git failure with [], which read as "nothing
+  // outside docs/": a timed-out diff merged a designer's src/ commit unreviewed.
+  it("a designer whose scope-check diff git cannot list stays working and retries", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
+    ]);
+    vi.mocked(getChangedFilesNoRenames).mockReturnValue(null);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }));
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "failing" }));
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(findWorkerByName("myproject", "bold-ash")?.pendingReviewAt).toBeDefined();
+    expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30_000);
+  });
+
+  // pendingReviewAt can outlive the clean tree it was armed on. The skip route
+  // ran before the clean-tree gate, so a designer with uncommitted edits went
+  // to merge-pending, where the queue's cleanWorktree discards them.
+  it("a designer whose tree is not clean is not queued for merge", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
+    ]);
+    vi.mocked(getChangedFilesNoRenames).mockReturnValue(["docs/future/notification-levels.md"]);
+    vi.mocked(isWorktreeDirty).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }));
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    const entry = findWorkerByName("myproject", "bold-ash");
+    expect(entry?.reviewBlockedReason).toBe("dirty");
+    expect(entry?.pendingReviewAt).toBeDefined();
+  });
+
+  // A designer launches no reviewer, so the fleet review cap does not hold it.
+  it("a designer publish is not held by the fleet review cap", () => {
+    vi.mocked(getMaxConcurrentReviews).mockReturnValue(1);
+    vi.mocked(listAllWindowNames).mockReturnValue(["_other-review-calm-bay"]);
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
+    ]);
+    vi.mocked(getChangedFilesNoRenames).mockReturnValue(["docs/future/notification-levels.md"]);
+
+    poll("myproject");
+
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "merge-pending" }));
+    expect(scheduleDelayedPoke).not.toHaveBeenCalledWith("myproject", 20_000);
   });
 
   it("does NOT clear pendingReviewAt when the commit check errors (transient git failure)", () => {
