@@ -367,7 +367,21 @@ function applyAndLog(
   if (summary) fields.task = summary;
 
   try {
-    updateWorkerFields(ctx.workerInfo.project, ctx.workerInfo.name, fields);
+    // A prState in `fields` is the prompt hook's clear of merged/done, decided
+    // on the entry read when this hook began. The poller can move the worker
+    // in between (a holistic pass taking done to reviewing), and clearing that
+    // would leave its reviewer running with no state to report to, so the
+    // clear lands only while prState is still what the hook read.
+    if ("prState" in fields) {
+      const readPrState = ctx.workerInfo.entry.prState;
+      updateWorkerFieldsIf(ctx.workerInfo.project, ctx.workerInfo.name, current => {
+        if (current.prState === readPrState) return { fields, result: undefined };
+        const { prState: _decidedOnStaleRead, ...rest } = fields;
+        return { fields: rest, result: undefined };
+      });
+    } else {
+      updateWorkerFields(ctx.workerInfo.project, ctx.workerInfo.name, fields);
+    }
   } catch (err) {
     log.warn("hook", "failed to update worker for hook event", {
       worker: ctx.workerInfo.name,

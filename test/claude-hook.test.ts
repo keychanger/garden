@@ -424,6 +424,30 @@ describe("handleClaudeHook — core events", () => {
     expect(fs.unlinkSync).toHaveBeenCalledWith("/tmp/wt/garden/bold-ash/.garden-done");
   });
 
+  // The hook decides the clear on the entry it read when it began. A holistic
+  // pass can take the worker from done to reviewing before the hook writes, and
+  // clearing that would leave the reviewer running with no state to report to.
+  it("prompt leaves a prState the poller set after the hook read done", () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      prState: "done",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+    // The pane lookup runs between the hook's read and its write: move the
+    // stored worker there, as the holistic dispatcher would.
+    vi.mocked(windowExists).mockImplementationOnce(() => {
+      entries.garden = entries.garden.map(e => (e.name === "bold-ash" ? { ...e, prState: "reviewing" } : e));
+      return false;
+    });
+
+    handleClaudeHook("prompt");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.prState).toBe("reviewing");
+    expect(entry.agentStatus).toBe("working");
+  });
+
   it("prompt clears continueSentAt (a landed prompt empties the input box)", () => {
     // continueSentAt marks a garden paste with no prompt landed since — the
     // stuck-paste recovery's evidence. Any prompt landing (garden's own or
