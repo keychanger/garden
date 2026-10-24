@@ -51,9 +51,8 @@ export function countAllocatedPtys(devDir = "/dev"): number {
 }
 
 export function readPtyLimit(): number | null {
-  const out = spawnSync("sysctl", ["-n", "kern.tty.ptmx_max"], { encoding: "utf-8" });
-  const limit = Number.parseInt(out.stdout ?? "", 10);
-  return out.status === 0 && limit > 0 ? limit : null;
+  const limit = Number.parseInt(run("sysctl", ["-n", "kern.tty.ptmx_max"]) ?? "", 10);
+  return limit > 0 ? limit : null;
 }
 
 // Parse `lsof -n /dev/ptmx` into per-process holdings, counting distinct
@@ -115,15 +114,23 @@ export function attributeHolder(
   return worker ? `${worker} (detached)` : "outside garden";
 }
 
-function run(cmd: string, args: string[]): string {
-  return spawnSync(cmd, args, { encoding: "utf-8" }).stdout ?? "";
+// The watchdog takes the census synchronously and reads its own overrun as
+// machine suspend (absorbSleep), and lsof can block on an unresponsive mount,
+// so each command is bounded well under SLEEP_SLACK_MS and SIGKILLed past it.
+// Null when it did not run to completion. lsof's -b would avoid the blocking
+// calls, but with it lsof cannot look up /dev/ptmx and lists nothing.
+const RUN_TIMEOUT_MS = 5_000;
+
+function run(cmd: string, args: string[]): string | null {
+  const out = spawnSync(cmd, args, { encoding: "utf-8", timeout: RUN_TIMEOUT_MS, killSignal: "SIGKILL" });
+  return out.error ? null : out.stdout ?? "";
 }
 
 function readCwds(pids: number[]): Map<number, string> {
   const cwds = new Map<number, string>();
   if (pids.length === 0) return cwds;
   let pid = 0;
-  for (const line of run("lsof", ["-a", "-p", pids.join(","), "-d", "cwd", "-F", "pn"]).split("\n")) {
+  for (const line of (run("lsof", ["-a", "-p", pids.join(","), "-d", "cwd", "-F", "pn"]) ?? "").split("\n")) {
     if (line.startsWith("p")) pid = Number(line.slice(1));
     else if (line.startsWith("n")) cwds.set(pid, line.slice(1));
   }
@@ -134,10 +141,13 @@ function readCwds(pids: number[]): Map<number, string> {
 // naming nor the sysctl applies.
 export function takePtyCensus(): PtyCensus | null {
   if (process.platform !== "darwin") return null;
-  const holdings = parsePtmxHolders(run("lsof", ["-n", "/dev/ptmx"]));
-  const parents = parseParents(run("ps", ["-Ao", "pid=,ppid="]));
-  const panes = parsePanes(run("tmux", ["list-panes", "-a", "-F", "#{pane_pid} #{window_name}"]));
-  const serverPid = Number.parseInt(run("tmux", ["display-message", "-p", "#{pid}"]), 10);
+  const ptmx = run("lsof", ["-n", "/dev/ptmx"]);
+  // An unfinished holder listing would read as every holder gone.
+  if (ptmx === null) return null;
+  const holdings = parsePtmxHolders(ptmx);
+  const parents = parseParents(run("ps", ["-Ao", "pid=,ppid="]) ?? "");
+  const panes = parsePanes(run("tmux", ["list-panes", "-a", "-F", "#{pane_pid} #{window_name}"]) ?? "");
+  const serverPid = Number.parseInt(run("tmux", ["display-message", "-p", "#{pid}"]) ?? "", 10);
   const worktreeBase = path.join(process.env.HOME ?? "", ".garden", "worktrees");
   const others = [...holdings.keys()].filter((pid) => pid !== serverPid);
   const cwds = readCwds(others);

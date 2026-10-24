@@ -116,6 +116,26 @@ describe("takePtyCensus and its consumers", () => {
     expect(takePtyCensus()).toBeNull();
   });
 
+  // The watchdog takes the census synchronously and reads its own overrun as
+  // machine suspend; lsof can block on an unresponsive mount.
+  it("bounds every command it runs, killing one that outlives its deadline", () => {
+    takePtyCensus();
+    const calls = vi.mocked(spawnSync).mock.calls;
+    expect(calls.map(([cmd]) => cmd)).toEqual(expect.arrayContaining(["lsof", "ps", "tmux", "sysctl"]));
+    for (const [, , opts] of calls) {
+      expect(opts).toMatchObject({ killSignal: "SIGKILL" });
+      expect((opts as { timeout?: number }).timeout).toBeLessThanOrEqual(10_000);
+    }
+  });
+
+  it("takes no census when the holder listing did not finish, rather than report every holder gone", () => {
+    vi.mocked(spawnSync).mockImplementation(((cmd: string, args: string[]) =>
+      cmd === "lsof" && !args.includes("cwd")
+        ? { status: null, signal: "SIGKILL", stdout: "", error: Object.assign(new Error("spawnSync lsof ETIMEDOUT"), { code: "ETIMEDOUT" }) }
+        : { status: 0, stdout: cmd === "sysctl" ? "511\n" : "" }) as never);
+    expect(takePtyCensus()).toBeNull();
+  });
+
   const forkFailure = new Error("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured");
 
   it("reports a fork failure below the limit with the count, without claiming exhaustion", () => {
