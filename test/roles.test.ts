@@ -134,6 +134,36 @@ describe("resolveReviewRole", () => {
     expect(r.envPrefix).toBe("");
   });
 
+  // DESIGN.md accepts the member name `claude` wherever a harness is entered.
+  // The CLI canonicalizes on set, but a hand-edited config.yml reaches here raw.
+  it("keeps the Opus floor and the profile env for a role spelled harness: claude", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const config = {
+      projects: {},
+      claudeProfiles: { imp: { configDir: "/tmp/claude-imp" } },
+    } as unknown as GardenConfig;
+    const canonical = resolveReviewRole(
+      project({ claudeProfile: "imp", roles: { reviewer: { harness: "claude-code" } } }), "default", "reviewer", config);
+    const alias = resolveReviewRole(
+      project({ claudeProfile: "imp", roles: { reviewer: { harness: "claude" } } }), "default", "reviewer", config);
+    expect(alias.harness).toBe("claude-code");
+    expect(alias.model).toBe("opus");
+    expect(alias.envPrefix).toBe("CLAUDE_CONFIG_DIR=/tmp/claude-imp ");
+    expect(alias).toEqual(canonical);
+  });
+
+  it("neutralizes a provider's env for a role spelled harness: claude", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const p = project({ provider: "deepseek", roles: { reviewer: { harness: "claude" } } });
+    const config = {
+      projects: { proj: p },
+      providers: {
+        deepseek: { baseUrl: "https://api.deepseek.com/anthropic", authTokenEnv: "DEEPSEEK_API_KEY" },
+      },
+    } as unknown as GardenConfig;
+    expect(resolveReviewRole(p, "default", "reviewer", config).envPrefix).toContain("ANTHROPIC_BASE_URL=''");
+  });
+
   // Per-worker crew (entry.crew) — the live-changeable review dimension.
   const emptyConfig = { projects: {} } as GardenConfig;
 
@@ -258,6 +288,84 @@ describe("resolveReviewRole", () => {
     const r = resolveReviewRole(project({ crew: "deleted" }), "default", "reviewer", emptyConfig);
     expect(r.harness).toBe("claude-code");
     expect(r.model).toBe("opus");
+  });
+
+  // A layer's model and effort name things in its own harness's vocabulary,
+  // so they apply only while that layer's harness is the one reviewing. The
+  // builtin crews always pin a review model, so every crew-bound project hits
+  // this the moment the documented per-role harness override is used.
+  it("does not hand a Claude crew's review model to a Codex role override", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(
+      project({ crew: "all-claude", roles: { reviewer: { harness: "codex" } } }),
+      "default", "reviewer", emptyConfig);
+    expect(r.harness).toBe("codex");
+    expect(r.model).toBe("gpt-6-astra");
+  });
+
+  it("does not hand a Codex crew's review model to a claude-code role override", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(
+      project({ crew: "claude-codex", roles: { reviewer: { harness: "claude-code" } } }),
+      "default", "reviewer", emptyConfig);
+    expect(r.harness).toBe("claude-code");
+    expect(r.model).toBe("opus");
+  });
+
+  it("keeps a crew's review effort to its own harness, in both directions", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const config = withCrews({
+      thorough: { worker: { member: "claude" }, review: { member: "claude", effort: "max" } },
+      quick: { worker: { member: "claude" }, review: { member: "codex", effort: "low" } },
+    });
+    const toCodex = resolveReviewRole(
+      project({ crew: "thorough", roles: { reviewer: { harness: "codex" } } }), "default", "reviewer", config);
+    expect(toCodex.harness).toBe("codex");
+    expect(toCodex.effort).toBe("high");
+    const toClaude = resolveReviewRole(
+      project({ crew: "quick", roles: { reviewer: { harness: "claude-code" } } }), "default", "reviewer", config);
+    expect(toClaude.harness).toBe("claude-code");
+    expect(toClaude.effort).toBeUndefined();
+    // The crew's own harness still gets its effort.
+    expect(resolveReviewRole(project({ crew: "thorough" }), "default", "reviewer", config).effort).toBe("max");
+  });
+
+  it("does not hand a role's model or effort to a per-worker crew on another harness", async () => {
+    const { resolveReviewRole } = await importRoles();
+    // A stored crew that names no review model, so nothing above the role
+    // layer pins one.
+    const config = withCrews({ swap: { worker: { member: "claude" }, review: { member: "codex" } } });
+    for (const roles of [
+      { reviewer: { harness: "claude-code", model: "sonnet", effort: "max" } },
+      // No role harness: the model was set for the harness inherited from below.
+      { reviewer: { model: "sonnet", effort: "max" } },
+    ]) {
+      const r = resolveReviewRole(project({ roles }), "default", "reviewer", config, { crew: "swap" });
+      expect(r.harness).toBe("codex");
+      expect(r.model).toBe("gpt-6-astra");
+      expect(r.effort).toBe("high");
+    }
+  });
+
+  it("applies a role's model and effort set for the harness it overrides to", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(
+      project({ crew: "all-claude", roles: { reviewer: { harness: "codex", model: "gpt-5", effort: "max" } } }),
+      "default", "reviewer", emptyConfig);
+    expect(r).toMatchObject({ harness: "codex", model: "gpt-5", effort: "max" });
+    // With no role harness, the role tunes the crew's own reviewer.
+    const inherited = resolveReviewRole(
+      project({ crew: "claude-codex", roles: { reviewer: { model: "gpt-5" } } }),
+      "default", "reviewer", emptyConfig);
+    expect(inherited).toMatchObject({ harness: "codex", model: "gpt-5" });
+  });
+
+  it("compares layer harnesses by registry name, so the member name still matches its crew", async () => {
+    const { resolveReviewRole } = await importRoles();
+    const r = resolveReviewRole(
+      project({ crew: "all-claude", roles: { reviewer: { harness: "claude" } } }),
+      "default", "reviewer", emptyConfig);
+    expect(r).toMatchObject({ harness: "claude-code", model: "fable" });
   });
 });
 

@@ -14,6 +14,7 @@ import { getWorkflow } from "./workflows/index.js";
 import { getCrew, resolveProjectCrew } from "./crew.js";
 import type { WorkerEntry } from "./registry.js";
 import { resolveHeadlessLaunchPlan } from "./launch-plan.js";
+import { canonicalHarnessName } from "./harness/core.js";
 import type { HeadlessLaunchPlan, HeadlessRole } from "./harness/types.js";
 
 export type ReviewRole = HeadlessRole;
@@ -46,6 +47,11 @@ export const SAFE_REVIEW_MODEL = "opus";
 // -> default. A crew never carries a review provider (the safety net is
 // structural — validateCrewDef rejects it). Backward-compatible: with no crew
 // anywhere, the chain is byte-identical to the pre-crew behavior.
+//
+// Model and effort are the exception to "independently": a layer's model and
+// effort name things in its own harness's vocabulary, so they apply only while
+// that layer's harness, explicit or inherited from the layers beneath it, is
+// the one reviewing — the review analog of newWorker's seatIfBuilding.
 export function resolveReviewRole(
   project: Pick<ProjectConfig, "roles" | "claudeProfile" | "provider" | "crew">,
   workflow: string,
@@ -61,7 +67,21 @@ export function resolveReviewRole(
   const cfg = config ?? (entry?.crew || project.crew ? loadConfig() : undefined);
   const entryCrew = entry?.crew && cfg ? getCrew(entry.crew, cfg) : null;
   const projectCrew = cfg ? resolveProjectCrew(project, cfg) : null;
-  const harness = entryCrew?.review.harness ?? target.harness ?? projectCrew?.review.harness ?? "claude-code";
+  // The harness each layer reviews on. Canonical names, because a hand-edited
+  // config can spell claude-code by its member name `claude`, and the floor and
+  // env checks below compare registry names: the alias would otherwise drop the
+  // Opus floor and the profile env from a reviewer that still launches as
+  // claude-code once the launch plan canonicalizes it.
+  const crewHarness = projectCrew && canonicalHarnessName(projectCrew.review.harness);
+  const roleHarness = canonicalHarnessName(target.harness ?? crewHarness ?? "claude-code");
+  const harness = canonicalHarnessName(entryCrew?.review.harness ?? roleHarness);
+  // A layer whose harness is not the one reviewing contributes no model or
+  // effort: an explicit role harness over a bound crew would otherwise launch
+  // Codex on the crew's Claude model (or claude-code on a Codex one), and a
+  // per-worker crew would inherit a role model set for another harness. The
+  // entry crew's harness is the resolved one whenever it exists.
+  const roleSeat = roleHarness === harness ? target : undefined;
+  const crewSeat = crewHarness === harness ? projectCrew?.review : undefined;
   // The reviewer inherits its workflow's reviewerModel when one is set;
   // resolver/ci-fix have no workflow source.
   const workflowModel = role === "reviewer" ? getWorkflow(workflow).reviewerModel : undefined;
@@ -69,8 +89,8 @@ export function resolveReviewRole(
   // meaningless to a foreign harness — so an unpinned foreign harness (codex)
   // gets no Anthropic model. Its launch plan supplies the Codex default.
   const model = entryCrew?.review.model
-    ?? target.model
-    ?? projectCrew?.review.model
+    ?? roleSeat?.model
+    ?? crewSeat?.model
     ?? (harness === "claude-code" ? (workflowModel ?? SAFE_REVIEW_MODEL) : undefined);
   // Effort resolves on the same chain as model, but has NO default floor of
   // its own: the model chain falls back to Opus (the safety net that a cheap
@@ -79,7 +99,7 @@ export function resolveReviewRole(
   // account default on claude-code (the behavior every review had before this
   // dial existed), DEFAULT_CODEX_EFFORT on codex. Both registered harnesses
   // accept every REVIEW_EFFORT_LEVELS rung, so nothing is mapped here.
-  const effort = entryCrew?.review.effort ?? target.effort ?? projectCrew?.review.effort;
+  const effort = entryCrew?.review.effort ?? roleSeat?.effort ?? crewSeat?.effort;
   const envPrefix = harness === "claude-code" ? reviewerEnvPrefix(project, config) : "";
   return resolveHeadlessLaunchPlan({ role, harness, model, effort, envPrefix });
 }
