@@ -120,6 +120,12 @@ beforeEach(() => {
   git(projectPath, "add", ".");
   git(projectPath, "commit", "-m", "init");
   git(projectPath, "push", "-u", "origin", "main");
+  // The worker bootstrap's info/exclude entries (create.ts): the Stop hook
+  // checks the tree is clean before it marks a worker done, and the done
+  // sentinel itself must not count as a change.
+  fs.mkdirSync(path.join(projectPath, ".git", "info"), { recursive: true });
+  fs.appendFileSync(path.join(projectPath, ".git", "info", "exclude"),
+    [".claude/", ".garden-hooks/", ".garden/", ".garden-done", ".garden-awaiting-input"].join("\n") + "\n");
 
   // Worker worktree at the path workerFromCwd expects.
   worktreePath = path.join(env.home, ".garden", "worktrees", PROJECT, WORKER);
@@ -346,6 +352,20 @@ describe("handleClaudeHook (real fs + real git)", () => {
     const w = readRegistryFile().workers[PROJECT][0] as { agentStatus: string; pendingReviewAt?: number };
     expect(w.agentStatus).toBe("idle");
     expect(w.pendingReviewAt).toBeUndefined();
+  });
+
+  // `done` invites removal, which deletes the worktree with --force. A turn
+  // that wrote .garden-done over an uncommitted edit painted it done anyway.
+  it("stop with .garden-done and nothing ahead does NOT mark done over an uncommitted edit", async () => {
+    seedRegistry("working");
+    fs.writeFileSync(path.join(worktreePath, ".garden-done"), "");
+    fs.writeFileSync(path.join(worktreePath, "README.md"), "# proj\n\nunsaved notes\n");
+    process.chdir(worktreePath);
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
+    handleClaudeHook("stop");
+    const w = readRegistryFile().workers[PROJECT][0] as { agentStatus: string; prState?: string };
+    expect(w.agentStatus).toBe("idle");
+    expect(w.prState).toBeUndefined();
   });
 
   it("sessionstart sets ready when no source", async () => {

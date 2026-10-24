@@ -862,6 +862,43 @@ describe("handleClaudeHook — core events", () => {
     },
   );
 
+  // `done` is the operator's cleanup signal, and removal deletes the worktree
+  // with --force. A tree whose cleanliness is unknown counts as dirty, as it
+  // does for the review gate.
+  it.each([
+    ["has uncommitted changes", () => " M src/app.ts\n?? notes.txt\n", "info", true],
+    ["cannot be checked", () => { throw new Error("git status timed out"); }, "warn", "indeterminate"],
+  ] as const)(
+    "stop does NOT set done when the tree %s",
+    async (_case, status, level, dirty) => {
+      seedWorker("garden", "bold-ash", {
+        agentStatus: "working",
+        worktreePath: "/tmp/wt/garden/bold-ash",
+      });
+      setCwd("garden", "bold-ash");
+      const fs = (await import("node:fs")).default;
+      vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) =>
+        String(p) === "/tmp/wt/garden/bold-ash/.garden-done");
+      const { execFileSync } = await import("node:child_process");
+      vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+        const argv = gitSubcommandArgs(args[1] as string[] | undefined);
+        if (argv?.[0] === "rev-list") return "0" as unknown as Buffer;
+        if (argv?.[0] === "status") return status() as unknown as Buffer;
+        return "" as unknown as Buffer;
+      });
+
+      handleClaudeHook("stop");
+
+      const entry = entries.garden.find(e => e.name === "bold-ash")!;
+      expect(entry.agentStatus).toBe("idle");
+      expect(entry.prState).toBeUndefined();
+      expect(entry.mergedAt).toBeUndefined();
+      expect(log[level]).toHaveBeenCalledWith("hook", "stop hook skipped done (worktree not provably clean)", {
+        worker: "bold-ash", data: { project: "garden", dirty },
+      });
+    },
+  );
+
   it("stop does NOT set done when .garden-done is absent", async () => {
     seedWorker("garden", "bold-ash", {
       agentStatus: "working",

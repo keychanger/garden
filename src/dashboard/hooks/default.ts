@@ -186,13 +186,25 @@ export function routeStopHookEnd(projectName: string, workerName: string, cwd: s
     // No commits ahead + sentinel present → terminal "done" state, the
     // operator-actionable cleanup signal. STATUS.md invariant 4 path 2:
     // sentinel was set after auto-continue cleared the transient merged.
+    if (!isDoneSet(entry.worktreePath)) return;
+    // Not over uncommitted changes: `done` invites the operator to remove the
+    // worker, and removal deletes the worktree with --force, edits included.
+    // A check that cannot run fails closed, as it does for a review above.
+    const dirty = worktreeHasUncommittedChanges(cwd);
+    if (dirty !== false) {
+      log[dirty === null ? "warn" : "info"]("hook", "stop hook skipped done (worktree not provably clean)", {
+        worker: workerName,
+        data: { project: projectName, dirty: dirty === null ? "indeterminate" : true },
+      });
+      return;
+    }
     // Only from where that path leaves a worker: no prState, `working` (the
     // finalize race), `merged`, or `done`. The pipeline states are the
     // poller's, and two of them meet this condition: a holistic pass reviews
     // a branch fast-forwarded to base, and a merge has pushed before its
     // terminal write. Overwriting them lost the verdict, or the merge's
     // bookkeeping when its own `done` write was then refused as done → done.
-    if (isDoneSet(entry.worktreePath) && updateWorkerFieldsIf(projectName, workerName, current => {
+    if (updateWorkerFieldsIf(projectName, workerName, current => {
       const ps = current.prState;
       const settled = ps === undefined || ps === "working" || ps === "merged" || ps === "done";
       return { fields: settled ? { prState: "done", mergedAt: new Date().toISOString() } : null, result: settled };
