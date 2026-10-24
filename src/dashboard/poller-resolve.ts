@@ -50,9 +50,11 @@ const RESOLVE_VERDICT_VOCAB = ["DONE", "FAILED"] as const;
 // line carries no 429/5xx for isTransientError to match), so both are checked.
 // Harness-aware, mirroring handleReviewing: claude-code merges stderr into the
 // result via 2>&1; codex sends the verdict to stdout and errors to a stderr
-// sidecar. Must be read before cleanReviewFiles deletes the result/sidecar.
+// sidecar. The harness is the one launchResolver stamped, since the role can be
+// re-pointed while the resolver runs. Must be read before cleanReviewFiles
+// deletes the result/sidecar.
 function resolverOutputWasTransient(projectName: string, entry: WorkerEntry): boolean {
-  const harness = resolveReviewRole(
+  const harness = entry.headlessHarness ?? resolveReviewRole(
     tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "resolver", undefined, entry,
   ).harness;
   const resultFile = reviewResultPath(projectName, entry.name);
@@ -129,6 +131,7 @@ export function launchResolver(
   transitionState(projectName, entry.name, "resolving", {
     reviewWindowName: revWindow,
     reviewStartedAt: Date.now(),
+    headlessHarness: resolver.harness,
     preResolveSha: preResolveSha ?? undefined,
     resolveAttempts: attempts + 1,
     lastSeenSha: launchSha,

@@ -351,6 +351,13 @@ export interface WorkerEntry {
   // reviewer, so codex resumes automatically once its window resets. See
   // poller-review.ts handleQuotaFallbackReview / launchReview.
   reviewFallbackHarness?: string;
+  // The harness the latest headless reviewer, resolver or ci-fix agent was
+  // launched on, stamped by each launch. Its output is read (stream rule,
+  // transient and quota shapes) against this, not a role resolved again at read
+  // time: the ⌥i reviewer row, crew edits and `garden config <p> role` change
+  // that resolution while the agent runs. Absent when an older build launched
+  // the agent; readers then resolve the role as before.
+  headlessHarness?: string;
   // Set when agentStatus was "working" at the moment the agent exited: by
   // handleAgentExited (the launch wrapper's record of that), or by
   // handlePaneDied under remain-on-exit. Read by ensureDashboard's

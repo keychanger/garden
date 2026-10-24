@@ -169,6 +169,8 @@ describe("interposed final review launch (touched files present)", () => {
     const opts = launchHeadlessAgent.mock.calls[0][0] as { launchPlan?: { harness?: string } };
     expect(opts.launchPlan?.harness).toBe("codex");
     expect(reg.findWorkerByName("proj", "codex-reviewed")!.holisticReviewMode).toBe("fix");
+    // Stamped like every headless launch, so no reader sees an earlier agent's.
+    expect(reg.findWorkerByName("proj", "codex-reviewed")!.headlessHarness).toBe("codex");
   });
 
   // The reviewer is resolved before the prompt is built: Claude Code loads the

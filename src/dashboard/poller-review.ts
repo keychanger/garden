@@ -444,16 +444,19 @@ export function handleReviewing(
   // typically writes nothing to stdout (rawOutput === null) and lands only in
   // the sidecar, so keying off rawOutput would skip the retry in exactly that
   // case. transientSource collapses to null when neither stream has content.
-  const reviewerHarness = resolveReviewRole(
-    tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer", undefined, entry,
-  ).harness;
-  // If a prior quota fallback is active, THIS review ran on the fallback harness
-  // (claude-code/Opus), not the configured one — launchReview overrode it. So
-  // classify against the harness the review ACTUALLY used: output-stream
-  // assembly (sidecar vs merged stdout), core selection, the further-fallback
-  // guard, and the alert naming would all key off the wrong (foreign) harness
-  // otherwise. Cleared on the next fresh cycle, so the configured reviewer resumes.
-  const effectiveReviewerHarness = entry.reviewFallbackHarness ?? reviewerHarness;
+  //
+  // Classify against the harness the review ACTUALLY ran on, which launchReview
+  // stamped: the quota fallback's when one was active. Not the role resolved
+  // again here: the ⌥i reviewer row, crew edits and project roles can re-point
+  // it mid-review. Output-stream assembly (sidecar vs merged stdout),
+  // core selection, the further-fallback guard, and the alert naming would all
+  // key off the wrong harness otherwise. An entry an older build launched has
+  // no stamp and falls back to the fallback flag, then the resolved role.
+  const effectiveReviewerHarness = entry.headlessHarness
+    ?? entry.reviewFallbackHarness
+    ?? resolveReviewRole(
+      tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "reviewer", undefined, entry,
+    ).harness;
   const transientSource = (effectiveReviewerHarness === "claude-code"
     ? rawOutput
     : [rawOutput, rawStderrSidecar].filter(Boolean).join("\n")
@@ -1781,6 +1784,7 @@ function launchReview(
   transitionState(projectName, entry.name, "reviewing", {
     reviewWindowName: revWindow,
     reviewStartedAt: Date.now(),
+    headlessHarness: reviewer.harness,
     lastSeenSha: launchSha,
     lastShaChangeAt: new Date().toISOString(),
     pendingReviewAt: undefined,

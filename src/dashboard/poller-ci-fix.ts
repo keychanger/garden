@@ -200,6 +200,7 @@ export function launchCiFix(
   transitionState(projectName, entry.name, "ci-fixing", {
     reviewWindowName: cfWindow,
     reviewStartedAt: Date.now(),
+    headlessHarness: ciFix.harness,
     preCiFixSha: preCiFixSha ?? undefined,
     ciFixAttempts: nextAttempts,
     lastSeenSha: launchSha,
@@ -230,10 +231,10 @@ export function launchCiFix(
 // recoverably instead of parking in the `ci` reason that tells the operator to
 // push a fix. A foreign harness's subscription usage-limit surfaces only through
 // quotaLimitResetHint, NOT isTransientError (the reviewer's quota fallback keys
-// off the same split), so both are checked. Harness-aware; read before
-// cleanCiFixFiles removes the result/sidecar.
+// off the same split), so both are checked. Harness-aware, by the harness
+// launchCiFix stamped; read before cleanCiFixFiles removes the result/sidecar.
 function ciFixOutputWasTransient(projectName: string, entry: WorkerEntry): boolean {
-  const harness = resolveReviewRole(
+  const harness = entry.headlessHarness ?? resolveReviewRole(
     tryGetProject(projectName) ?? {}, entry.workflow ?? "default", "ciFix", undefined, entry,
   ).harness;
   const resultFile = ciFixResultPath(projectName, entry.name);

@@ -2414,6 +2414,38 @@ describe("poll — reviewing state (async)", () => {
     expect(spec.message).toContain("Opus");
   });
 
+  // The reviewer role resolves from live config, and the ⌥i reviewer row
+  // rewrites the worker's crew by design while a review may be running. Read
+  // back at classification time, it treated a Codex quota cutoff as a Claude
+  // run with empty output: an unparseable review instead of the Opus fallback.
+  it("classifies a reviewer's output by the harness it was launched on", () => {
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      roles: { reviewer: { harness: "codex" } },
+    } as ReturnType<typeof tryGetProject>);
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+    poll("myproject");
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("reviewing");
+
+    // The reviewer moves back to Claude; the Codex reviewer then hits its usage
+    // limit, which it writes only to stderr.
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject" } as ReturnType<typeof tryGetProject>);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).endsWith(".stderr"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).endsWith(".stderr")
+        ? "ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex "
+          + "(https://chatgpt.com/explore/plus), or try again at Jul 31st, 2026 11:43 AM."
+        : "{}");
+    poll("myproject");
+
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({
+      prState: "working", reviewFallbackHarness: "claude-code",
+    });
+  });
+
   it("waits out the 15-min ladder (naming Claude) when the Opus fallback ALSO hits quota", () => {
     // The configured reviewer is codex, but a prior quota fallback is active
     // (reviewFallbackHarness set), so THIS review already ran on claude-code/Opus.
@@ -2505,6 +2537,8 @@ describe("poll — reviewing state (async)", () => {
     expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash",
       expect.objectContaining({ prState: "reviewing" }),
     );
+    // Its output is then read as the fallback's, not the configured Codex's.
+    expect(findWorkerByName("myproject", "bold-ash")?.headlessHarness).toBe("claude-code");
   });
 
   it("transitions to failing with reason transient-review after the budget is exhausted", () => {
@@ -5467,6 +5501,47 @@ describe("poll — resolving state", () => {
     expect((failingCall![2] as Record<string, unknown>).failingReason).toBe("transient-review");
   });
 
+  // The role resolves from live config (project roles, and the worker's crew,
+  // which the ⌥i reviewer row rewrites). Re-resolved when the output is read, a
+  // change made while the resolver ran picked the other harness's stream rule
+  // and error shapes, so a Codex quota cutoff counted as a real failure.
+  it("classifies a resolver's output by the harness it was launched on", () => {
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      roles: { resolver: { harness: "codex" } },
+    } as ReturnType<typeof tryGetProject>);
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        resolveAttempts: 1,
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "conflict" });
+    poll("myproject");
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("resolving");
+
+    // The resolver role moves back to Claude while the Codex resolver runs.
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject" } as ReturnType<typeof tryGetProject>);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (s.endsWith(".stderr")) {
+        return "ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex "
+          + "(https://chatgpt.com/explore/plus), or try again at Jul 31st, 2026 11:43 AM.";
+      }
+      if (s.includes("review-result")) return "";
+      return "{}";
+    });
+    vi.mocked(isAncestor).mockReturnValue(false); // verification fails
+    poll("myproject");
+
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({
+      prState: "failing", failingReason: "transient-review",
+    });
+  });
+
   it("stores resolver body when it parses even if verification fails", () => {
     setupResolver();
     vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
@@ -5722,6 +5797,45 @@ describe("poll — ci-fixing state", () => {
     );
     expect(failingCall).toBeDefined();
     expect((failingCall![2] as Record<string, unknown>).failingReason).toBe("transient-review");
+  });
+
+  it("classifies a ci-fix agent's output by the harness it was launched on", () => {
+    vi.mocked(tryGetProject).mockReturnValue({
+      path: "/repo/myproject",
+      roles: { ciFix: { harness: "codex" } },
+    } as ReturnType<typeof tryGetProject>);
+    vi.mocked(getGitHubRepoSlug).mockReturnValue("owner/repo");
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "failed", failed: [{ name: "test", conclusion: "failure" }],
+    });
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+        ciFixAttempts: 2,
+      }),
+    ]);
+    poll("myproject");
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("ci-fixing");
+
+    // The ci-fix role moves back to Claude while the Codex agent runs.
+    vi.mocked(tryGetProject).mockReturnValue({ path: "/repo/myproject" } as ReturnType<typeof tryGetProject>);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-ci-fix-"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) => {
+      const s = String(p);
+      if (s.endsWith(".stderr")) {
+        return "ERROR: You've hit your usage limit. Upgrade to Plus to continue using Codex "
+          + "(https://chatgpt.com/explore/plus), or try again at Jul 31st, 2026 11:43 AM.";
+      }
+      if (s.includes("ci-fix-result")) return "";
+      return "{}";
+    });
+    poll("myproject");
+
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({
+      prState: "failing", failingReason: "transient-review",
+    });
   });
 
   it("times out to failing and resets the ci-fix budget", () => {

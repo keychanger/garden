@@ -272,6 +272,8 @@ function launchHolisticFinalReview(
   transitionState(projectName, entry.name, "reviewing", {
     reviewWindowName: revWindow,
     reviewStartedAt: Date.now(),
+    // Every headless launch stamps it, so no reader sees an earlier agent's.
+    headlessHarness: reviewer.harness,
     preReviewSha,
     // Same defensive clear as launchReview: a stale mid-review-edit marker
     // would cancel this fresh pass on its first handleReviewing tick.
