@@ -56,9 +56,9 @@ vi.mock("../src/config.js", () => ({
   SESSIONS_DIR: "/tmp/garden-test-sessions",
 }));
 
-import { workerHookHandlers } from "../src/dashboard/hooks/default.js";
+import { routeStopHookEnd, workerHookHandlers } from "../src/dashboard/hooks/default.js";
 import { execFileSync } from "node:child_process";
-import { updateWorkerFields, updateWorkerFieldsIf } from "../src/dashboard/registry.js";
+import { findWorkerByName, updateWorkerFields, updateWorkerFieldsIf } from "../src/dashboard/registry.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
 import { clearAwaitingInput } from "../src/dashboard/continue.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
@@ -293,6 +293,35 @@ describe("Bash during review — cancel only when the command wrote", () => {
     ctx.workerInfo!.entry.reviewInterruptedAt = 12345;
     workerHookHandlers.onToolStarting(ctx);
     expect(updateWorkerFieldsIf).not.toHaveBeenCalled();
+  });
+
+  // The reviewer commits through this worktree's index, and a plain `git
+  // status` takes index.lock to write back what it refreshed, so a reviewer
+  // commit landing meanwhile fails on "index.lock: File exists". A file whose
+  // stat changed but whose content did not is what makes status write, and
+  // that write replaces the index file: an unchanged inode means no lock.
+  function staleStatAndIndexInode(): number {
+    const future = new Date(Date.now() + 3_600_000);
+    fs.utimesSync(path.join(wt, "a.txt"), future, future);
+    return fs.statSync(path.join(wt, ".git", "index")).ino;
+  }
+
+  it("fingerprints the tree without rewriting the index the reviewer commits through", () => {
+    const before = staleStatAndIndexInode();
+    runBash(() => {});
+    expect(fs.statSync(path.join(wt, ".git", "index")).ino).toBe(before);
+    expect(interruptStamps()).toHaveLength(0);
+  });
+
+  it("checks the tree at Stop without rewriting the index", () => {
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "ahead");
+    vi.mocked(findWorkerByName).mockReturnValueOnce({ name: "bold-ash", worktreePath: wt } as WorkerEntry);
+    const before = staleStatAndIndexInode();
+    routeStopHookEnd("myproject", "bold-ash", wt);
+    expect(fs.statSync(path.join(wt, ".git", "index")).ino).toBe(before);
+    // The clean tree still armed the review: the status read reached git.
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
   });
 });
 

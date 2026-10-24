@@ -12,9 +12,13 @@
 // Bash tool call, so this must stay free of imports beyond child_process.
 import { execFileSync } from "node:child_process";
 
+// --no-optional-locks: a plain `git status` takes index.lock to write back the
+// stat data it refreshed, and garden reads worktrees while their worker,
+// reviewer or resolver commits there, whose own lock then fails ("File exists").
 export const SAFE_GIT_CONFIG: readonly string[] = [
   "-c", "core.hooksPath=/dev/null",
   "-c", "core.fsmonitor=false",
+  "--no-optional-locks",
 ];
 
 export interface RunGitOptions {
