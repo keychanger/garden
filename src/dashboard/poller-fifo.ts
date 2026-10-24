@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { SESSIONS_DIR } from "../config.js";
+import { CONTROL_DIR } from "../paths.js";
 import { findWorkerByName } from "./registry.js";
 import { log } from "./log.js";
 import { shellEscape } from "./tmux.js";
@@ -18,8 +19,16 @@ export function signalFifoPath(project: string): string {
 // across the dashboard's federation of independent processes. Distinct from the
 // poll-signal FIFO: the FIFO carries pokes, this elects a single spawner. See
 // startProjectPoller for why the FIFO alone can't serialize the spawn.
+//
+// In the control tree, unlike the FIFO: only unsandboxed processes spawn a
+// poller, and a lock planted in the worker-writable sessions dir naming a live
+// process older than the lock is never reclaimed, so every respawn of that
+// poller threw. A build from before the move takes the lock in the sessions
+// dir, so while a deploy has processes of both builds running their starters
+// do not exclude each other; startProjectPoller collapses a duplicate window
+// that results, and the watchdog calls it for every project each tick.
 export function pollerSpawnLockPath(project: string): string {
-  return path.join(SESSIONS_DIR, `${project}-poller.spawn.lock`);
+  return path.join(CONTROL_DIR, `${project}-poller.spawn.lock`);
 }
 
 // Poke the project's poller without blocking. The poller blocks on `read` from

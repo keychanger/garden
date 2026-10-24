@@ -7176,7 +7176,7 @@ describe("poll — watchdog self-heal", () => {
   // a dead watchdog stays dead until the next attach (observed 2026-08-28:
   // review timeout fired 40 min late, a worker unprocessed for hours).
   it("respawns the watchdog when its window is missing", () => {
-    vi.mocked(windowExists).mockImplementation((name: string) => name !== "_garden-watchdog");
+    vi.mocked(windowIndices).mockImplementation((name: string) => (name === "_garden-watchdog" ? [] : [1]));
 
     poll("myproject");
 
@@ -7185,7 +7185,7 @@ describe("poll — watchdog self-heal", () => {
   });
 
   it("leaves a live watchdog alone", () => {
-    vi.mocked(windowExists).mockReturnValue(true);
+    vi.mocked(windowIndices).mockReturnValue([1]);
 
     poll("myproject");
 

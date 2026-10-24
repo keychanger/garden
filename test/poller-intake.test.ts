@@ -50,6 +50,7 @@ import {
 } from "../src/dashboard/registry.js";
 import { worktreePath } from "../src/dashboard/git.js";
 import { stopWorkerByName } from "../src/dashboard/workers.js";
+import { CONTROL_DIR, SESSIONS_DIR } from "../src/paths.js";
 
 function entry(over: Partial<WorkerEntry> & { name: string }): WorkerEntry {
   return { sessionId: "s", task: "", ...over };
@@ -1615,11 +1616,12 @@ describe("intakeDue", () => {
   });
 
   it("runs when never stamped, then throttles, then honors a poke marker", () => {
-    // SESSIONS_DIR derives from config; stamp paths land under it. Use the
-    // exported path helpers against whatever HOME the suite pinned.
+    // The stamp is in the control tree and the poke marker in the sessions
+    // dir. Use the exported path helpers against whatever HOME the suite pinned.
     const project = `intake-test-${process.pid}`;
     const stamp = intakeStampPath(project);
     fs.mkdirSync(path.dirname(stamp), { recursive: true });
+    fs.mkdirSync(path.dirname(intakePokePath(project)), { recursive: true });
     try { fs.unlinkSync(stamp); } catch { /* absent */ }
 
     expect(intakeDue(project, Date.now())).toBe(true);
@@ -1635,6 +1637,44 @@ describe("intakeDue", () => {
     expect(intakeDue(project, Date.now())).toBe(false);
 
     fs.unlinkSync(stamp);
+  });
+
+  // A stamp written before the wall clock stepped back reads as a negative age,
+  // which held background intake off until the clock caught up with it.
+  it("counts a stamp more than an interval ahead of now as due, one just ahead as not", () => {
+    const project = `intake-ahead-${process.pid}`;
+    const stamp = intakeStampPath(project);
+    fs.mkdirSync(path.dirname(stamp), { recursive: true });
+    fs.writeFileSync(stamp, "x");
+    const now = Date.now();
+    try {
+      const dayAhead = (now + 24 * 60 * 60_000) / 1000;
+      fs.utimesSync(stamp, dayAhead, dayAhead);
+      expect(intakeDue(project, now)).toBe(true);
+
+      // A pass that stamped after this caller read the clock just ran.
+      const justAhead = (now + 5_000) / 1000;
+      fs.utimesSync(stamp, justAhead, justAhead);
+      expect(intakeDue(project, now)).toBe(false);
+    } finally {
+      fs.unlinkSync(stamp);
+    }
+  });
+
+  // The sessions dir is in every worker's sandbox write grant; the throttle
+  // stamp used to live there, where a worker could keep it fresh.
+  it("ignores an intake stamp left in the sessions dir", () => {
+    const project = `intake-planted-${process.pid}`;
+    try { fs.unlinkSync(intakeStampPath(project)); } catch { /* absent */ }
+    const planted = path.join(SESSIONS_DIR, `intake-last-${project}`);
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(planted, "x");
+    try {
+      expect(path.dirname(intakeStampPath(project))).toBe(CONTROL_DIR);
+      expect(intakeDue(project, Date.now())).toBe(true);
+    } finally {
+      fs.unlinkSync(planted);
+    }
   });
 });
 
@@ -1677,6 +1717,20 @@ describe("runBeadIntake error stamp", () => {
     })).toBe(false);
     expect(bd.listOpenEpics).not.toHaveBeenCalled();
     expect(readIntakeStatus(project).lastIntakeError).toContain("does not exist");
+  });
+
+  // An error stamp in the worker-writable sessions dir is not one the poller
+  // wrote: board's chip would show whatever message a worker left there.
+  it("does not report an error stamp left in the sessions dir", () => {
+    const planted = path.join(SESSIONS_DIR, `intake-error-${project}`);
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    fs.writeFileSync(planted, JSON.stringify({ at: new Date().toISOString(), message: "forged" }));
+    try {
+      expect(path.dirname(intakeErrorPath(project))).toBe(CONTROL_DIR);
+      expect(readIntakeStatus(project).lastIntakeError).toBeUndefined();
+    } finally {
+      fs.unlinkSync(planted);
+    }
   });
 
   it("a throttled call neither runs a pass nor clears the error", () => {

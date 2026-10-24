@@ -19,7 +19,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { ensureSignalFifo, fifoPokeShell, scheduleDelayedPoke, signalFifoPath, triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
+import {
+  ensureSignalFifo, fifoPokeShell, pollerSpawnLockPath, scheduleDelayedPoke, signalFifoPath, triggerProjectPoll,
+} from "../src/dashboard/poller-fifo.js";
+import { withFileLock } from "../src/dashboard/file-lock.js";
+import { SESSIONS_DIR } from "../src/config.js";
+import { CONTROL_DIR } from "../src/paths.js";
 
 let dir: string;
 
@@ -216,5 +221,24 @@ describe("ensureSignalFifo", () => {
       throw new Error("Command failed: mkfifo: command not found");
     }) as typeof execFileSync);
     expect(() => ensureSignalFifo(fifo)).toThrow(/command not found/);
+  });
+});
+
+// Only unsandboxed processes spawn a poller. The spawn lock used to sit in the
+// worker-writable sessions dir, where a planted lock naming a live process
+// older than it is never reclaimed, so every respawn of that poller threw.
+describe("pollerSpawnLockPath", () => {
+  it("is not held by a lock planted where it used to live", () => {
+    const project = `spawn-lock-${process.pid}`;
+    const planted = path.join(SESSIONS_DIR, `${project}-poller.spawn.lock`);
+    fs.mkdirSync(SESSIONS_DIR, { recursive: true });
+    // This test process: alive, and started before the lock was written.
+    fs.writeFileSync(planted, `${process.pid}:3b241101-e2bb-4255-8caf-4136c566a962`);
+    try {
+      expect(withFileLock(pollerSpawnLockPath(project), () => "spawned", { deadlineMs: 200 })).toBe("spawned");
+      expect(path.dirname(pollerSpawnLockPath(project))).toBe(CONTROL_DIR);
+    } finally {
+      fs.rmSync(planted, { force: true });
+    }
   });
 });

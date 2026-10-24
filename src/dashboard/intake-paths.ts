@@ -1,21 +1,29 @@
 // Bead-intake on-disk stamp paths and their status reader. A deliberate leaf
-// (fs/path/config only, like designer-paths.ts): `garden status` reports
+// (fs/path/config/paths only, like designer-paths.ts): `garden status` reports
 // intake liveness (DELEGATION.md Decision 11) and status.ts is reachable from
 // dist/hook.js via header.ts, so these paths cannot live in poller-intake.ts
 // — the hook-bundle guard forbids any dashboard/poller-* module there.
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
+import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 
 // Mtime records when the last intake pass started; doubles as the throttle
-// anchor (see intakeDue in poller-intake.ts).
+// anchor (see intakeDue in poller-intake.ts). This stamp and the error stamp
+// below are written only by the unsandboxed poller, so they live in the
+// control tree: in the worker-writable sessions dir, a worker could future-date
+// the stamp to hold background intake off, or forge the error board's chip
+// shows. A build from before the move kept both in the sessions dir; after the
+// deploy the first pass finds no stamp and runs at once, and only an error
+// this build stamps is reported.
 export function intakeStampPath(project: string): string {
-  return path.join(SESSIONS_DIR, `intake-last-${project}`);
+  return path.join(CONTROL_DIR, `intake-last-${project}`);
 }
 
 // Touched by `garden poke` (and board's gate keys, via the same CLI) so the
 // next poller wake runs intake immediately instead of riding the throttle.
+// Stays in the sessions dir, which a sandboxed caller can write.
 export function intakePokePath(project: string): string {
   return path.join(SESSIONS_DIR, `intake-poke-${project}`);
 }
@@ -23,7 +31,7 @@ export function intakePokePath(project: string): string {
 // JSON {at, message} written when an intake pass throws; removed by the next
 // successful pass. Present = the newest pass failed.
 export function intakeErrorPath(project: string): string {
-  return path.join(SESSIONS_DIR, `intake-error-${project}`);
+  return path.join(CONTROL_DIR, `intake-error-${project}`);
 }
 
 interface IntakeErrorStamp {

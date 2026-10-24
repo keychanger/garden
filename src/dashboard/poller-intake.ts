@@ -987,7 +987,11 @@ function exhaustBudget(deps: IntakeDeps, epic: BeadDetail, ds: DispatchState): v
 
 // Throttle gate: run on an explicit poke marker (consuming it) or when the
 // last run is older than the background interval. On-disk, not in-memory —
-// the poller execs a fresh process per wake.
+// the poller execs a fresh process per wake. A stamp more than an interval
+// ahead of now counts as due too: read as a negative age, it would hold
+// background intake off until the clock caught up with it, days when the
+// stamp was written before the wall clock stepped back. A stamp less than an
+// interval ahead is a pass that stamped after this caller read the clock.
 export function intakeDue(project: string, nowMs: number): boolean {
   const pokeFile = intakePokePath(project);
   if (fs.existsSync(pokeFile)) {
@@ -996,7 +1000,7 @@ export function intakeDue(project: string, nowMs: number): boolean {
   }
   try {
     const stat = fs.statSync(intakeStampPath(project));
-    return nowMs - stat.mtimeMs >= INTAKE_MIN_INTERVAL_MS;
+    return Math.abs(nowMs - stat.mtimeMs) >= INTAKE_MIN_INTERVAL_MS;
   } catch {
     return true;
   }

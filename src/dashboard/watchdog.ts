@@ -56,8 +56,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { SESSIONS_DIR } from "../config.js";
-import { CONTROL_SCRIPTS_DIR } from "../paths.js";
-import { newDashboardWindow, windowExists, killWindowSafe, listAllWindowNames } from "./tmux.js";
+import { CONTROL_DIR, CONTROL_SCRIPTS_DIR } from "../paths.js";
+import {
+  newDashboardWindow, windowExists, windowIndices, dedupeWindows, killWindowSafe, listAllWindowNames,
+} from "./tmux.js";
 import { watchdogWindowName, parseWorkerWindow } from "./window-names.js";
 import {
   readRegistry, mutateRegistry, isTaintedRegistry, PR_STATE_KIND, REVIEW_TIMEOUT_MS,
@@ -92,7 +94,11 @@ import {
 
 export const WATCHDOG_TICK_MS = 60_000;
 export const WATCHDOG_THRESHOLD_MS = 5 * 60_000;
-export const WATCHDOG_SPAWN_LOCK_FILE = path.join(SESSIONS_DIR, "watchdog.spawn.lock");
+// In the control tree. Every poll takes this lock, since each one re-arms the
+// watchdog, and a lock planted in the worker-writable sessions dir naming a
+// live process older than the lock is never reclaimed: every poll waited out
+// the lock's 2s deadline, and a dead watchdog was never respawned.
+export const WATCHDOG_SPAWN_LOCK_FILE = path.join(CONTROL_DIR, "watchdog.spawn.lock");
 // A watchdog loop iteration that overran its intended cadence by more than this
 // means the process was suspended (machine sleep / clock jump) — a real suspend
 // is minutes-to-hours, an over-long tick body is seconds. One full extra tick of
@@ -1032,9 +1038,20 @@ export function startWatchdog(gardenRunner: string): void {
   // Every project poller can repair this fleet-wide singleton. Serialize the
   // check-and-spawn so concurrent polls cannot all observe a missing window
   // and create duplicate watchdog loops before tmux registers the first one.
+  //
+  // Convergent like startProjectPoller: duplicates collapse to one. A build
+  // from before this lock moved to the control tree takes it in the sessions
+  // dir, so while a deploy has processes of both builds running, a starter of
+  // each can find the window missing between the deploy's own stopWatchdog
+  // and startWatchdog (restartLongLivedPollers), and both spawn one.
   withFileLock(WATCHDOG_SPAWN_LOCK_FILE, () => {
     const window = watchdogWindowName();
-    if (windowExists(window)) return;
+    const existing = windowIndices(window);
+    if (existing.length > 1) {
+      const killed = dedupeWindows(window);
+      log.warn("watchdog", "collapsed duplicate watchdog windows", { data: { killed } });
+    }
+    if (existing.length > 0) return;
     newDashboardWindow(window, "bash", "-c", `${gardenRunner} dashboard _watchdog-loop 2>/dev/null`);
     log.info("watchdog", "spawned window", { data: { window } });
   }, { name: "watchdog-spawn" });

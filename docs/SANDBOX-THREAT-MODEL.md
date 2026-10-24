@@ -365,7 +365,17 @@ reads or runs.
   status-pane bake, freezing the pane and silently disabling the plot hotkeys. A FIFO planted where an unsandboxed reader
   expects a regular file, such as the registry, the state file or a lock, still blocks that
   reader. The Claude and Codex usage snapshots, through which a forged 100% reading paused
-  auto-continue fleet-wide, now live in the control tree.
+  auto-continue fleet-wide, now live in the control tree. So do the files there that only
+  unsandboxed garden wrote: the poller and watchdog spawn locks, which every poller respawn
+  and every poll take (a lock is never reclaimed while its pid answers and names a process
+  older than the lock, so a planted one made each respawn of that poller throw, or stalled
+  every poll for the lock's 2s deadline), and the bead-intake throttle and error stamps (a
+  future-dated throttle stamp held background intake off, and a forged error reached
+  board's dispatch chip). The locks that stay are taken by sandboxed `garden` commands
+  beside what they guard: the registry, state and alerts locks, the checks-semaphore slots
+  `garden checks` claims inside a worker, and each worker-cleanup request's lock. One planted
+  there naming a live process older than itself holds what it guards until the operator
+  removes it.
 - **`postMerge`/`checks` commands are trusted.** They come from `~/.garden/config.yml`,
   which is not in any sandbox write grant, so a worker cannot set them. Do not move
   `config.yml` into a writable location.

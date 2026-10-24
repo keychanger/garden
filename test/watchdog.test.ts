@@ -11,6 +11,8 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   tmux: vi.fn(),
   newDashboardWindow: vi.fn(),
   windowExists: vi.fn(() => false),
+  windowIndices: vi.fn(() => []),
+  dedupeWindows: vi.fn(() => 0),
   killWindowSafe: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
 }));
@@ -104,7 +106,8 @@ import { commitsBehindOrigin, gardenInstallRepo } from "../src/dashboard/git.js"
 import { loadConfig } from "../src/config.js";
 import { writeDashState } from "../src/dashboard/state.js";
 import { triggerProjectPoll } from "../src/dashboard/poller-fifo.js";
-import { newDashboardWindow, windowExists, listAllWindowNames } from "../src/dashboard/tmux.js";
+import { newDashboardWindow, windowExists, windowIndices, dedupeWindows, listAllWindowNames } from "../src/dashboard/tmux.js";
+import { CONTROL_DIR } from "../src/paths.js";
 import { addAlert } from "../src/dashboard/alerts.js";
 import { withFileLock } from "../src/dashboard/file-lock.js";
 import { REVIEW_TIMEOUT_MS, type WorkerEntry, type PrState } from "../src/dashboard/registry.js";
@@ -133,6 +136,7 @@ beforeEach(() => {
   // clearAllMocks wipes call history but not implementations, so a prior
   // mockReturnValue(true) would leak — restore the "no live window" default.
   windowExistsMock.mockReturnValue(false);
+  vi.mocked(windowIndices).mockReturnValue([]);
   registryMock._clear();
   vi.mocked(loadConfig).mockReturnValue({ projects: {} });
 });
@@ -695,7 +699,7 @@ describe("startWatchdog", () => {
     // would leave its name showing in the status-bar center strip. It must go
     // through newDashboardWindow (which batches the name-suppression set-option
     // into the same client invocation), exactly like the poller / usage-poller.
-    windowExistsMock.mockReturnValue(false);
+    vi.mocked(windowIndices).mockReturnValue([]);
     startWatchdog("node /usr/local/bin/garden");
 
     expect(newDashboardWindowMock).toHaveBeenCalledTimes(1);
@@ -711,9 +715,25 @@ describe("startWatchdog", () => {
   });
 
   it("is a no-op when the watchdog window already exists", () => {
-    windowExistsMock.mockReturnValue(true);
+    vi.mocked(windowIndices).mockReturnValue([3]);
     startWatchdog("node /usr/local/bin/garden");
     expect(newDashboardWindowMock).not.toHaveBeenCalled();
+    expect(dedupeWindows).not.toHaveBeenCalled();
+  });
+
+  // A build from before the spawn lock moved takes it in the sessions dir, so
+  // during a deploy a starter of each build can both find the window missing.
+  it("collapses duplicate watchdog windows to one", () => {
+    vi.mocked(windowIndices).mockReturnValue([3, 8]);
+    startWatchdog("node /usr/local/bin/garden");
+    expect(dedupeWindows).toHaveBeenCalledWith("_garden-watchdog");
+    expect(newDashboardWindowMock).not.toHaveBeenCalled();
+  });
+
+  // Every poll takes this lock. In the worker-writable sessions dir, a planted
+  // lock naming a live process older than it is never reclaimed.
+  it("takes its spawn lock in the control tree", () => {
+    expect(path.dirname(WATCHDOG_SPAWN_LOCK_FILE)).toBe(CONTROL_DIR);
   });
 });
 
