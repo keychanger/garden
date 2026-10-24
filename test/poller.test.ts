@@ -1392,6 +1392,77 @@ describe("poll — reviewing state (async)", () => {
     );
   });
 
+  // The reviewer rebases first. One that stopped at a conflicting pick leaves a
+  // detached HEAD at the base tip; pushed, that replaces the worker's branch,
+  // and the merge queue reads a HEAD inside origin/<base> as a merge that
+  // already landed.
+  function reviewerStoppedMidRebase(output: string): void {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", agentStatus: "idle", reviewWindowName: "_myproject-review-bold-ash",
+        lastSeenSha: "abc123", preReviewSha: "abc123" }),
+    ]);
+    vi.mocked(windowExists).mockImplementation((name: string) => !name.includes("-review-"));
+    vi.mocked(fs.existsSync).mockImplementation((p: unknown) => String(p).includes("review-result"));
+    vi.mocked(fs.readFileSync).mockImplementation((p: unknown) =>
+      String(p).includes("review-result") ? output : "{}");
+    vi.mocked(hasRebaseInProgress).mockReturnValue(true);
+    vi.mocked(getBranchHeadSha).mockReturnValue("basetip0");
+    vi.mocked(abortRebase).mockImplementation(() => {
+      vi.mocked(hasRebaseInProgress).mockReturnValue(false);
+      vi.mocked(getBranchHeadSha).mockReturnValue("abc123");
+    });
+  }
+
+  it("does not certify a CLEAN verdict from a reviewer whose rebase is still in progress", () => {
+    reviewerStoppedMidRebase("Resolved the conflict in poller.ts; looks clean.\nCLEAN");
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({
+      prState: "working", pendingReviewAt: expect.any(Number), unparseableRetryCount: 1,
+    });
+  });
+
+  it("restores the branch before an unparseable verdict's recovery reads HEAD", () => {
+    // Out of turns mid-rebase: no verdict, so the unparseable recovery runs, and
+    // it force-pushes HEAD whenever HEAD moved past preReviewSha.
+    reviewerStoppedMidRebase("Resolving the conflict in poller.ts now.");
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(abortRebase).toHaveBeenCalledWith("/tmp/wt/myproject/bold-ash");
+  });
+
+  it("does not let the Haiku fallback certify a reviewer whose rebase is still in progress", () => {
+    reviewerStoppedMidRebase("Resolved the conflict in poller.ts; looks clean.");
+    vi.mocked(extractReviewVerdict).mockReturnValue("CLEAN");
+
+    poll("myproject");
+
+    expect(forcePushBranch).not.toHaveBeenCalled();
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("working");
+  });
+
+  it("alerts when a cancelled review leaves its rebase in progress under the worker", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",
+        agentStatus: "working", reviewInterruptedAt: Date.now(), lastSeenSha: "abc123" }),
+    ]);
+    vi.mocked(windowExists).mockReturnValue(true);
+    vi.mocked(hasRebaseInProgress).mockReturnValue(true);
+
+    poll("myproject");
+
+    // Aborting would reset the tree the worker is editing; say so instead.
+    expect(abortRebase).not.toHaveBeenCalled();
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "warn", worker: "bold-ash", message: expect.stringContaining("rebase in progress"),
+    }));
+  });
+
   it("returns false while review window is still running", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "reviewing", reviewWindowName: "_myproject-review-bold-ash",

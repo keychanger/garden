@@ -393,7 +393,24 @@ export function handleReviewing(
   // Clean up files
   cleanReviewFiles(projectName, entry.name);
 
-  if (review !== null) {
+  // The reviewer rebases first. A rebase still in progress means it stopped
+  // partway (out of turns, killed, or it misreported a conflict), so HEAD is a
+  // partial replay: pushed, it replaces the branch with an incomplete copy, and
+  // a HEAD at the base tip reads to the merge queue as a merge that already
+  // landed. Restore the branch before anything below reads or pushes HEAD, and
+  // certify nothing from this pass but a FAILED (STATUS.md invariant 7 holds
+  // resolvers to the same). The worker is not known to be editing: an edit the
+  // hooks recorded during the review has already cancelled it above.
+  const rebaseUnfinished = hasRebaseInProgress(wtPath);
+  if (rebaseUnfinished) {
+    log.warn("poller", "reviewer left its rebase unfinished; aborting", {
+      worker: entry.name,
+      data: { project: projectName, verdict: review?.verdict ?? null },
+    });
+    abortRebase(wtPath);
+  }
+
+  if (review !== null && !(rebaseUnfinished && review.verdict !== "failed")) {
     log.info("poller", "review complete", {
       worker: entry.name,
       data: { project: projectName, verdict: review.verdict },
@@ -491,8 +508,9 @@ export function handleReviewing(
   // and it is not a transient/quota error (those returned above). Rather than
   // re-run the whole review, ask a cheap Haiku to read the reviewer's own output
   // and classify its verdict — the reviewer already decided, it just failed to
-  // format the final line.
-  if (rawOutput && rawOutput.trim()) {
+  // format the final line. Not for an unfinished rebase: that pass's verdict
+  // is withheld above, whatever the output says.
+  if (rawOutput && rawOutput.trim() && !rebaseUnfinished) {
     const project = tryGetProject(projectName) ?? {};
     const extracted = extractReviewVerdict(rawOutput, {
       env: { ...process.env, ...reviewerEnvObject(project) },
@@ -1408,6 +1426,21 @@ export function cancelReviewOnWorkerEdit(
   killReviewWindow(projectName, entry.name);
 
   const wtPath = entry.worktreePath ?? projectPath;
+  // The reviewer rebases first, so the one just killed can leave its rebase
+  // stopped mid-replay with HEAD detached. Aborting it would reset the tree the
+  // worker is editing, so leave it and say so.
+  if (hasRebaseInProgress(wtPath)) {
+    addAlert({
+      level: "warn",
+      source: "review",
+      project: projectName,
+      worker: entry.name,
+      message: `The cancelled review of ${entry.name} left a rebase in progress in its worktree, `
+        + `with HEAD detached partway through the replay. Finish it (git rebase --continue) or `
+        + `abort it (git rebase --abort) there before the worker's next commit.`,
+      dedupKey: `cancelled-review-rebase:${projectName}:${entry.name}`,
+    });
+  }
   const hasCommits = getCommitSummary(wtPath, baseBranch).length > 0;
 
   transitionState(projectName, entry.name, "working", {
