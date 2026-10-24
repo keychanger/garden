@@ -126,6 +126,16 @@ describe("garden queue", () => {
     await expect(queue(["reel"])).rejects.toThrow(/Unknown project: reel/);
   });
 
+  it("ages a row from its move into the pipeline state, not the agent's last turn", async () => {
+    const now = Date.now();
+    h.registry = { workers: { p: [
+      w("rv", { prState: "reviewing", agentStatus: "idle",
+        prStateChangedAt: now - 25 * 60_000, lastStateChangeAt: now - 60_000 }),
+    ] } };
+    const text = (await captureConsoleLog(() => queue([]))).map(strip).join("\n");
+    expect(text).toMatch(/rv\s+reviewing\s+25m/);
+  });
+
   it("emits JSON when not a TTY", async () => {
     h.isTTY = false;
     h.registry = { workers: { p: [w("qx", { prState: "merge-pending", mergePendingAt: "2026-01-01T00:01:00Z" })] } };

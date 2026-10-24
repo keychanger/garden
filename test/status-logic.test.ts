@@ -1220,6 +1220,28 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(lineFor(renderQuickStatus(state), "bold-ash")).toMatch(/reviewing \x1b\[33m12m\x1b\[0m/);
   });
 
+  // An agent turn moves agentStatus, which stamps lastStateChangeAt, but not the
+  // lifecycle a pipeline row displays. STATUS.md: a failing row's elapsed stays
+  // anchored to the failure transition.
+  it("counts a failing row from the failure, not from the operator's prompt to fix it", () => {
+    const now = Date.now();
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", prState: "failing", agentStatus: "working",
+        prStateChangedAt: now - 3 * 60 * 60_000, lastStateChangeAt: now - 30_000 },
+    ]);
+    const line = lineFor(renderQuickStatus(state), "bold-ash");
+    expect(line.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")).toContain("failing 3h");
+  });
+
+  it("keeps a slow review flagged across a turn that left the review running", () => {
+    const now = Date.now();
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", task: "x", prState: "reviewing", agentStatus: "idle",
+        prStateChangedAt: now - 25 * 60_000, lastStateChangeAt: now - 2 * 60_000 },
+    ]);
+    expect(lineFor(renderQuickStatus(state), "bold-ash")).toMatch(/reviewing \x1b\[33m25m\x1b\[0m/);
+  });
+
   it("renders a yellow ⚠n unread-alert count on the project header, cleared when zero", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", task: "x", agentStatus: "idle" },

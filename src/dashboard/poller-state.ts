@@ -142,7 +142,7 @@ function applyTransition(
     const callback = callbackDispatchFor(projectName, workerName, entry, toState);
     const owed = callback ? owedCallback(callback, find) : undefined;
     const stateFields: Omit<WorkerFieldsUpdate, "prState"> = toState !== fromState
-      ? { ...extraFields, lastStateChangeAt: now }
+      ? { ...extraFields, lastStateChangeAt: now, prStateChangedAt: now }
       : { ...extraFields };
     if (callback) stateFields.handoffCallbackFiredAt = now;
     return {

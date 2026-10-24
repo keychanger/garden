@@ -105,3 +105,35 @@ describe("edits-unwatched marker", () => {
     expect(fs.existsSync(marker)).toBe(true);
   });
 });
+
+// The status pane and `garden queue` age a pipeline row from this stamp. It is
+// apart from lastStateChangeAt, which every agentStatus move also stamps: a
+// prompted failing worker would otherwise read as failing for seconds.
+describe("prState transition stamp", () => {
+  afterEach(() => vi.resetModules());
+
+  async function entry() {
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+    return findWorkerByName("wolf", "bold-ash")!;
+  }
+
+  it("records the move, and an agent turn leaves it alone", async () => {
+    await seed();
+    const { transitionState } = await import("../src/dashboard/poller-state.js");
+    const { updateWorkerFields } = await import("../src/dashboard/registry.js");
+    expect(transitionState("wolf", "bold-ash", "reviewing")).toBe(true);
+    const moved = (await entry()).prStateChangedAt;
+    expect(moved).toBeTypeOf("number");
+    expect(moved).toBe((await entry()).lastStateChangeAt);
+
+    updateWorkerFields("wolf", "bold-ash", { agentStatus: "working", lastStateChangeAt: moved! + 60_000 });
+    expect((await entry()).prStateChangedAt).toBe(moved);
+  });
+
+  it("is not stamped by a transition that keeps the state", async () => {
+    await seed("ci-fixing");
+    const { transitionState } = await import("../src/dashboard/poller-state.js");
+    expect(transitionState("wolf", "bold-ash", "ci-fixing")).toBe(true);
+    expect((await entry()).prStateChangedAt).toBeUndefined();
+  });
+});

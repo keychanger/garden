@@ -53,11 +53,14 @@ function buildRows(entries: WorkerEntry[], now: number): QueueRow[] {
   return pipeline
     .map(e => {
       const pos = e.prState === "merge-pending" ? mergeOrder.indexOf(e.name) + 1 : undefined;
+      // Every row here is a pipeline state, so its age is the lifecycle move:
+      // an agent turn stamps lastStateChangeAt without moving the row's state.
+      const since = e.prStateChangedAt ?? e.lastStateChangeAt;
       return {
         worker: e.name,
         state: e.prState === "merge-pending" ? "merging" : e.prState!,
         prState: e.prState!,
-        sinceMs: e.lastStateChangeAt !== undefined ? now - e.lastStateChangeAt : null,
+        sinceMs: since !== undefined ? now - since : null,
         queuePos: pos,
         next: e.prState === "merge-pending" && e.name === nextName ? true : undefined,
         ci: ciMarker(e),

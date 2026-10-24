@@ -47,6 +47,10 @@ interface WorkerInfo {
   // windows with no registry entry and for legacy entries that predate the
   // field, in which case the suffix is omitted.
   lastStateChangeAt?: number;
+  // Epoch ms of the last prState transition (registry.prStateChangedAt). A row
+  // whose state comes from prState counts its elapsed from this, since an agent
+  // turn stamps lastStateChangeAt without moving the lifecycle.
+  prStateChangedAt?: number;
   // True when the worker is in the active/recent tier and nothing has touched
   // it in over WORKER_STALE_MS — the renderer dims the row. Other tiers
   // (blocked, new, in-flight, done) are never stale-dimmed.
@@ -539,13 +543,16 @@ function formatStatus(worker: WorkerInfo): string {
 // computeStatusWidth (which measures it) so the measured width and the rendered
 // text can never drift.
 function stateCell(worker: WorkerInfo, now: number): string {
-  // Only a question-derived `asking` uses the blocked episode's timestamp. A
-  // failing lifecycle still outranks the question, so its elapsed must remain
-  // anchored to the failure transition rather than misreporting time blocked.
-  const since = worker.status === "asking" && worker.blockedQuestion !== undefined
-    ? worker.blockedAt ?? worker.lastStateChangeAt
-    : worker.lastStateChangeAt;
-  return `${formatStatus(worker)}${formatDelegatingSuffix(worker)}${formatTimeInState(worker.status, since, now)}`;
+  // Only a question-derived `asking` uses the blocked episode's timestamp. Every
+  // other timed state is a lifecycle state, timed from the poller's move into
+  // it: an agent turn (the operator prompting a failing worker, a read-only
+  // answer mid-review) moves agentStatus and lastStateChangeAt but not the
+  // lifecycle. A failing lifecycle still outranks the question, so its elapsed
+  // stays anchored to the failure transition rather than misreporting time
+  // blocked. Entries whose last move predates prStateChangedAt fall back.
+  const since = worker.status !== "asking" ? worker.prStateChangedAt
+    : worker.blockedQuestion !== undefined ? worker.blockedAt : undefined;
+  return `${formatStatus(worker)}${formatDelegatingSuffix(worker)}${formatTimeInState(worker.status, since ?? worker.lastStateChangeAt, now)}`;
 }
 
 // Dim `bg` tag on a row whose `working` is derived from live subagent activity
@@ -1169,6 +1176,7 @@ function collectWorkers(
       activity: entry?.task || null,
       active: true,
       lastStateChangeAt: entry?.lastStateChangeAt,
+      prStateChangedAt: entry?.prStateChangedAt,
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
       blockedQuestion: entry?.blockedQuestion === undefined
@@ -1203,6 +1211,7 @@ function collectWorkers(
       activity: entry?.task || null,
       active: false,
       lastStateChangeAt: entry?.lastStateChangeAt,
+      prStateChangedAt: entry?.prStateChangedAt,
       stale: entry ? isWorkerStale(entry) : false,
       awaitingInput: isAwaitingInput(entry?.worktreePath),
       blockedQuestion: entry?.blockedQuestion === undefined

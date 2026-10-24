@@ -161,11 +161,19 @@ export interface WorkerEntry {
   // prState transition, not the 10s hook heartbeat. Drives row ordering
   // (workerSortFreshness) so the list only reshuffles when the worker actually
   // moves, never on the silent heartbeat that bumps lastEventAt without a
-  // repaint, and the status pane's time-in-state suffix (how long a worker has
-  // sat in its current state). Stamped by applyAndLog on an agentStatus change
-  // (hook side) and by transitionState on a prState change (poller side);
+  // repaint, and the status pane's time-in-state suffix on a row whose state
+  // comes from agentStatus (`asking`). Stamped by applyAndLog on an agentStatus
+  // change (hook side) and by transitionState on a prState change (poller side);
   // backfilled in migrateLastStateChangeAt for entries that predate the field.
   lastStateChangeAt?: number;
+  // Epoch ms of the last prState transition alone (transitionState, only when
+  // the state actually changes). A pipeline row's time-in-state suffix and
+  // `garden queue` count from it: an agent turn stamps lastStateChangeAt
+  // without moving the lifecycle, so `failing 3h` would restart at 0 the moment
+  // the operator prompted the worker about the failure. Absent on entries
+  // whose last transition predates the field; readers fall back to
+  // lastStateChangeAt.
+  prStateChangedAt?: number;
   // Epoch ms a SUBAGENT tool event last fired for this worker — a PostToolUse
   // carrying `agent_id` (Task agents, background Workflow runs). Subagent
   // events never move agentStatus (hooks/default.ts isSubagentEvent), so a

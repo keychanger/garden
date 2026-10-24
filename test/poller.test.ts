@@ -5991,6 +5991,7 @@ describe("poll — failing state", () => {
       failingSha: undefined,
       lastSeenSha: undefined,
       lastStateChangeAt: expect.any(Number),
+      prStateChangedAt: expect.any(Number),
     });
     // The transition emits no event of its own; without an immediate re-poke
     // the review launch waits for the watchdog's stale re-poke (minutes).
@@ -6637,6 +6638,7 @@ describe("poll — alerts", () => {
       failingSha: undefined,
       lastSeenSha: undefined,
       lastStateChangeAt: expect.any(Number),
+      prStateChangedAt: expect.any(Number),
     });
   });
 
