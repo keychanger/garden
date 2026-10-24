@@ -380,6 +380,25 @@ describe("projectUsageGateExempt", () => {
   });
 });
 
+describe("workerUsageGateExempt", () => {
+  it("exempts a worker on a non-claude harness or its own provider, else defers to the project", async () => {
+    await initPooledProjects();
+    const { workerUsageGateExempt } = await importConfig();
+    // A Codex worker spends OpenAI quota the Claude meters never count, even on
+    // a metered project.
+    expect(workerUsageGateExempt("plain", { harness: "codex" })).toBe(true);
+    expect(workerUsageGateExempt("plain", { harness: "claude-code" })).toBe(false);
+    expect(workerUsageGateExempt("plain", {})).toBe(false);
+    expect(workerUsageGateExempt("plain", { provider: "deepseek" })).toBe(true);
+    // Unresolvable or explicitly first-party: the project answers.
+    expect(workerUsageGateExempt("plain", { provider: "gone" })).toBe(false);
+    expect(workerUsageGateExempt("plain", { provider: "" })).toBe(false);
+    expect(workerUsageGateExempt("imp", { harness: "claude-code", provider: "" })).toBe(true);
+    expect(workerUsageGateExempt(undefined, { harness: "codex" })).toBe(true);
+    expect(workerUsageGateExempt(undefined, {})).toBe(false);
+  });
+});
+
 describe("autoContinueGateReason per-project exemption", () => {
   beforeEach(() => addAlertMock.mockReset());
 
@@ -446,6 +465,36 @@ describe("autoContinueGateReason per-project exemption", () => {
     expect(autoContinueGateReason("deep", "")).toBeNull();
   });
 
+  it("exempts a Codex worker from the usage closures on a metered project", async () => {
+    // omi-godot/wild-round-jay (harness codex) sat in `merged` for 34.6h behind
+    // a pause the Claude weekly meter tripped, though it spends OpenAI quota.
+    await initPooledProjects();
+    const { setAutoContinueConfig, getAutoContinueConfig } = await importConfig();
+    setAutoContinueConfig({
+      enabled: false,
+      pausedUntil: "2099-01-01T00:00:00Z",
+      pausedReason: "week at 97%",
+    });
+    mockGateDeps({
+      fetchedAt: "2026-05-02T00:00:00Z",
+      data: { weekly: { pct: 99, resetsAt: "2099-01-01T00:00:00Z" } },
+    });
+    const { autoContinueGateReason } = await importGate();
+    expect(autoContinueGateReason("plain", undefined, "codex")).toBeNull();
+    expect(autoContinueGateReason("plain", undefined, "claude-code")).toBe("usage-paused");
+    expect(autoContinueGateReason("plain")).toBe("usage-paused");
+
+    // With usage close armed, its check neither blocks it nor trips the gate:
+    // the trip belongs to a worker whose tokens the meters describe.
+    setAutoContinueConfig({
+      enabled: true, usageAutoClose: true, pausedUntil: undefined, pausedReason: undefined,
+    });
+    expect(autoContinueGateReason("plain", undefined, "codex")).toBeNull();
+    expect(getAutoContinueConfig().enabled).toBe(true);
+    expect(addAlertMock).not.toHaveBeenCalled();
+    expect(autoContinueGateReason("plain", undefined, "claude-code")).toBe("usage-threshold");
+  });
+
   it("still blocks exempt projects on an explicit garden auto off", async () => {
     await initPooledProjects();
     const { setAutoContinueConfig } = await importConfig();
@@ -455,6 +504,7 @@ describe("autoContinueGateReason per-project exemption", () => {
     expect(autoContinueGateReason("imp")).toBe("globally-disabled");
     expect(autoContinueGateReason("deep")).toBe("globally-disabled");
     expect(autoContinueGateReason("plain")).toBe("globally-disabled");
+    expect(autoContinueGateReason("plain", undefined, "codex")).toBe("globally-disabled");
   });
 });
 

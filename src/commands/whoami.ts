@@ -1,6 +1,6 @@
 import { readRegistry, findWorkerByName, compareWorkerFreshness, type WorkerEntry } from "../dashboard/registry.js";
 import { output, isTTY } from "../output.js";
-import { getAutoContinueConfig, projectUsageGateExempt, type AutoContinueConfig } from "../config.js";
+import { getAutoContinueConfig, workerUsageGateExempt, type AutoContinueConfig } from "../config.js";
 import { resolveWorkerStatus } from "./status.js";
 
 interface WhoamiResult {
@@ -24,9 +24,10 @@ interface WhoamiResult {
   // "please proceed" prompt after its next merge — so it's the answer to "will
   // this worker keep going on its own?", which nothing else on the worker shows.
   autoContinue: AutoContinueConfig;
-  // True when this worker's project runs on a separate token pool (provider
-  // or non-default claudeProfile), so usage-triggered gate closures above do
-  // not hold it — only an explicit `garden auto off` does.
+  // True when this worker runs on a separate token pool (a Codex harness, its
+  // own or its project's provider, a non-default claudeProfile), so
+  // usage-triggered gate closures above do not hold it — only an explicit
+  // `garden auto off` does.
   usageGateExempt: boolean;
   siblings: Array<{ name: string; displayStatus: string }>;
 }
@@ -70,7 +71,7 @@ export async function whoami(args: string[]): Promise<void> {
     .map(e => ({ name: e.name, displayStatus: resolveWorkerStatus(e) }));
 
   let usageGateExempt = false;
-  try { usageGateExempt = projectUsageGateExempt(resolvedProject); } catch { /* config unavailable: report the strict gate */ }
+  try { usageGateExempt = workerUsageGateExempt(resolvedProject, entry); } catch { /* config unavailable: report the strict gate */ }
 
   const result: WhoamiResult = {
     project: resolvedProject,
@@ -129,20 +130,20 @@ export async function whoami(args: string[]): Promise<void> {
 // One-line summary of the global auto-continue gate for the TTY view. Green
 // "on" when the gate is open; yellow "OFF" with the pause reason/window (or the
 // `garden auto on` hint for a manual disable) when it's holding merged workers
-// parked. A usage pause does not hold a worker whose project is exempt
-// (separate token pool), so that combination reads "on" — the OFF answer
-// would be wrong for the one question this line exists to answer.
+// parked. A usage pause does not hold an exempt worker (separate token pool),
+// so that combination reads "on" — the OFF answer would be wrong for the one
+// question this line exists to answer.
 export function formatAutoContinueLine(ac: AutoContinueConfig, usageGateExempt = false): string {
   if (ac.enabled) return "\x1b[32mon\x1b[0m \x1b[2m(post-merge)\x1b[0m";
   if (ac.pausedReason) {
     // Gate the exempt "on" on pausedUntil, matching the authoritative gate
-    // (autoContinueGateReason / gateHoldsProject key the usage-pause bypass on
-    // pausedUntil, not pausedReason). An exempt project only auto-continues
+    // (autoContinueGateReason / gateHoldsWorker key the usage-pause bypass on
+    // pausedUntil, not pausedReason). An exempt worker only auto-continues
     // through a pause carrying a real pausedUntil; a trip that persisted
     // pausedUntil="" (malformed resets_at) reads globally-disabled there and
-    // holds every project, so this line must show OFF too, not green "on".
+    // holds every worker, so this line must show OFF too, not green "on".
     if (usageGateExempt && ac.pausedUntil) {
-      return "\x1b[32mon\x1b[0m \x1b[2m(usage-paused globally; this project runs on a separate token pool)\x1b[0m";
+      return "\x1b[32mon\x1b[0m \x1b[2m(usage-paused globally; this worker runs on a separate token pool)\x1b[0m";
     }
     const until = ac.pausedUntil ? ` until ${ac.pausedUntil}` : "";
     return `\x1b[33mOFF\x1b[0m \x1b[2m${ac.pausedReason}${until}\x1b[0m`;

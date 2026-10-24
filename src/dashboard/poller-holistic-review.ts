@@ -134,6 +134,9 @@ export function maybeDispatchHolisticReview(
   // shared usage gate is closed. Project-scoped gate: the reviewer runs on this
   // project's env, so a usage-exempt project (separate token pool) dispatches
   // through a usage-triggered closure; an explicit `garden auto off` defers.
+  // The worker's harness is deliberately not passed: this pass spends its
+  // reviewer's pool, resolved apart from the worker's harness, and a Codex
+  // worker on a codex-claude crew is reviewed by first-party Claude.
   if (isWorkerClaudeWorking(projectName, entry.name)) {
     log.debug("poller", "holistic-review deferred: worker Claude still working", {
       worker: entry.name, data: { project: projectName },

@@ -766,6 +766,25 @@ export function projectUsageGateExempt(projectName: string, config?: GardenConfi
   return path.resolve(profile.configDir) !== path.resolve(HOME_DIR, ".claude");
 }
 
+// The per-worker form of projectUsageGateExempt, and the one rule every gate
+// surface applies (the gate itself, the status pane's `gate closed`, whoami).
+// A worker's own identity can put it on another pool whatever its project
+// says: a harness other than claude-code (Codex) spends its vendor's quota,
+// and a worker-level provider spends that backend's. Only the exempting
+// direction is per-worker: tightening a claude-code worker on an exempt
+// project is the unsafe direction to guess at, and an over-exempt continue
+// costs one prompt, not spend.
+export function workerUsageGateExempt(
+  projectName: string | undefined,
+  worker: { harness?: string; provider?: string },
+  config?: GardenConfig,
+): boolean {
+  if (worker.harness && worker.harness !== "claude-code") return true;
+  const cfg = config ?? loadConfig();
+  if (worker.provider && tryResolveProvider({ provider: worker.provider }, cfg)) return true;
+  return !!projectName && projectUsageGateExempt(projectName, cfg);
+}
+
 export function loadConfig(): GardenConfig {
   if (!fs.existsSync(CONFIG_PATH)) {
     throw new Error(

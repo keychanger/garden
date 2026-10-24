@@ -10,7 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   tryGetProject, getAutoContinueConfig, setAutoContinueConfig,
-  anyAnthropicMeteredProject, projectUsageGateExempt, tryResolveProvider,
+  anyAnthropicMeteredProject, workerUsageGateExempt,
   SESSIONS_DIR,
 } from "../config.js";
 import { atomicWriteFile } from "./atomic-write.js";
@@ -999,7 +999,7 @@ function maybeAutoContinue(
     });
     return false;
   }
-  const gateReason = autoContinueGateReason(projectName, entry.provider);
+  const gateReason = autoContinueGateReason(projectName, entry.provider, entry.harness);
   if (gateReason) {
     // The sweep replays this on every poke for each stranded worker, so a raw
     // info line would flood. Throttle to once per worker per hour (mirrors
@@ -1086,16 +1086,21 @@ function autoContinueSkipReason(
 // usage-window reset or auto-disables after a threshold cross. Returns null
 // when auto-continue is allowed to proceed; otherwise a short reason tag.
 //
-// The usage-triggered closures are per-project: a project on a third-party
-// provider or a non-default claudeProfile draws tokens from a pool the
-// default account's meters do not describe, so `usage-paused` does not hold
-// it and its calls never evaluate the meters (no read, no trip side effect —
-// the threshold trip fires from the next metered project's check, where it
-// describes tokens that worker actually consumes). An explicit
-// `garden auto off` (enabled=false with no pausedUntil) still blocks every
-// project: that closure is operator intent, not a meter reading. Callers
-// that have no project context omit the argument and get the strict gate.
-export function autoContinueGateReason(projectName?: string, workerProvider?: string): string | null {
+// The usage-triggered closures are per worker token pool: a worker that draws
+// tokens from a pool the default account's meters do not describe (a Codex
+// harness, its own or its project's provider, a non-default claudeProfile —
+// workerUsageGateExempt) is not held by `usage-paused`, and its calls never
+// evaluate the meters (no read, no trip side effect — the threshold trip
+// fires from the next metered worker's check, where it describes tokens that
+// worker actually consumes). An explicit `garden auto off` (enabled=false
+// with no pausedUntil) still blocks every worker: that closure is operator
+// intent, not a meter reading. Callers that have no project context omit the
+// arguments and get the strict gate.
+export function autoContinueGateReason(
+  projectName?: string,
+  workerProvider?: string,
+  workerHarness?: string,
+): string | null {
   let cfg = getAutoContinueConfig();
 
   if (!cfg.enabled && cfg.pausedUntil && cfg.resumeAfterReset) {
@@ -1110,20 +1115,10 @@ export function autoContinueGateReason(projectName?: string, workerProvider?: st
     }
   }
 
-  // A worker with its OWN provider spends that backend's pool whatever its
-  // project is configured for, so it is exempt on exactly the reasoning a
-  // provider-backed project is: the Claude meters describe none of its tokens.
-  // Only the exempting direction is per-worker — a first-party worker on a
-  // provider-backed project still falls through to the project check and stays
-  // exempt. Tightening that case would be the unsafe direction to guess at, and
-  // costs nothing to leave: an over-exempt continue is one prompt, not spend.
   let usageExempt = false;
-  if (workerProvider) {
-    try { usageExempt = tryResolveProvider({ provider: workerProvider }) !== null; } catch { /* keep gate */ }
-  }
-  if (!usageExempt && projectName) {
-    try { usageExempt = projectUsageGateExempt(projectName); } catch { /* config unavailable: keep gate */ }
-  }
+  try {
+    usageExempt = workerUsageGateExempt(projectName, { provider: workerProvider, harness: workerHarness });
+  } catch { /* config unavailable: keep gate */ }
 
   if (!cfg.enabled) {
     if (!cfg.pausedUntil) return "globally-disabled";

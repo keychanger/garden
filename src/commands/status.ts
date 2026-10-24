@@ -6,7 +6,7 @@
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
 // current between hook events.
-import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject, getAutoContinueConfig, projectUsageGateExempt, type AutoContinueConfig } from "../config.js";
+import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject, getAutoContinueConfig, workerUsageGateExempt, type AutoContinueConfig } from "../config.js";
 import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
@@ -199,7 +199,8 @@ function iconFor(worker: WorkerInfo): string {
 // per project).
 interface RowRenderCtx {
   now: number;
-  gateClosed: boolean;
+  // Whether the auto-continue gate holds this worker (see gateHoldsWorker).
+  gateHolds: (worker: WorkerInfo) => boolean;
   projectBranch: string | null | undefined;
   showAllBranches: boolean;
   // Phase 2 — explicit baseBranch. When the project has a configured base,
@@ -325,7 +326,7 @@ function collectSegments(worker: WorkerInfo, ctx: RowRenderCtx): RowSegments {
     // The model is grey identity like the badges above; renderWorkerRow trails
     // the whole cluster after the detail (see there for why).
     model: formatModelTag(worker.model, worker.runningModel, ctx.projectModel),
-    flags: `${formatAwaitingInputGlyph(worker)}${formatGateSuffix(worker.status, ctx.gateClosed)}`
+    flags: `${formatAwaitingInputGlyph(worker)}${formatGateSuffix(worker.status, ctx.gateHolds(worker))}`
       + `${formatReviewBlockedFlag(worker.status, worker.reviewBlocked)}${formatCiBracket(worker.ci)}`,
     status: worker.status,
     stale: worker.stale,
@@ -484,7 +485,6 @@ export async function status(args: string[]): Promise<void> {
     if (pi > 0) console.log("");
     const project = statuses[pi];
     const projectConfig = config.projects[project.name];
-    const gateClosed = gateHoldsProject(acConfig, project.name, config);
     console.log(renderProjectHeader({
       index: project.index,
       name: project.name,
@@ -500,7 +500,7 @@ export async function status(args: string[]): Promise<void> {
       const configuredBase = projectConfig?.baseBranch;
       const ctx: RowRenderCtx = {
         now,
-        gateClosed,
+        gateHolds: (w) => gateHoldsWorker(acConfig, project.name, config, w),
         projectBranch: project.projectBranch,
         showAllBranches: configuredBase === undefined
           ? projectHasBranchDivergence(project.workers, project.projectBranch)
@@ -1113,15 +1113,16 @@ export function formatGateSuffix(status: WorkerStatus, gateClosed: boolean): str
   return " \x1b[33mgate closed\x1b[0m";
 }
 
-// Whether the closed gate actually holds this project's workers — mirrors the
-// per-project branch in autoContinueGateReason (poller-merge.ts). A
-// usage-triggered closure (pausedUntil set) does not hold projects on a
-// separate token pool, so their merged rows must not claim "gate closed";
-// an explicit `garden auto off` (no pausedUntil) holds every project.
-function gateHoldsProject(ac: AutoContinueConfig, projectName: string, config: GardenConfig): boolean {
+// Whether the closed gate actually holds this worker — mirrors
+// autoContinueGateReason (poller-merge.ts). A usage-triggered closure
+// (pausedUntil set) does not hold a worker on a separate token pool (a Codex
+// harness, a provider, a non-default profile — workerUsageGateExempt), so its
+// merged row must not claim "gate closed"; an explicit `garden auto off` (no
+// pausedUntil) holds every worker.
+function gateHoldsWorker(ac: AutoContinueConfig, projectName: string, config: GardenConfig, worker: WorkerInfo): boolean {
   if (ac.enabled) return false;
   if (!ac.pausedUntil) return true;
-  return !projectUsageGateExempt(projectName, config);
+  return !workerUsageGateExempt(projectName, worker, config);
 }
 
 function collectWorkers(
@@ -1278,7 +1279,6 @@ export function renderQuickStatus(
     if (pi > 0) lines.push("");
     const name = names[pi];
     const projectConfig = config.projects[name];
-    const gateClosed = gateHoldsProject(acConfig, name, config);
     const projectBranch = projectBranches[pi];
     lines.push(renderProjectHeader({
       index: pi + 1,
@@ -1296,7 +1296,7 @@ export function renderQuickStatus(
       const configuredBase = projectConfig?.baseBranch;
       const ctx: RowRenderCtx = {
         now,
-        gateClosed,
+        gateHolds: (w) => gateHoldsWorker(acConfig, name, config, w),
         projectBranch,
         showAllBranches: configuredBase === undefined
           ? projectHasBranchDivergence(workers, projectBranch)

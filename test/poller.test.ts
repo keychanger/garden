@@ -60,6 +60,7 @@ vi.mock("../src/config.js", () => ({
   getAutoContinueConfig: vi.fn(() => ({
     enabled: true, usageThreshold: 95, resumeAfterReset: false,
   })),
+  workerUsageGateExempt: vi.fn(() => false),
   setAutoContinueConfig: vi.fn((patch) => ({
     enabled: true, usageThreshold: 95, resumeAfterReset: false, ...patch,
   })),
@@ -313,7 +314,7 @@ import { poll, postPush, restartLongLivedPollers, startProjectPoller, stopProjec
 import {
   __resetFfStateForTest, __simulatePollerRestartForTest, _resetGateBlockThrottleForTest,
 } from "../src/dashboard/poller-merge.js";
-import { tryGetProject, getAutoContinueConfig, getMaxConcurrentReviews } from "../src/config.js";
+import { tryGetProject, getAutoContinueConfig, getMaxConcurrentReviews, workerUsageGateExempt } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
   getBranchHeadSha, getRemoteTrackingSha, deleteRemoteBranch,
@@ -5767,6 +5768,23 @@ describe("poll — merged state", () => {
     );
     expect(infoBlocks).toHaveLength(1);
     expect(infoBlocks[0][2]).toMatchObject({ data: { reason: "usage-paused" } });
+  });
+
+  it("sweep auto-continues a Codex worker through a usage pause", () => {
+    // The pause describes Anthropic quota; a Codex worker spends none, and the
+    // gate can only tell from the worker's own harness.
+    vi.mocked(getAutoContinueConfig).mockReturnValue({
+      enabled: false, usageThreshold: 95, resumeAfterReset: false,
+      pausedUntil: "2099-01-01T00:00:00Z", pausedReason: "week at 97%",
+    });
+    vi.mocked(workerUsageGateExempt).mockImplementation((_project, worker) => worker.harness === "codex");
+    registryMock._setEntries("myproject", [strandedWorker({ harness: "codex" })]);
+
+    poll("myproject");
+
+    expect(dispatchDelayedAutoContinue).toHaveBeenCalledWith(
+      "node /usr/local/bin/garden", "myproject", "bold-ash",
+    );
   });
 
   it("re-logs immediately when a worker re-strands after the gate reopens", () => {

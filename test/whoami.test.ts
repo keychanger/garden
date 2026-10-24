@@ -33,11 +33,11 @@ vi.mock("../src/commands/status.js", () => ({
 vi.mock("../src/config.js", async (importActual) => ({
   ...(await importActual<typeof import("../src/config.js")>()),
   getAutoContinueConfig: vi.fn(() => ({ enabled: true, usageThreshold: 95, resumeAfterReset: false })),
-  projectUsageGateExempt: vi.fn(() => false),
+  workerUsageGateExempt: vi.fn(() => false),
 }));
 
 import { whoami, formatAutoContinueLine } from "../src/commands/whoami.js";
-import { getAutoContinueConfig, projectUsageGateExempt } from "../src/config.js";
+import { getAutoContinueConfig, workerUsageGateExempt } from "../src/config.js";
 import type { WorkerEntry } from "../src/dashboard/registry.js";
 
 const registryMock = await import("../src/dashboard/registry.js") as {
@@ -60,7 +60,7 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
 
 beforeEach(() => {
   registryMock._clear();
-  vi.mocked(projectUsageGateExempt).mockReturnValue(false);
+  vi.mocked(workerUsageGateExempt).mockReturnValue(false);
   delete process.env.GARDEN_PROJECT;
   delete process.env.GARDEN_WORKER;
 });
@@ -154,14 +154,18 @@ describe("whoami command", () => {
     });
   });
 
-  it("reports whether the project is exempt from the usage gate", async () => {
-    vi.mocked(projectUsageGateExempt).mockReturnValue(true);
-    registryMock._setEntries("myproject", [makeWorker()]);
+  it("reports whether the worker is exempt from the usage gate", async () => {
+    // Asked of the worker, not its project: a Codex worker on a metered
+    // project spends no Anthropic quota.
+    vi.mocked(workerUsageGateExempt).mockImplementation((_project, worker) => worker.harness === "codex");
+    registryMock._setEntries("myproject", [makeWorker({ harness: "codex" })]);
     process.env.GARDEN_WORKER = "bold-ash";
 
     const lines = await captureConsoleLog(() => whoami([]));
     expect(JSON.parse(lines[0]).usageGateExempt).toBe(true);
-    expect(vi.mocked(projectUsageGateExempt)).toHaveBeenCalledWith("myproject");
+    expect(vi.mocked(workerUsageGateExempt)).toHaveBeenCalledWith(
+      "myproject", expect.objectContaining({ name: "bold-ash", harness: "codex" }),
+    );
   });
 });
 

@@ -65,7 +65,7 @@ vi.mock("../src/config.js", () => {
       return p ? { ...p, name } : null;
     }),
     getAutoContinueConfig: vi.fn(() => ({ enabled: true, usageThreshold: 95, resumeAfterReset: false })),
-    projectUsageGateExempt: vi.fn(() => false),
+    workerUsageGateExempt: vi.fn(() => false),
     SESSIONS_DIR: "/tmp/fake-sessions",
   };
 });
@@ -90,7 +90,7 @@ vi.mock("../src/output.js", () => ({
 }));
 
 import { status, renderQuickStatus, resolveWorkerStatus, dimRow, truncateToVisibleWidth, visibleWidth, formatTimeInState, formatGateSuffix, formatReviewBlockedFlag, _resetStatusBranchCacheForTest } from "../src/commands/status.js";
-import { getAutoContinueConfig, projectUsageGateExempt } from "../src/config.js";
+import { getAutoContinueConfig, workerUsageGateExempt } from "../src/config.js";
 import { currentBranchFast, branchExistsOnOrigin } from "../src/dashboard/git.js";
 import { unreadAlertCountsByProject } from "../src/dashboard/alerts.js";
 import { diaryHasContent } from "../src/diary.js";
@@ -106,7 +106,7 @@ beforeEach(() => {
   vi.mocked(loadConfig).mockReturnValue({
     projects: { garden: { path: "/tmp/garden" } },
   });
-  vi.mocked(projectUsageGateExempt).mockReturnValue(false);
+  vi.mocked(workerUsageGateExempt).mockReturnValue(false);
   vi.mocked(dashboardExists).mockReturnValue(true);
   vi.mocked(readDashState).mockReturnValue({
     activeProject: "garden",
@@ -532,14 +532,14 @@ describe("renderQuickStatus", () => {
     expect(result).not.toContain("gate closed");
   });
 
-  it("does not flag a usage-exempt project's merged row on a usage pause", () => {
-    // Usage-triggered closure (pausedUntil set): a project on a separate token
+  it("does not flag a usage-exempt worker's merged row on a usage pause", () => {
+    // Usage-triggered closure (pausedUntil set): a worker on a separate token
     // pool auto-continues anyway, so its row must not claim "gate closed".
     vi.mocked(getAutoContinueConfig).mockReturnValue({
       enabled: false, usageThreshold: 95, resumeAfterReset: false,
       pausedUntil: "2099-01-01T00:00:00Z", pausedReason: "5h at 99%",
     });
-    vi.mocked(projectUsageGateExempt).mockReturnValue(true);
+    vi.mocked(workerUsageGateExempt).mockReturnValue(true);
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", prState: "merged" },
     ]);
@@ -547,15 +547,36 @@ describe("renderQuickStatus", () => {
     expect(result).not.toContain("gate closed");
   });
 
-  it("still flags a usage-exempt project's merged row on an explicit auto off", () => {
-    // Manual `garden auto off` (no pausedUntil) blocks every project.
+  it("still flags a usage-exempt worker's merged row on an explicit auto off", () => {
+    // Manual `garden auto off` (no pausedUntil) blocks every worker.
     vi.mocked(getAutoContinueConfig).mockReturnValue({ enabled: false, usageThreshold: 95, resumeAfterReset: false });
-    vi.mocked(projectUsageGateExempt).mockReturnValue(true);
+    vi.mocked(workerUsageGateExempt).mockReturnValue(true);
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "abc", task: "", prState: "merged" },
     ]);
     const result = renderQuickStatus(state);
     expect(result).toContain("gate closed");
+  });
+
+  it("decides the usage-pause flag per worker, not per project", () => {
+    // One project can host a Codex worker and a Claude worker; the pause holds
+    // only the one whose tokens the Claude meters describe.
+    vi.mocked(getAutoContinueConfig).mockReturnValue({
+      enabled: false, usageThreshold: 95, resumeAfterReset: false,
+      pausedUntil: "2099-01-01T00:00:00Z", pausedReason: "week at 97%",
+    });
+    vi.mocked(workerUsageGateExempt).mockImplementation((_project, worker) => worker.harness === "codex");
+    vi.mocked(listHiddenWorkerWindows).mockReturnValueOnce(["_garden-worker-swift-oak"]);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "abc", task: "", prState: "merged", harness: "codex" },
+      { name: "swift-oak", sessionId: "def", task: "", prState: "merged" },
+    ]);
+    const lines = renderQuickStatus(state).split("\n");
+    expect(lines.find(l => l.includes("bold-ash"))).not.toContain("gate closed");
+    expect(lines.find(l => l.includes("swift-oak"))).toContain("gate closed");
+    expect(workerUsageGateExempt).toHaveBeenCalledWith(
+      "garden", expect.objectContaining({ harness: "codex" }), expect.anything(),
+    );
   });
 
   it("marks a project that has diary content with a dimmed pencil glyph", () => {
