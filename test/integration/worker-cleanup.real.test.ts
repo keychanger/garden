@@ -12,13 +12,19 @@ const env = useGitTmpHome();
 // a CI runner, and the live-pane cases set panes explicitly.
 // `panes: null` is a session that did not answer the listing, which is not the
 // same as one with no panes: absence is only evidence when tmux gave it.
+// `unreachable` is a tmux that answered nothing at all, as inside an agent
+// sandbox, which every probe there reports exactly like no dashboard.
 const tmuxView = vi.hoisted(() => ({
   dashboard: false,
+  unreachable: false,
   panes: [] as { panePath: string; windowName?: string; atLeft?: boolean }[] | null,
 }));
 vi.mock("../../src/session.js", async (orig) => ({
   ...(await orig<typeof import("../../src/session.js")>()),
-  dashboardExists: () => tmuxView.dashboard,
+  dashboardExists: () => tmuxView.dashboard && !tmuxView.unreachable,
+  dashboardReach: () => tmuxView.unreachable
+    ? { state: "unreachable", detail: "error connecting to /private/tmp/tmux-501/default (Operation not permitted)" }
+    : { state: tmuxView.dashboard ? "present" : "absent" },
 }));
 // Passes through to the real reap, so the daemon-kill case below still
 // exercises it, while recording whether it was reached at all.
@@ -79,6 +85,7 @@ let wtPath: string;
 
 beforeEach(() => {
   tmuxView.dashboard = false;
+  tmuxView.unreachable = false;
   tmuxView.panes = [];
   reaped.worktrees = [];
   // No origin remote: there is no remote branch to delete, so local cleanup
@@ -394,6 +401,30 @@ describe("runWorkerCleanup (real git)", () => {
 
     expect(fs.existsSync(path.join(wtPath, "precious.txt"))).toBe(true);
     expect(branches(env.repoPath)).toContain("numb-clear-vow");
+    expect(readWorkerCleanupRequest(file)?.attempts).toBe(0);
+  });
+
+  // garden/weak-tough-lynx, 2026-09-17: the cleanup a sandboxed `garden workers
+  // stop` dispatched ran in that sandbox, where tmux answers nothing. Read as
+  // "no dashboard", it went on while the worker's pane was still running, and
+  // git removed what the sandbox allowed: not the worktree directory, but its
+  // admin entry in the shared .git, and then the branch.
+  it("defers, touching nothing, when tmux does not answer at all", async () => {
+    const { runWorkerCleanup, readWorkerCleanupRequest } = await import("../../src/dashboard/worker-cleanup.js");
+    const file = await seed();
+    tmuxView.unreachable = true;
+    // The sandbox may not write the worktree; a read-only tree stands in.
+    const tree = [wtPath, ...fs.readdirSync(wtPath, { recursive: true }).map(p => path.join(wtPath, String(p)))];
+    for (const p of [...tree].reverse()) fs.chmodSync(p, fs.statSync(p).mode & ~0o222);
+    try {
+      runWorkerCleanup("leadingtone-io", "numb-clear-vow");
+    } finally {
+      for (const p of tree) fs.chmodSync(p, fs.statSync(p).mode | 0o200);
+    }
+
+    expect(branches(env.repoPath)).toContain("numb-clear-vow");
+    expect(git(wtPath, "rev-parse", "--is-inside-work-tree")).toBe("true");
+    expect(reaped.worktrees).toEqual([]);
     expect(readWorkerCleanupRequest(file)?.attempts).toBe(0);
   });
 

@@ -35,7 +35,7 @@ import {
 } from "./git.js";
 import { listSessionPanesOrNull, shellEscape, type SessionPane } from "./tmux.js";
 import { isInfrastructureWindow } from "./window-names.js";
-import { dashboardExists } from "../session.js";
+import { dashboardReach } from "../session.js";
 import { addAlert } from "./alerts.js";
 import { log } from "./log.js";
 import { isGeneratedWorkerName } from "./names.js";
@@ -312,15 +312,17 @@ export function runWorkerCleanup(project: string, worker: string): void {
 
 // A dashboard pane whose cwd is inside the worktree, which is how a worker's
 // pane looks wherever it is shown, the right slot included. Asked of tmux
-// rather than the registry: a sandboxed worker can rewrite the registry, and
-// `garden workers stop` run from a worker's pane removes the entry without
-// being able to kill the pane.
+// rather than the registry: a sandboxed worker can rewrite the registry and
+// forge this request.
 //
-// Three answers, because absence is only evidence when tmux gave it. No
-// session means no dashboard pane can hold the worktree, so a cleanup after
-// `dashboard exit` still runs (a sandboxed caller lands here too, and its git
-// steps fail for the watchdog's unsandboxed retry to redo). A session that
-// cannot be enumerated says nothing either way, so it defers.
+// Three answers, because absence is only evidence when tmux gave it. tmux
+// saying no session exists means no dashboard pane can hold the worktree, so a
+// cleanup after `dashboard exit` still runs. A tmux that does not answer at
+// all, or a session that cannot be enumerated, says nothing either way, so it
+// defers. Run inside an agent sandbox, which is denied the tmux socket but may
+// write the shared .git, proceeding left the worktree directory and removed
+// its admin entry and branch from under a worker still running in it (garden/
+// weak-tough-lynx, 2026-09-17).
 //
 // tmux reports a pane's cwd as the kernel resolved it, while the canonical
 // worktree path is spelled lexically, so both spellings are matched: under a
@@ -328,7 +330,9 @@ export function runWorkerCleanup(project: string, worker: string): void {
 // would silently never fire. reapWorktreeProcesses resolves for the same
 // reason.
 function paneHoldingWorktree(worktree: string): SessionPane | "unreachable" | null {
-  if (!dashboardExists()) return null;
+  const reach = dashboardReach();
+  if (reach.state === "absent") return null;
+  if (reach.state === "unreachable") return "unreachable";
   const panes = listSessionPanesOrNull();
   if (panes === null) return "unreachable";
   const spellings = new Set([worktree]);
