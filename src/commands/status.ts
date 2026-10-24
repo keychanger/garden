@@ -6,13 +6,14 @@
 // pgrep and does not read marker files. Before rendering, it refreshes
 // worker task summaries from live tmux pane titles so the registry stays
 // current between hook events.
-import { loadConfig, getFocusedProjectNames, allPlotProjectNames, tryGetProject, getAutoContinueConfig, workerUsageGateExempt, type AutoContinueConfig } from "../config.js";
-import { dashboardExists, DASHBOARD_SESSION } from "../session.js";
+import { loadConfig, getFocusedProjectNames, allPlotProjectNames, getAutoContinueConfig, workerUsageGateExempt, type AutoContinueConfig } from "../config.js";
+import { dashboardExists } from "../session.js";
 import { output, isTTY } from "../output.js";
 import { readDashState, type DashboardState } from "../dashboard/state.js";
 import { getWorkers, readRegistry, batchUpdateWorkerFields, compareWorkerFreshness, isWorkerStale, isDelegating, type ReviewBlockedReason, type WorkerRegistry } from "../dashboard/registry.js";
 import {
-  listHiddenWorkerWindows, windowExists, getFirstPaneId, getPaneTitle, stripControlSequences,
+  listHiddenWorkerWindows, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, setPaneVar,
+  stripControlSequences, type PaneInfo,
 } from "../dashboard/tmux.js";
 import { resolveWorkerActivity } from "../dashboard/harness/core.js";
 import { workerWindowName as workerWin, parseWorkerSuffix } from "../dashboard/window-names.js";
@@ -406,35 +407,77 @@ function renderProjectHeader(h: {
 
 // Refresh all workers' task fields from whatever source their harness owns
 // (resolveWorkerActivity — the live pane title for Claude Code, the transcript
-// for Codex). Called before rendering so the registry has current data even if
-// no hook has fired recently (e.g. workers in the middle of a long work
-// session). This keeps the registry as the source of truth — we update it,
-// then render from it.
-function refreshWorkerTasks(state: DashboardState): void {
+// for Codex). This catches tasks set during work — the hook handler only
+// captures the summary at hook time, but an agent updates it continuously as
+// it works. The dashboard refresh (header.ts refreshDashboard) runs this on
+// every update, which piggybacks on existing hook events, and `garden status`
+// runs it before it renders: the registry stays the source of truth — update
+// it, then render from it.
+//
+// Batched: one tmux `list-panes -s -F` call yields every pane's
+// (windowName, paneId, title) in a single fork. The previous shape ran
+// findWorkerPaneId + getPaneTitle per worker — 2-3 tmux forks each, scaling
+// linearly with worker count. Now constant: one fork regardless of N.
+//
+// Returns the registry with the refreshed tasks applied when any changed, else
+// null. syncActiveBorder also rewrites the visible right-slot pane's border
+// label (@garden_task), the dashboard's job; `garden status` leaves it alone.
+export function refreshWorkerTasks(
+  cachedRegistry?: WorkerRegistry,
+  cachedState?: DashboardState,
+  syncActiveBorder = true,
+): WorkerRegistry | null {
   try {
-    const registry = readRegistry();
+    const registry = cachedRegistry ?? readRegistry();
+    const state = cachedState ?? readDashState();
+    const panes = listSessionPaneTitles();
+    if (panes.length === 0) return null;
+
+    // Index by both window name (the parked-pane lookup) and pane id (the
+    // active-window swap-pane lookup). A worker's pane is in its logical
+    // hidden window when parked, but moves to the visible right slot via
+    // swap-pane when focused — pane_id is the stable identifier across both.
+    const byWindow = new Map<string, PaneInfo>();
+    const byPaneId = new Map<string, string>();
+    for (const p of panes) {
+      if (!byWindow.has(p.windowName)) byWindow.set(p.windowName, p);
+      byPaneId.set(p.paneId, p.rawTitle);
+    }
+
     const updates: Array<{ project: string; workerName: string; fields: { task: string } }> = [];
 
     for (const [project, entries] of Object.entries(registry.workers)) {
       for (const entry of entries) {
-        const summary = resolveWorkerActivity(entry, () => {
-          const windowName = workerWin(project, entry.name);
-          let paneId: string | null = null;
-          if (state.activeWindowName === windowName && state.activePaneId) {
-            paneId = state.activePaneId;
-          } else if (windowExists(windowName)) {
-            paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${windowName}`);
-          }
-          return paneId ? getPaneTitle(paneId) : null;
-        });
+        const logical = workerWin(project, entry.name);
+        const activePaneId = state.activeWindowName === logical ? state.activePaneId : null;
+        const raw = activePaneId ? byPaneId.get(activePaneId) : byWindow.get(logical)?.rawTitle;
+        const summary = resolveWorkerActivity(entry, () => cleanPaneTitle(raw));
+        // The registry may already hold this summary because the hook path
+        // wrote it before this refresh. Keep the visible border synchronized
+        // independently of whether a registry update is still needed.
+        if (syncActiveBorder && summary && activePaneId) setPaneVar(activePaneId, "garden_task", summary);
         if (summary && summary !== entry.task) {
           updates.push({ project, workerName: entry.name, fields: { task: summary } });
         }
       }
     }
 
-    if (updates.length > 0) batchUpdateWorkerFields(updates);
-  } catch { /* best effort */ }
+    if (updates.length > 0) {
+      batchUpdateWorkerFields(updates);
+      const workers = Object.fromEntries(
+        Object.entries(registry.workers).map(([project, entries]) => [
+          project,
+          entries.map(entry => {
+            const update = updates.find(u => u.project === project && u.workerName === entry.name);
+            return update ? { ...entry, ...update.fields } : entry;
+          }),
+        ]),
+      );
+      return { workers };
+    }
+    return null;
+  } catch { /* best effort — don't block dashboard refresh */ }
+  return null;
 }
 
 export async function status(args: string[]): Promise<void> {
@@ -453,15 +496,18 @@ export async function status(args: string[]): Promise<void> {
   }
   const hasDashboard = dashboardExists();
 
-  if (hasDashboard) refreshWorkerTasks(dashState);
+  // Board polls this command, so its tmux cost recurs: one list-panes covers
+  // every worker's title, and one list-windows and config load every project.
+  const windowNames = hasDashboard ? listAllWindowNames() : undefined;
+  if (hasDashboard) refreshWorkerTasks(undefined, dashState, false);
 
   const statuses: ProjectStatusInfo[] = names.map((name, i) => {
     return {
       name,
       index: i + 1,
       isActive: dashState.activeProject === name,
-      workers: hasDashboard ? collectWorkers(name, dashState) : [],
-      projectBranch: resolveProjectBranch(name),
+      workers: hasDashboard ? collectWorkers(name, dashState, windowNames) : [],
+      projectBranch: resolveProjectBranch(name, config),
       ...(config.projects[name]?.beadIntake === true ? readIntakeStatus(name) : {}),
     };
   });
@@ -926,16 +972,14 @@ function collectMissingBases(
 
 function resolveProjectBranch(
   projectName: string,
-  config?: ReturnType<typeof loadConfig>,
+  config: ReturnType<typeof loadConfig>,
 ): string | null {
   const cached = projectBranchCache.get(projectName);
   const now = Date.now();
   if (cached && now - cached.at < PROJECT_BRANCH_TTL_MS) return cached.branch;
-  // Take the repo path from the already-loaded config on the hot render path;
-  // tryGetProject re-parses config.yml, which the per-project render loop would
-  // otherwise pay N times per bake. Fall back to tryGetProject for the CLI path
-  // (once per `garden status`, no threaded config).
-  const repoPath = config ? config.projects[projectName]?.path : tryGetProject(projectName)?.path;
+  // Take the repo path from the already-loaded config: tryGetProject re-parses
+  // config.yml, which the per-project loop would otherwise pay N times.
+  const repoPath = config.projects[projectName]?.path;
   if (!repoPath) return null;
   const branch = currentBranchFast(repoPath);
   projectBranchCache.set(projectName, { branch, at: now });

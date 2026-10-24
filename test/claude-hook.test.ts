@@ -147,6 +147,7 @@ vi.mock("../src/dashboard/alerts.js", () => ({
 vi.mock("../src/commands/status.js", () => ({
   renderQuickStatus: vi.fn(() => ""),
   resolveWorkerStatus: vi.fn(() => "idle"),
+  refreshWorkerTasks: vi.fn(() => null),
 }));
 
 import { gitSubcommandArgs } from "./helpers.js";

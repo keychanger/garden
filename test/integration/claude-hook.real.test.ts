@@ -47,6 +47,7 @@ vi.mock("../../src/dashboard/runner.js", () => ({
 vi.mock("../../src/commands/status.js", () => ({
   renderQuickStatus: vi.fn(() => ""),
   resolveWorkerStatus: vi.fn(() => "idle"),
+  refreshWorkerTasks: vi.fn(() => null),
 }));
 
 const env = useGitTmpHome();

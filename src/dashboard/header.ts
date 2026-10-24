@@ -10,19 +10,19 @@ import { SESSIONS_DIR, loadConfig, tryGetProject, plotsMap, isPlotFocused, logCo
 import { CONTROL_DIR } from "../paths.js";
 import { logColorTmux } from "../log-palette.js";
 import { DASHBOARD_SESSION } from "../session.js";
-import { tmux, tmuxBatch, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames, listSessionPaneTitles, cleanPaneTitle, type PaneInfo } from "./tmux.js";
+import { tmux, tmuxBatch, getPanePid, getPaneTitle, getFirstPaneId, windowExists, setPaneVar, getPaneSize, listAllWindowNames } from "./tmux.js";
 import { readDashState, type DashboardState } from "./state.js";
-import { findWorkerByName, updateWorkerFields, removeWorker, readRegistry, batchUpdateWorkerFields, type WorkerRegistry } from "./registry.js";
+import { findWorkerByName, updateWorkerFields, removeWorker, readRegistry, type WorkerRegistry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { currentBranchFast, worktreeExists } from "./git.js";
-import { renderQuickStatus } from "../commands/status.js";
+import { renderQuickStatus, refreshWorkerTasks } from "../commands/status.js";
 import { log } from "./log.js";
 import { unreadAlertCount, formatRightBar, statusBarStyle } from "./alerts.js";
 import { renderAlertsPane } from "../commands/alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
 import { formatConversationPane } from "./conversation.js";
-import { getHarnessCore, resolveWorkerActivity } from "./harness/core.js";
+import { getHarnessCore } from "./harness/core.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
 export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
@@ -789,74 +789,6 @@ export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
   updateHeaderVar(shared);
   writeQuickStatus(shared);
   writeHistoryRendered(shared); // follow focus when cycling plots in ⌥h mode
-}
-
-// Refresh all workers' task fields from whatever source their harness owns
-// (resolveWorkerActivity — the live pane title for Claude Code, the transcript
-// for Codex). This catches tasks set during work — the hook handler only
-// captures the summary at hook time, but an agent updates it continuously as
-// it works. By refreshing on every dashboard update (which piggybacks on
-// existing hook events), we keep all workers' tasks current without polling.
-//
-// Batched: one tmux `list-panes -s -F` call yields every pane's
-// (windowName, paneId, title) in a single fork. The previous shape ran
-// findWorkerPaneId + getPaneTitle per worker — 2-3 tmux forks each, scaling
-// linearly with worker count. Now constant: one fork regardless of N.
-function refreshWorkerTasks(
-  cachedRegistry?: WorkerRegistry,
-  cachedState?: DashboardState,
-): WorkerRegistry | null {
-  try {
-    const registry = cachedRegistry ?? readRegistry();
-    const state = cachedState ?? readDashState();
-    const panes = listSessionPaneTitles();
-    if (panes.length === 0) return null;
-
-    // Index by both window name (the parked-pane lookup) and pane id (the
-    // active-window swap-pane lookup). A worker's pane is in its logical
-    // hidden window when parked, but moves to the visible right slot via
-    // swap-pane when focused — pane_id is the stable identifier across both.
-    const byWindow = new Map<string, PaneInfo>();
-    const byPaneId = new Map<string, string>();
-    for (const p of panes) {
-      if (!byWindow.has(p.windowName)) byWindow.set(p.windowName, p);
-      byPaneId.set(p.paneId, p.rawTitle);
-    }
-
-    const updates: Array<{ project: string; workerName: string; fields: { task: string } }> = [];
-
-    for (const [project, entries] of Object.entries(registry.workers)) {
-      for (const entry of entries) {
-        const logical = workerWin(project, entry.name);
-        const activePaneId = state.activeWindowName === logical ? state.activePaneId : null;
-        const raw = activePaneId ? byPaneId.get(activePaneId) : byWindow.get(logical)?.rawTitle;
-        const summary = resolveWorkerActivity(entry, () => cleanPaneTitle(raw));
-        // The registry may already hold this summary because the hook path
-        // wrote it before this refresh. Keep the visible border synchronized
-        // independently of whether a registry update is still needed.
-        if (summary && activePaneId) setPaneVar(activePaneId, "garden_task", summary);
-        if (summary && summary !== entry.task) {
-          updates.push({ project, workerName: entry.name, fields: { task: summary } });
-        }
-      }
-    }
-
-    if (updates.length > 0) {
-      batchUpdateWorkerFields(updates);
-      const workers = Object.fromEntries(
-        Object.entries(registry.workers).map(([project, entries]) => [
-          project,
-          entries.map(entry => {
-            const update = updates.find(u => u.project === project && u.workerName === entry.name);
-            return update ? { ...entry, ...update.fields } : entry;
-          }),
-        ]),
-      );
-      return { workers };
-    }
-    return null;
-  } catch { /* best effort — don't block dashboard refresh */ }
-  return null;
 }
 
 // Floor lines for the status pane: the tallest rendered height among all plots

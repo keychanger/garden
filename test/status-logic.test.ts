@@ -12,6 +12,8 @@ import { captureConsoleLog } from "./helpers.js";
 vi.mock("../src/dashboard/tmux.js", () => ({
   getPaneLabel: vi.fn(),
   getFirstPaneId: vi.fn(),
+  listAllWindowNames: vi.fn(() => []),
+  listSessionPaneTitles: vi.fn(() => []),
   listHiddenWorkerWindows: vi.fn(() => []),
   stripControlSequences: (s: string) => s
     .replace(/\x1b\][\s\S]*?(?:\x07|\x1b\\|$)/g, "")

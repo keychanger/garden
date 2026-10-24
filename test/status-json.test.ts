@@ -11,12 +11,39 @@ import { useTmpHome, captureConsoleLog } from "./helpers.js";
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
+// A stand-in tmux server: records every tmux exec and answers the reads
+// `garden status` makes. Off (no dashboard) unless a test turns it on.
+const tmuxServer = vi.hoisted(() => ({
+  up: false,
+  calls: [] as string[][],
+  windows: [] as string[],
+  panes: [] as Array<{ win: string; id: string; title: string }>,
+}));
 // The operator's workstation may have a live `garden` tmux session; the
 // piped-JSON shape under test must not depend on it.
 vi.mock("../src/session.js", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  dashboardExists: () => false,
+  dashboardExists: () => tmuxServer.up,
 }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const real = await importOriginal<typeof import("node:child_process")>();
+  const execFileSync = (cmd: string, args: string[] = [], opts?: object) => {
+    if (cmd !== "tmux") return real.execFileSync(cmd, args, opts as never);
+    if (!tmuxServer.up) throw new Error("no tmux server");
+    tmuxServer.calls.push(args);
+    const at = (flag: string) => args[args.indexOf(flag) + 1] ?? "";
+    if (args[0] === "list-windows") {
+      return tmuxServer.windows.map((w, i) => (at("-F").includes("window_index") ? `${i} ${w}` : w)).join("\n");
+    }
+    if (args[0] === "list-panes" && args.includes("-s")) {
+      return tmuxServer.panes.map(p => `${p.win}\t${p.id}\t${p.title}`).join("\n");
+    }
+    if (args[0] === "list-panes") return tmuxServer.panes.find(p => `garden-dashboard:${p.win}` === at("-t"))?.id ?? "";
+    if (args[0] === "display-message") return tmuxServer.panes.find(p => p.id === at("-t"))?.title ?? "";
+    return "";
+  };
+  return { ...real, default: { ...real, execFileSync }, execFileSync };
+});
 
 // output.ts snapshots TTY-ness at module load; make sure the pipe path wins.
 delete process.env.GARDEN_PRETTY;
@@ -67,6 +94,40 @@ describe("garden status piped JSON", () => {
     expect(typeof beta.lastIntakeAt).toBe("string");
     expect(() => new Date(beta.lastIntakeAt as string).toISOString()).not.toThrow();
     expect(beta.lastIntakeError).toBe("bd exploded");
+  });
+
+  // board polls this command, so its cost recurs on board's cadence. It used to
+  // read each worker's pane title with up to three tmux execs, and list the
+  // session's windows and parse config.yml once per project.
+  it("reads every worker's pane title, the window list and config once each", async () => {
+    await setupProjects();
+    const { REGISTRY_FILE } = await import("../src/dashboard/registry.js");
+    const names = { alpha: ["a1", "a2", "a3"], beta: ["b1", "b2", "b3"] };
+    fs.writeFileSync(REGISTRY_FILE, JSON.stringify({
+      workers: Object.fromEntries(Object.entries(names).map(([project, workers]) => [
+        project, workers.map(name => ({ name, sessionId: name, task: "old", agentStatus: "working" })),
+      ])),
+    }));
+    tmuxServer.windows = ["main", ...Object.entries(names).flatMap(([p, ws]) => ws.map(w => `_${p}-worker-${w}`))];
+    tmuxServer.panes = Object.entries(names).flatMap(([p, ws]) =>
+      ws.map((w, i) => ({ win: `_${p}-worker-${w}`, id: `%${p === "alpha" ? i + 1 : i + 11}`, title: `title ${w}` })));
+    tmuxServer.calls = [];
+    tmuxServer.up = true;
+    const { CONFIG_PATH } = await import("../src/config.js");
+    const read = vi.spyOn(fs, "readFileSync");
+    try {
+      const parsed = await runStatusJson();
+      expect(tmuxServer.calls.map(c => c[0]).sort()).toEqual(["list-panes", "list-windows"]);
+      expect(read.mock.calls.filter(c => c[0] === CONFIG_PATH)).toHaveLength(1);
+      for (const project of parsed) {
+        const workers = project.workers as Array<{ name: string; activity: string | null }>;
+        expect(workers.map(w => w.activity).sort()).toEqual(
+          names[project.name as "alpha" | "beta"].map(w => `title ${w}`));
+      }
+    } finally {
+      read.mockRestore();
+      tmuxServer.up = false;
+    }
   });
 
   it("omits the intake fields when no pass has ever run", async () => {

@@ -40,6 +40,7 @@ vi.mock("../src/config.js", () => ({
     },
   })),
   SESSIONS_DIR: "/tmp/fake-sessions",
+  GARDEN_DIR: "/tmp/fake-garden",
   plotsMap: vi.fn((cfg: { plots?: Record<string, unknown> }) => cfg.plots ?? {}),
   isPlotFocused: vi.fn((plot: { focused?: boolean }) => plot.focused !== false),
   getRightColumnPercent: vi.fn(() => 55),
@@ -117,9 +118,13 @@ vi.mock("../src/version.js", () => ({
   GARDEN_VERSION: "abc1234",
 }));
 
-vi.mock("../src/commands/status.js", () => ({
+// refreshWorkerTasks lives in status.ts so `garden status` shares it; keep the
+// real one, which runs against this file's tmux and registry mocks.
+vi.mock("../src/commands/status.js", async () => ({
   renderQuickStatus: vi.fn(() => "line1\nline2\nline3"),
   resolveWorkerStatus: vi.fn(() => "idle"),
+  refreshWorkerTasks: (await vi.importActual<typeof import("../src/commands/status.js")>(
+    "../src/commands/status.js")).refreshWorkerTasks,
 }));
 
 vi.mock("../src/dashboard/usage.js", () => ({
