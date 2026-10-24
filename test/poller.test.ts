@@ -374,6 +374,8 @@ beforeEach(() => {
   // Same for the review re-poke dedup markers, which live in the control tree.
   try { fs.rmSync(path.join(CONTROL_DIR, "review-cap-recheck-myproject")); } catch { /* not armed */ }
   try { fs.rmSync(path.join(CONTROL_DIR, "review-retry-recheck-myproject")); } catch { /* not armed */ }
+  // And the CI gate's check-run stamp, so no test inherits "this project has CI".
+  try { fs.rmSync(path.join(CONTROL_DIR, "ci-seen-myproject")); } catch { /* never seen */ }
   // Re-establish factory defaults after reset
   vi.mocked(windowExists).mockReturnValue(true);
   // Review cap defaults to unlimited with no live reviewer windows, so the
@@ -4992,9 +4994,65 @@ describe("poll — merge-pending CI gate", () => {
     expect(mergeToBase).not.toHaveBeenCalled();
   });
 
+  // A project whose CI has no workflow file in the repo (a GitHub App such as
+  // Vercel) is known to have CI only from an observed check-run. Each poll is a
+  // fresh process, so that observation has to be on disk: held in memory it was
+  // gone before the next poll, and a reviewer-fix SHA queried seconds after its
+  // force-push merged before CI ran on it.
+  it("remembers across poller restarts that a workflow-less project has CI", () => {
+    registryMock._setEntries("myproject", [pending()]);
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "pending", pending: ["Vercel"] });
+    poll("myproject");
+    expect(mergeToBase).not.toHaveBeenCalled();
+
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
+    __simulatePollerRestartForTest();
+    poll("myproject");
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      "poller", "ci gate: no check-runs yet, deferring", expect.anything(),
+    );
+    // In the control tree: a worker could delete it from SESSIONS_DIR.
+    expect(fs.renameSync).toHaveBeenCalledWith(
+      expect.any(String), path.join(CONTROL_DIR, "ci-seen-myproject"),
+    );
+  });
+
+  it("defers a transient gh failure on a workflow-less project seen running CI", () => {
+    registryMock._setEntries("myproject", [pending()]);
+    vi.mocked(checkCiStatus).mockReturnValue({ kind: "pending", pending: ["Vercel"] });
+    poll("myproject");
+
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "unavailable", reason: "gh-exit-1: gh: Server Error (HTTP 502)", transient: true,
+    });
+    __simulatePollerRestartForTest();
+    poll("myproject");
+    expect(mergeToBase).not.toHaveBeenCalled();
+  });
+
+  it("stops treating a project as having CI a week after its last check-run", () => {
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      registryMock._setEntries("myproject", [pending()]);
+      vi.mocked(checkCiStatus).mockReturnValue({ kind: "pending", pending: ["Vercel"] });
+      poll("myproject");
+
+      // A removed GitHub App must not cost every later merge the grace window.
+      nowSpy.mockReturnValue(t0 + 7 * 24 * 60 * 60_000 + 1);
+      vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
+      __simulatePollerRestartForTest();
+      poll("myproject");
+      expect(mergeToBase).toHaveBeenCalledOnce();
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it("defers a no-ci SHA on a project with workflow files, having observed no check-run", () => {
-    // The post-poller-restart case. projectHasCi is empty (beforeEach resets
-    // it), and it can never fill: the poller queries within seconds of the
+    // The post-poller-restart case. No check-run is on record (beforeEach clears
+    // the stamp), and none can be: the poller queries within seconds of the
     // reviewer's force-push, so every query returns zero check-runs, and only a
     // non-zero observation sets the flag. Gating the grace window on that flag
     // alone made the gate pass everything through silently after a restart —

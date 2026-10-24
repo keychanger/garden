@@ -13,6 +13,7 @@ import {
   anyAnthropicMeteredProject, workerUsageGateExempt,
   SESSIONS_DIR,
 } from "../config.js";
+import { CONTROL_DIR } from "../paths.js";
 import { atomicWriteFile } from "./atomic-write.js";
 import { DASHBOARD_SESSION } from "../session.js";
 import { addAlert } from "./alerts.js";
@@ -68,17 +69,13 @@ const lastFfState = new Map<string, string>();
 // "never seen" state and its single poll() counts as an entry.
 export function __resetFfStateForTest(): void {
   lastFfState.clear();
-  projectHasCi.clear();
 }
 
-// Test seam: drop ONLY the in-memory maps, simulating the process boundary the
-// poller crosses between every poll. State that must survive a poll (the CI
-// grace stamp, the recheck arming) lives on disk and is deliberately untouched
-// here — a test that resets this between polls is asserting the production
-// process model, not a fresh fixture.
-export function __simulatePollerRestartForTest(): void {
-  projectHasCi.clear();
-}
+// Test seam marking the process boundary the poller crosses between every
+// poll. The CI gate holds nothing in memory (the grace stamp, the recheck
+// arming and the check-run stamp are all on disk), so there is nothing to
+// drop; tests still call it so two polls read as two processes.
+export function __simulatePollerRestartForTest(): void {}
 // Stranded threshold for the merged-state sweep. Must outlast the +6s/+16s
 // delivery legs of a merge-time dispatch so the sweep never races an
 // in-flight prompt with a duplicate paste.
@@ -87,15 +84,40 @@ const SWEEP_STRANDED_MS = 60_000;
 // is cheap and gh's rate limit is generous; a 60s cadence is fast enough
 // that the merge doesn't feel stuck without burning quota on a tight loop.
 const CI_PENDING_RECHECK_MS = 60_000;
-// Per-project (in-memory, per poller) knowledge that the project HAS GitHub
-// Actions — set the first time any check-run is observed. Lets the CI gate tell
-// "genuinely no CI" (never saw a check-run → pass empty check-runs through at
-// once) from "checks not yet materialized" (this project has CI, so zero
-// check-runs on a freshly force-pushed SHA — a reviewer `fixed` or ci-fix commit
-// the poller pokes with delay 0 — means they are still spinning up, so defer,
-// otherwise the exact commit CI most needs to vet merges un-gated). A poller
-// restart re-learns it on the first check-run.
-const projectHasCi = new Map<string, boolean>();
+// Stamp recording that a check-run was seen on one of this project's SHAs; its
+// MTIME is the latest sighting. It lets the CI gate tell "genuinely no CI"
+// (pass empty check-runs through at once) from "checks not yet materialized"
+// for CI with no workflow file in the repo (a GitHub App such as Vercel), which
+// projectDefinesCi cannot see: zero check-runs on a freshly force-pushed SHA —
+// a reviewer `fixed` or ci-fix commit the poller pokes with delay 0 — means
+// they are still spinning up, so defer, or the exact commit CI most needs to
+// vet merges un-gated. It was a module Map, empty in every poll process, so it
+// never gated anything. In the control tree, not SESSIONS_DIR: a worker that
+// deleted it would open the gate.
+function ciSeenStampPath(projectName: string): string {
+  return path.join(CONTROL_DIR, `ci-seen-${projectName}`);
+}
+// A project that has shown no check-run for this long counts as having dropped
+// that CI, so a removed GitHub App stops costing every merge the grace window.
+const CI_SEEN_TTL_MS = 7 * 24 * 60 * 60_000;
+
+function recordCiSeen(projectName: string): void {
+  try {
+    atomicWriteFile(ciSeenStampPath(projectName), "");
+  } catch (err) {
+    log.warn("poller", "ci gate: check-run stamp unwritten", {
+      data: { project: projectName, error: String(err) },
+    });
+  }
+}
+
+function ciSeenRecently(projectName: string): boolean {
+  try {
+    return Date.now() - fs.statSync(ciSeenStampPath(projectName)).mtimeMs < CI_SEEN_TTL_MS;
+  } catch {
+    return false;
+  }
+}
 // Check-runs materialize within ~30s of a push; 3 min is a safe ceiling past
 // which we conclude a CI project's SHA genuinely has none and stop deferring.
 // The grace stamp itself lives on WorkerEntry.ciNoRuns — see the note there for
@@ -338,8 +360,8 @@ export function handleMergePending(
 //
 // Behaves as a no-op for projects with requireCiSuccess: false, projects
 // whose origin isn't a github.com remote, environments without `gh`, and
-// projects with zero check-runs on the SHA that have never been observed to
-// run CI (nothing to gate against). On a project already known to run CI,
+// projects with zero check-runs on the SHA and no CI known from the repo or a
+// recent check-run (nothing to gate against). On a project known to run CI,
 // zero check-runs means they haven't materialized yet, so the merge defers
 // within a bounded grace window (CI_NO_RUNS_GRACE_MS) before passing through;
 // a transient gh failure there defers the same way (CI_UNAVAILABLE_GRACE_MS).
@@ -375,12 +397,12 @@ function gateCiStatus(
   const status: CiStatus = checkCiStatus(slug, sha);
   // Read only on the paths that need it: it parses the workflow files.
   const hasCi = () => projectDefinesCi(projectPath, entry.branchName ?? entry.name)
-    || projectHasCi.get(projectName) === true;
+    || ciSeenRecently(projectName);
 
   // Learn that this project has CI the moment we observe any check-run, and
   // clear a stale no-runs grace stamp for this SHA now that runs exist.
   if (status.kind === "success" || status.kind === "failed" || status.kind === "pending") {
-    projectHasCi.set(projectName, true);
+    recordCiSeen(projectName);
     if (entry.ciNoRuns) {
       updateWorkerFields(projectName, entry.name, { ciNoRuns: undefined });
     }
@@ -402,10 +424,10 @@ function gateCiStatus(
       // Projects that genuinely have no CI pass through immediately, so a
       // no-CI merge is never delayed.
       //
-      // "Has CI" reads the workflow files on disk FIRST: the learned flag alone
-      // could never be set, because setting it required observing a check-run
-      // that this same race hides (see projectDefinesCi). The flag remains as an
-      // OR for CI that has no workflow file in the repo.
+      // "Has CI" reads the workflow files on disk FIRST: the check-run stamp
+      // alone could never be set, because setting it required observing a
+      // check-run that this same race hides (see projectDefinesCi). The stamp
+      // remains as an OR for CI that has no workflow file in the repo.
       if (hasCi()) {
         const waited = ciUnknownForMs(projectName, entry, sha);
         if (waited < CI_NO_RUNS_GRACE_MS) {

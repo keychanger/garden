@@ -13,7 +13,7 @@
 //     rate limit, no connection) on a project with CI: that leaves the SHA's
 //     CI result unknown, so the merge waits within a bounded window first
 //   - "no-ci" → proceed, UNLESS the project has CI (workflow files on disk, or
-//     a check-run observed earlier this poller's life), in which case zero
+//     a check-run seen on one of its SHAs in the last week), in which case zero
 //     check-runs is treated as "not yet materialized" and the merge defers
 //     within a bounded grace window before passing through (the disambiguation
 //     lives in gateCiStatus, poller-merge.ts)
@@ -75,8 +75,9 @@ export function getGitHubRepoSlug(projectPath: string): string | null {
 // passed everything through silently. A red main merged that way on 2026-07-20.
 //
 // The checkout on disk is the durable answer — it survives a restart and needs
-// no network. Kept as an OR with the learned flag, which still covers CI that
-// has no workflow file in the repo (CodeQL default setup, third-party apps).
+// no network. Kept as an OR with the check-run stamp (gateCiStatus), which
+// still covers CI that has no workflow file in the repo (CodeQL default setup,
+// third-party apps).
 //
 // Only a workflow that a push to `branch` would start counts. A deploy-only
 // (push to main) or PR-only workflow never puts check-runs on a worker SHA, so
