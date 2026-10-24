@@ -944,7 +944,7 @@ All read commands detect whether stdout is a TTY:
     ci-seen-<project>     # Mtime of the CI gate's latest check-run sighting; marks CI with no workflow file for a week
     ff-state-<hash>       # The base checkout's last fast-forward outcome per project and base (alerts fire on entry)
     review-cap-recheck-<project>  # Mtime marker deduping the fleet review cap's delayed re-poke
-    review-retry-recheck-<project>  # Mtime marker deduping the 30s re-poke after a failed commit check or designer publish push
+    review-retry-recheck-<project>  # Mtime marker deduping the 30s re-poke after a failed commit check, designer scope-check diff, or designer publish push
     review-backoff-recheck-<project>  # Mtime set to the deadline of the review backoff gate's armed re-poke, deduping it
     <project>-poller.spawn.lock  # Transient lock serializing poller spawn across processes
     watchdog.spawn.lock          # Transient lock serializing the watchdog window's spawn (every poll takes it)
@@ -964,6 +964,7 @@ All read commands detect whether stdout is a TTY:
       logs-view.sh                     # Logs pane follower
     seeds/
       <label>-<uuid>.txt               # Seed prompt for a new or cold-respawned worker (grow, designer, planner, bead, diag)
+      <seed>.seeder                    # Pid of the seeder delivering that seed; a second seeder stands down while it answers
     diag/
       diag-snap-<ts>-<n>.txt           # Status-pane corruption capture (temporary diagnostics; `garden diag handoff` briefs a fixer from it)
     headless/

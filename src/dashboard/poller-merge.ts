@@ -1100,8 +1100,9 @@ export function handleMerged(
 // worker per hour instead of one per poke. Cleared when the worker's gate opens
 // again (see below) — a fresh strand after that logs immediately.
 //
-// CAVEAT: the poller's fresh-process-per-poll model empties this Map every poll, so the throttle does not actually fire and the
-// line logs once per poke after all. Log-only; the durable fix is a marker file
+// CAVEAT: the poller's fresh-process-per-poll model empties this Map every
+// poll, so the throttle does not actually fire and the line logs once per
+// poke after all. Log-only; the durable fix is a marker file
 // or an entry field (see WorkerEntry.ciNoRuns).
 const GATE_BLOCK_LOG_WINDOW_MS = 60 * 60 * 1000;
 const gateBlockLoggedAt = new Map<string, number>();
