@@ -592,6 +592,9 @@ export function installClaudeSkills(targetDir: string): void {
   // Heal the legacy flat-file layout so refreshes/bounces of pre-fix workers stop shadowing the new directory layout.
   fs.rmSync(path.join(skillsRoot, "done.md"), { force: true });
   fs.rmSync(path.join(skillsRoot, "botanist"), { recursive: true, force: true });
+  // The trellis workflow was retired; a worktree from before then still
+  // offers its authoring skill, for a workflow `--trellis` now refuses.
+  fs.rmSync(path.join(skillsRoot, "trellis-author"), { recursive: true, force: true });
   writeSkill(skillsRoot, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME, DONE_SKILL_CONTENT);
   writeSkill(skillsRoot, BLOCKED_SKILL_DIRNAME, BLOCKED_SKILL_FILENAME, BLOCKED_SKILL_CONTENT);
   writeSkill(skillsRoot, HANDOFF_SKILL_DIRNAME, HANDOFF_SKILL_FILENAME, HANDOFF_SKILL_CONTENT);

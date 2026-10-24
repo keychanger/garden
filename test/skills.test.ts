@@ -131,6 +131,14 @@ describe("installClaudeSkills", () => {
     );
   });
 
+  it("removes the retired trellis-author skill when refreshing a worktree", () => {
+    installClaudeSkills("/Users/x/.garden/worktrees/myproject/bold-ash");
+    expect(fs.rmSync).toHaveBeenCalledWith(
+      "/Users/x/.garden/worktrees/myproject/bold-ash/.claude/skills/trellis-author",
+      { recursive: true, force: true },
+    );
+  });
+
   it("designer skill declares its name in frontmatter and forbids editing code", () => {
     expect(DESIGNER_SKILL_CONTENT).toMatch(/^---\nname: designer\n/);
     expect(DESIGNER_SKILL_DIRNAME).toBe("designer");
