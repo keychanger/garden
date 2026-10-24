@@ -176,7 +176,9 @@ describe("worker bootstrap (real fs + real git)", () => {
       const launchAt = lines.indexOf("# Launch the agent");
       expect(trapAt).toBeGreaterThan(0);
       expect(launchAt).toBeGreaterThan(trapAt);
-      const r = spawnSync("sh", ["-c", [...lines.slice(0, trapAt + 1), ...lines.slice(launchAt)].join("\n")], {
+      // bash, as macOS's /bin/sh is: the ERR trap is a bash extension, and
+      // dash (Ubuntu's sh, on CI) refuses it before reaching the agent.
+      const r = spawnSync("bash", ["-c", [...lines.slice(0, trapAt + 1), ...lines.slice(launchAt)].join("\n")], {
         encoding: "utf8",
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, SHELL: "/usr/bin/true" },
       });
