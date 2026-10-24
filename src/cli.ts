@@ -194,7 +194,8 @@ Dashboard:
   resurrect --search <expr>      Narrow the list by name/task/branch and transcript content ("what it did")
   handoff <project> [-m "<msg>"] Spawn a fresh worker on <project> seeded with a briefing (stdin or -m)
                                  Add --expect-callback to receive a one-shot prompt at this pane when the child terminates
-                                 Add --ultracode to create the worker in ultracode mode (Opus + max effort + dynamic workflows)
+                                 Add --ultracode to create the worker in ultracode mode (Opus + max effort + dynamic workflows;
+                                   refused when the new worker would build with a harness other than Claude Code)
                                  Add --crew <name> to spawn it under that crew; without it the worker inherits the calling
                                    worker's own crew (a designer's builder lands on the crew that designed); otherwise the
                                    target project's binding applies

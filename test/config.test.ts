@@ -1234,6 +1234,26 @@ describe("model / effort project config keys", () => {
     await expect(config(["garden", "effort", "max"]))
       .rejects.toThrow(/effort must be one of/);
   });
+
+  // newWorker skips the claude-code-only ultracode preset for a builder on any
+  // other harness, so the confirmation (all the ⌥, menu shows) must not promise
+  // max effort to a codex project's default workers.
+  it("setting effort ultra says when the project's default workers build with codex", async () => {
+    const { saveConfig, GARDEN_DIR } = await importConfig();
+    const { setProjectConfigKey } = await import("../src/dashboard/project-config-mutate.js");
+    fs.mkdirSync(GARDEN_DIR, { recursive: true });
+    saveConfig({ projects: {
+      plain: { path: "/tmp/plain" },
+      flat: { path: "/tmp/flat", harness: "codex" },
+      bound: { path: "/tmp/bound", crew: "codex-claude" },
+    } });
+    expect(setProjectConfigKey("plain", "effort", "ultra").message)
+      .toContain("(ultracode preset: max effort + dynamic workflows)");
+    for (const name of ["flat", "bound"]) {
+      expect(setProjectConfigKey(name, "effort", "ultra").message)
+        .toContain("claude-code only: this project's codex default workers skip it");
+    }
+  });
 });
 
 describe("displayName project config key", () => {

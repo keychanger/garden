@@ -1279,6 +1279,134 @@ describe("newWorker", () => {
     expect(entry.effort).toBeUndefined();
   });
 
+  // ===== The ultracode preset is claude-code only =====
+  // Its Opus pin is stamped on entry.model, which the Codex adapter renders as
+  // `-m 'opus[1m]'` on the launch and on every later resume and bounce. An
+  // explicit per-spawn request for the preset on another harness is refused; a
+  // project or crew default naming it is skipped there, so the next layer, or
+  // the harness's own launch default, answers.
+
+  function lastEntry(): Record<string, unknown> {
+    return vi.mocked(addWorker).mock.calls.at(-1)![1] as Record<string, unknown>;
+  }
+  function lastLaunchPlan(): Record<string, unknown> | undefined {
+    return vi.mocked(buildWorktreeBootstrapScript).mock.calls.at(-1)![7]?.launchPlan as
+      Record<string, unknown> | undefined;
+  }
+
+  it.each([
+    ["--harness codex", {}, { harness: "codex" }],
+    ["a codex-building crew", {}, { crew: "codex-claude" }],
+    ["a codex project default", { harness: "codex" }, {}],
+  ])("ultracode: an explicit request is refused for %s", (_label, projectKeys, opts) => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({ name: "myproject", path: "/repo/myproject", ...projectKeys });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ ...opts, ultracode: true })).toBeNull();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(buildWorktreeBootstrapScript)).not.toHaveBeenCalled();
+    const msgs = vi.mocked(tmuxDisplay).mock.calls.map((c) => c[0] as string);
+    expect(msgs.some((m) => m.includes("ultracode") && m.includes("codex"))).toBe(true);
+  });
+
+  it("ultracode: the handoff dispatcher's request for a codex child is refused", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({
+      projectName: "myproject",
+      background: true,
+      seedMessageFile: "/tmp/seed.txt",
+      handoffRequestId: "11111111-1111-4111-8111-111111111111",
+      crew: "codex-claude",
+      ultracode: true,
+    })).toBeNull();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+  });
+
+  it("ultracode: an explicit request for a codex designer is refused", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ workflow: "designer", crew: "codex-claude", ultracode: true })).toBeNull();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+  });
+
+  it("ultracode: a project effort default 'ultra' is skipped for a codex builder", () => {
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex", effort: "ultra",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker()).toBe("bold-ash");
+    const entry = lastEntry();
+    expect(entry.harness).toBe("codex");
+    expect(entry.ultracode).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.effort).toBeUndefined();
+    expect(lastLaunchPlan()).toMatchObject({
+      harness: "codex", model: "gpt-6-astra", effort: "high", ultracode: undefined,
+    });
+  });
+
+  it("ultracode: the same project default still makes a claude-code grow worker there ultracode", () => {
+    // Grow always builds with claude-code, so the skip keys on the launching
+    // harness, not the project's.
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", harness: "codex", effort: "ultra",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker({ workflow: "grow", grow: { seed: "harden", maxIterations: 3 } });
+    const entry = lastEntry();
+    expect(entry.harness).toBeUndefined();
+    expect(entry.ultracode).toBe(true);
+    expect(entry.model).toBe("opus[1m]");
+  });
+
+  it.each(["worker", "project"])("ultracode: a codex crew seat at effort 'ultra' is skipped (%s crew)", (layer) => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {},
+      crews: { deep: { worker: { member: "codex", effort: "ultra" }, review: { member: "claude" } } },
+    } as ReturnType<typeof loadConfig>);
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", ...(layer === "project" ? { crew: "deep" } : {}),
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker(layer === "worker" ? { crew: "deep" } : {})).toBe("bold-ash");
+    const entry = lastEntry();
+    expect(entry.harness).toBe("codex");
+    expect(entry.ultracode).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(lastLaunchPlan()).toMatchObject({ harness: "codex", model: "gpt-6-astra", effort: "high" });
+  });
+
+  it("ultracode: a codex design seat at effort 'ultra' is skipped for the workflow's rung", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {},
+      crews: { studio: {
+        designer: { member: "codex", model: "gpt-6-astra", effort: "ultra" },
+        worker: { member: "claude" }, review: { member: "claude" },
+      } },
+    } as ReturnType<typeof loadConfig>);
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    expect(newWorker({ workflow: "designer", crew: "studio" })).toBe("bold-ash");
+    const entry = lastEntry();
+    expect(entry.harness).toBe("codex");
+    expect(entry.ultracode).toBeUndefined();
+    expect(entry.model).toBe("gpt-6-astra");
+    expect(entry.effort).toBe("xhigh");
+  });
+
+  it("ultracode: a skipped project 'ultra' falls through to the bound crew's codex rung", () => {
+    vi.mocked(loadConfig).mockReturnValue({
+      projects: {}, plots: {},
+      crews: { fast: { worker: { member: "codex", effort: "low" }, review: { member: "claude" } } },
+    } as ReturnType<typeof loadConfig>);
+    vi.mocked(tryGetProject).mockReturnValueOnce({
+      name: "myproject", path: "/repo/myproject", crew: "fast", effort: "ultra",
+    });
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    const entry = lastEntry();
+    expect(entry.ultracode).toBeUndefined();
+    expect(entry.model).toBeUndefined();
+    expect(entry.effort).toBe("low");
+  });
+
   // ===== Harness selection (workers new --harness codex) =====
   // opts.harness is validated against the real registry (harness/core.js is
   // NOT mocked here, so isRegisteredHarness/harnessNames are real), stamped

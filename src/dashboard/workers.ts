@@ -341,6 +341,18 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
     return null;
   }
 
+  // The ultracode preset is a claude-code launch mode carrying an Opus pin; no
+  // other harness has it, and the pin would reach that harness's command line
+  // (`codex -m 'opus[1m]'`). Dropping an explicit request instead would spawn
+  // a worker on a configuration the caller did not ask for.
+  if (opts.ultracode === true && preflightPlan.harness !== "claude-code") {
+    tmuxDisplay(`Cannot create worker: ultracode is a claude-code mode and this worker would run ${preflightPlan.harness}.`);
+    log.error("workers", "rejected newWorker: ultracode needs claude-code", {
+      data: { project: targetProject, harness: preflightPlan.harness, workflow: workflowName },
+    });
+    return null;
+  }
+
   // Provider preflight: retain the key in tmux's hidden launch vault
   // (best-effort from this operator-shell invocation) and refuse to spawn a
   // worker without it. An unauthenticated worker fails opaquely at first
@@ -467,9 +479,14 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   const workerSeat = seatIfBuilding(workerCrew?.worker);
   const projectSeat = seatIfBuilding(projectCrew?.worker);
   const buildingDesignSeat = seatIfBuilding(designSeat);
+  // "ultra" in these layers names the ultracode preset, which only claude-code
+  // has (see the refusal above). Elsewhere a layer naming it is skipped, so the
+  // next layer, or the harness's own launch default, supplies the effort.
+  const applicable = (effort: string | undefined): string | undefined =>
+    effort === "ultra" && preflightPlan.harness !== "claude-code" ? undefined : effort;
   const crewEffort = projectDefaultsApply
-    ? (workerSeat?.effort ?? project.effort ?? projectSeat?.effort)
-    : buildingDesignSeat?.effort;
+    ? (applicable(workerSeat?.effort) ?? applicable(project.effort) ?? applicable(projectSeat?.effort))
+    : applicable(buildingDesignSeat?.effort);
   let reqUltracode = opts.ultracode === true;
   let reqEffort = opts.effort;
   if (!reqUltracode && reqEffort === undefined && crewEffort) {

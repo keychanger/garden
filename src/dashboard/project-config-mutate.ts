@@ -212,9 +212,16 @@ export function setProjectConfigKey(projectName: string, key: SettableKey, value
         message = `Cleared ${key} for ${projectName} (no effort passed)`;
       } else if ((PROJECT_EFFORT_VALUES as readonly string[]).includes(value)) {
         project.effort = value;
-        const suffix = value === "ultra"
-          ? " (ultracode preset: max effort + dynamic workflows)"
-          : "";
+        // The ultracode preset is claude-code only and newWorker skips it for a
+        // builder on another harness, so it is not promised to those workers.
+        const builder = canonicalHarnessName(
+          project.harness ?? resolveProjectCrew(project, cfg)?.worker.harness ?? "claude-code",
+        );
+        const suffix = value !== "ultra"
+          ? ""
+          : builder === "claude-code"
+            ? " (ultracode preset: max effort + dynamic workflows)"
+            : ` (ultracode preset, claude-code only: this project's ${builder} default workers skip it)`;
         message = `Set ${key} = ${value} for ${projectName}${suffix} (default/grow workers; per-spawn --effort overrides it)`;
       } else {
         throw new Error(`effort must be one of: ${PROJECT_EFFORT_VALUES.join(", ")}, got '${value}'`);
