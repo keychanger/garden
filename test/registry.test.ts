@@ -87,6 +87,11 @@ describe("readRegistry", () => {
       { name: "w", backgroundTasks: { transcriptPath: "/t.jsonl", offset: "0", pending: [] } },
       { name: "w", backgroundTasks: { transcriptPath: 1, offset: 0, pending: [] } },
       { name: "w", backgroundTasks: { transcriptPath: "/t.jsonl", offset: 0, pending: ["b1", 2] } },
+      // Its `resume` is restored into agentStatus, which this guard types too.
+      { name: "w", subagentAsk: "forged" },
+      { name: "w", subagentAsk: null },
+      { name: "w", subagentAsk: { agent: "a1", at: 1 } },
+      { name: "w", subagentAsk: { agent: "a1", at: 1, resume: 0 } },
     ]) {
       fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [bad] } }));
       expect(readRegistry()).toEqual({ workers: {} });
@@ -108,6 +113,7 @@ describe("readRegistry", () => {
         blockedTurnEndedAt: 1000,
         pendingHandoffCallbacks: ["child settled"],
         backgroundTasks: { transcriptPath: "/t.jsonl", offset: 42, pending: ["b13krek0m"] },
+        subagentAsk: { agent: "a1", at: 1001, resume: "idle" },
       }] },
     }));
     expect(readRegistry().workers.proj[0]).toMatchObject({
@@ -121,6 +127,7 @@ describe("readRegistry", () => {
       blockedTurnEndedAt: 1000,
       pendingHandoffCallbacks: ["child settled"],
       backgroundTasks: { transcriptPath: "/t.jsonl", offset: 42, pending: ["b13krek0m"] },
+      subagentAsk: { agent: "a1", at: 1001, resume: "idle" },
     });
   });
 

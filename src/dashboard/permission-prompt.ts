@@ -13,8 +13,10 @@
 // the operator answers; it gives up after WATCH_MS, and the watchdog's
 // `sweepAnsweredPermissionPrompts` covers anything answered later or a watcher
 // that died. Both write only when the worker is still in the same `asking`
-// episode, so neither can clear a newer question.
-import { readRegistry, updateWorkerFieldsIf, type WorkerRegistry } from "./registry.js";
+// episode, so neither can clear a newer question. The worker returns to
+// `working`, or, when a subagent's dialog raised the episode, to the status
+// recorded with it (WorkerEntry.subagentAsk), since the main thread may be idle.
+import { readRegistry, updateWorkerFieldsIf, type AgentStatus, type WorkerRegistry } from "./registry.js";
 import { findWorkerPaneId, refreshDashboard } from "./header.js";
 import { capturePaneText, readPaneCursorState, type PaneCursorState } from "./tmux.js";
 import { DEFAULT_HARNESS } from "./harness/core.js";
@@ -54,18 +56,23 @@ function dialogClosed(project: string, worker: string): boolean {
 
 function clearAsking(project: string, worker: string, askedAt: number): boolean {
   const now = Date.now();
-  const applied = updateWorkerFieldsIf(project, worker, entry =>
-    entry.agentStatus === "asking" && entry.lastStateChangeAt === askedAt
-      ? { fields: { agentStatus: "working", lastEventAt: now, lastStateChangeAt: now }, result: true }
-      : { fields: null, result: false },
-  ) ?? false;
-  if (applied) {
-    log.info("permission", "permission dialog answered, asking -> working", {
+  const resumed = updateWorkerFieldsIf<AgentStatus | null>(project, worker, entry => {
+    if (entry.agentStatus !== "asking" || entry.lastStateChangeAt !== askedAt) return { fields: null, result: null };
+    const agentStatus = entry.subagentAsk?.at === askedAt ? entry.subagentAsk.resume : "working";
+    return {
+      fields: { agentStatus, subagentAsk: undefined, lastEventAt: now, lastStateChangeAt: now },
+      result: agentStatus,
+    };
+  }) ?? null;
+  if (resumed) {
+    log.info("permission", resumed === "idle"
+      ? "permission dialog answered, asking -> idle"
+      : "permission dialog answered, asking -> working", {
       worker,
       data: { project, askedFor: `${Math.round((now - askedAt) / 1000)}s` },
     });
   }
-  return applied;
+  return resumed !== null;
 }
 
 function sameEpisode(project: string, worker: string, askedAt: number): boolean {
@@ -92,7 +99,7 @@ export async function watchPermissionPrompt(project: string, worker: string, ask
 }
 
 // Not limited to permission episodes: AskUserQuestion and ExitPlanMode clear
-// through their own PostToolUse, so a closed dialog there is already working
+// through their own PostToolUse, so a closed dialog there is already cleared
 // by the time this runs, and the pane check holds for every dialog anyway.
 export function sweepAnsweredPermissionPrompts(registry: WorkerRegistry, now: number): boolean {
   let changed = false;

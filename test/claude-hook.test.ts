@@ -1327,6 +1327,114 @@ describe("handleClaudeHook — events from another session in the worktree", () 
   });
 });
 
+// Claude Code builds every tool-scoped hook input from the calling thread's
+// context, so a subagent's PermissionRequest carries its agent_id (verified on
+// 2.1.310). Its dialog blocks the operator while the main thread may sit idle,
+// firing nothing, and no hook reports a denied or expired request: on
+// garden/long-grave-core (2026-10-24) a background agent's unanswered rm prompt
+// was denied after 2 minutes and the row read `asking` for 41.
+describe("handleClaudeHook — a subagent's dialog over the main thread", () => {
+  async function fire(event: string, input: Record<string, unknown>) {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({ session_id: "main-thread", ...input }));
+    handleClaudeHook(event);
+  }
+
+  const permission = (agent?: string) =>
+    ({ hook_event_name: "PermissionRequest", tool_name: "Bash", ...(agent && { agent_id: agent }) });
+  const toolDone = (agent?: string, hook_event_name = "PostToolUse") =>
+    ({ hook_event_name, tool_name: "Read", ...(agent && { agent_id: agent }) });
+
+  function worker() {
+    return entries.garden.find(e => e.name === "bold-ash")!;
+  }
+
+  function seed(agentStatus: "idle" | "working") {
+    seedWorker("garden", "bold-ash", { agentStatus, sessionId: "main-thread" });
+    setCwd("garden", "bold-ash");
+  }
+
+  // Every read of the clock moves it on, so no two writes share a stamp (each
+  // hook is its own process) and a stamp taken twice within one hook differs.
+  let clock = 0;
+  beforeEach(() => {
+    clock = 1_792_820_167_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock++);
+  });
+
+  afterEach(() => {
+    vi.mocked(Date.now).mockRestore();
+  });
+
+  it("raises asking over an idle main thread and records the agent", async () => {
+    seed("idle");
+    await fire("pretooluse", permission("agent-a"));
+    expect(worker().agentStatus).toBe("asking");
+    expect(worker().subagentAsk).toEqual({ agent: "agent-a", at: worker().lastStateChangeAt, resume: "idle" });
+  });
+
+  it.each(["PostToolUse", "PostToolUseFailure"])("that agent's next %s returns the worker to idle", async event => {
+    seed("idle");
+    await fire("pretooluse", permission("agent-a"));
+    await fire("posttooluse", toolDone("agent-a", event));
+    expect(worker().agentStatus).toBe("idle");
+    expect(worker().subagentAsk).toBeUndefined();
+  });
+
+  it("returns the worker to working when the main thread was mid-turn", async () => {
+    seed("working");
+    await fire("pretooluse", permission("agent-a"));
+    expect(worker().agentStatus).toBe("asking");
+    await fire("posttooluse", toolDone("agent-a"));
+    expect(worker().agentStatus).toBe("working");
+  });
+
+  it("another agent's tool event leaves the worker asking", async () => {
+    seed("idle");
+    await fire("pretooluse", permission("agent-a"));
+    await fire("posttooluse", toolDone("agent-b"));
+    expect(worker().agentStatus).toBe("asking");
+    await fire("posttooluse", toolDone("agent-a"));
+    expect(worker().agentStatus).toBe("idle");
+  });
+
+  it("the old agent's event does not end a later main-thread episode", async () => {
+    seed("idle");
+    await fire("pretooluse", permission("agent-a"));
+    await fire("prompt", { prompt: "carry on" });
+    await fire("pretooluse", { hook_event_name: "PreToolUse", tool_name: "AskUserQuestion" });
+    expect(worker().agentStatus).toBe("asking");
+    await fire("posttooluse", toolDone("agent-a"));
+    expect(worker().agentStatus).toBe("asking");
+  });
+
+  // The second request lands inside the 10s heartbeat window, and a throttled
+  // disowning write would leave the first agent able to end both dialogs.
+  it.each([["the main thread", undefined], ["another subagent", "agent-b"]])(
+    "a dialog from %s in the same episode means no one agent can end it",
+    async (_label, second) => {
+      seed("idle");
+      await fire("pretooluse", permission("agent-a"));
+      await fire("pretooluse", permission(second));
+      expect(worker().subagentAsk).toMatchObject({ agent: "", resume: "idle" });
+      await fire("posttooluse", toolDone("agent-a"));
+      await fire("posttooluse", toolDone("agent-b"));
+      // Another session's event carries no agent_id either.
+      await fire("posttooluse", { ...toolDone(), session_id: "side-thread" });
+      expect(worker().agentStatus).toBe("asking");
+    },
+  );
+
+  it("watches the subagent's episode under the stamp it recorded", async () => {
+    const { spawn } = await import("node:child_process");
+    seed("idle");
+    await fire("pretooluse", permission("agent-a"));
+    const commands = vi.mocked(spawn).mock.calls.map(call => String((call[1] as string[])[1]));
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toContain(`dashboard _await-permission garden bold-ash ${worker().subagentAsk!.at}`);
+  });
+});
+
 describe("handleClaudeHook — transcript path capture (session ownership)", () => {
   it("rejects another thread's path during first-session capture", async () => {
     const fs = (await import("node:fs")).default;

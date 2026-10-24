@@ -444,8 +444,10 @@ describe("Bash during review — cancel only when the command wrote", () => {
 // on an AskUserQuestion (or parked after Stop) while its subagents keep
 // completing tools. Claude Code fires the parent session's PostToolUse for
 // those, carrying `agent_id`; session_id and transcript_path are byte-identical
-// to a main-thread event, so agent_id is the only discriminator.
-describe("onToolActivity — subagent tool calls never move agentStatus", () => {
+// to a main-thread event, so agent_id is the only discriminator. The one
+// exception, a subagent ending the `asking` episode its own dialog raised, is
+// covered in claude-hook.test.ts.
+describe("onToolActivity — subagent tool calls never move agentStatus outside their own episode", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });

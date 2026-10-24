@@ -132,6 +132,13 @@ export interface LastReviewData {
   tipSha?: string;        // HEAD after the reviewer ran (the reviewed tip)
 }
 
+// See WorkerEntry.subagentAsk.
+export interface SubagentAsk {
+  agent: string;          // agent_id of the raising subagent; "" once another thread raised too
+  at: number;             // lastStateChangeAt written with the raise: the episode's stamp
+  resume: "idle" | "working"; // agentStatus before the raise
+}
+
 export interface WorkerEntry {
   name: string;       // adjective-noun name, e.g. "swift-oak"
   sessionId: string;  // claude session UUID for direct resume
@@ -177,7 +184,8 @@ export interface WorkerEntry {
   prStateChangedAt?: number;
   // Epoch ms a SUBAGENT tool event last fired for this worker — a PostToolUse
   // carrying `agent_id` (Task agents, background Workflow runs). Subagent
-  // events never move agentStatus (hooks/default.ts isSubagentEvent), so a
+  // events never move agentStatus (hooks/default.ts isOtherThread) except to
+  // end the `asking` episode their own dialog raised (subagentAsk below), so a
   // worker that ends its turn to wait on background work parks at `idle` even
   // while its subagents keep going; this stamp is what lets the renderer
   // derive the `working bg` display for that gap (isDelegating below).
@@ -191,6 +199,13 @@ export interface WorkerEntry {
   // and reset at process start (background-tasks.ts). A non-empty set renders
   // an idle worker as `working bg` (isDelegating below).
   backgroundTasks?: BackgroundTaskScan;
+  // The subagent whose dialog raised the current `asking` episode. Its dialog
+  // blocks the operator, but the main thread may be idle and fire nothing
+  // until it is next prompted, so that agent's next tool event and the
+  // answered-dialog watcher restore `resume` (hooks/default.ts,
+  // permission-prompt.ts). Read only while the worker is `asking` with
+  // lastStateChangeAt equal to `at`, so a stale record needs no clearing.
+  subagentAsk?: SubagentAsk;
   // Epoch ms when the worker was created (set in addWorker). Acts as the floor
   // for a brand-new worker's freshness before its first hook fires, so a
   // just-made worker sorts fresh instead of sinking to the bottom. Optional
@@ -694,7 +709,8 @@ export const SUBAGENT_ACTIVE_WINDOW_MS = 30 * 60_000;
 // agentStatus stays `idle`, no state-machine edge moves, and the poller's
 // isWorkerClaudeWorking is unaffected. `asking` is deliberately excluded —
 // a blocked-on-operator row keeps its yellow flag regardless of subagent
-// activity (the original reason subagent events never move agentStatus).
+// activity (the original reason subagent events never move agentStatus; the
+// one exception, WorkerEntry.subagentAsk, ends the episode instead).
 export function isDelegating(
   entry: {
     agentStatus?: string; subagentActivityAt?: number; lastStateChangeAt?: number;
@@ -819,6 +835,10 @@ function invalidEntryField(e: unknown): string | null {
       return "backgroundTasks";
     }
   }
+  // `resume` is written into agentStatus, which this guard requires a string;
+  // the record's other fields are only compared for equality.
+  if (entry.subagentAsk !== undefined
+      && typeof (entry.subagentAsk as { resume?: unknown } | null)?.resume !== "string") return "subagentAsk";
   return null;
 }
 

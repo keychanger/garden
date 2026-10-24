@@ -201,6 +201,40 @@ describe("handleClaudeHook (real fs + real git)", () => {
     expect(w.agentStatus).toBe("ready");
   });
 
+  // The record of which subagent raised `asking` has to survive the registry
+  // file and its shape guard between hook processes: a rejected shape drops
+  // the worker's whole entry on the next read.
+  it("a subagent's permission request over an idle worker ends with that agent's next tool event", async () => {
+    seedRegistry("idle");
+    process.chdir(worktreePath);
+    const { handleClaudeHook } = await import("../../src/dashboard/hook-dispatcher.js");
+    const { resolveGardenRunner } = await import("../../src/dashboard/runner.js");
+    // The request spawns the answered-dialog watcher; `true` stands in for garden.
+    vi.mocked(resolveGardenRunner).mockReturnValueOnce("true");
+    const readFileSync = fs.readFileSync;
+    const fire = (event: string, input: Record<string, unknown>) => {
+      const stdin = vi.spyOn(fs, "readFileSync").mockImplementation(((file: fs.PathOrFileDescriptor, options?: never) =>
+        file === 0 ? JSON.stringify({ session_id: "session-id-1", ...input }) : readFileSync(file, options)) as typeof fs.readFileSync);
+      try {
+        handleClaudeHook(event);
+      } finally {
+        stdin.mockRestore();
+      }
+    };
+    const worker = () => readRegistryFile().workers[PROJECT][0] as { agentStatus: string; subagentAsk?: unknown };
+
+    fire("pretooluse", { hook_event_name: "PermissionRequest", tool_name: "Bash", agent_id: "agent-a" });
+    expect(worker().agentStatus).toBe("asking");
+    expect(worker().subagentAsk).toMatchObject({ agent: "agent-a", resume: "idle" });
+
+    fire("posttooluse", { hook_event_name: "PostToolUse", tool_name: "Read", agent_id: "agent-b" });
+    expect(worker().agentStatus).toBe("asking");
+
+    fire("posttooluse", { hook_event_name: "PostToolUse", tool_name: "Read", agent_id: "agent-a" });
+    expect(worker().agentStatus).toBe("idle");
+    expect(worker().subagentAsk).toBeUndefined();
+  });
+
   it("prompt sets working and clears merged prState", async () => {
     seedRegistry("idle", { prState: "merged" });
     process.chdir(worktreePath);

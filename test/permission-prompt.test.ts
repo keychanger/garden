@@ -172,6 +172,21 @@ describe("watchPermissionPrompt", () => {
     expect(findWorkerPaneId).not.toHaveBeenCalled();
   });
 
+  // A subagent's dialog leaves the main thread as it was, which can be idle.
+  it("returns a subagent's episode to the status recorded with it", async () => {
+    vi.useFakeTimers();
+    const entry = seed({
+      agentStatus: "asking", lastStateChangeAt: 1000, subagentAsk: { agent: "agent-a", at: 1000, resume: "idle" },
+    });
+    closed();
+    const done = watchPermissionPrompt("wolf", "bold-ash", 1000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await done;
+    expect(entry.agentStatus).toBe("idle");
+    expect(entry.subagentAsk).toBeUndefined();
+    expect(refreshDashboard).toHaveBeenCalledTimes(1);
+  });
+
   it("gives up after its window while the dialog stays open", async () => {
     vi.useFakeTimers();
     const entry = seed({ agentStatus: "asking", lastStateChangeAt: 1000 });
@@ -191,6 +206,25 @@ describe("sweepAnsweredPermissionPrompts", () => {
     closed();
     expect(sweepAnsweredPermissionPrompts({ workers }, now)).toBe(true);
     expect(entry.agentStatus).toBe("working");
+  });
+
+  it("returns a subagent's episode to the recorded status, ignoring a record from an earlier one", () => {
+    const subagent = seed({
+      agentStatus: "asking",
+      lastStateChangeAt: now - 60_000,
+      subagentAsk: { agent: "agent-a", at: now - 60_000, resume: "idle" },
+    });
+    closed();
+    expect(sweepAnsweredPermissionPrompts({ workers }, now)).toBe(true);
+    expect(subagent.agentStatus).toBe("idle");
+
+    const stale = seed({
+      agentStatus: "asking",
+      lastStateChangeAt: now - 60_000,
+      subagentAsk: { agent: "agent-a", at: now - 120_000, resume: "idle" },
+    });
+    expect(sweepAnsweredPermissionPrompts({ workers }, now)).toBe(true);
+    expect(stale.agentStatus).toBe("working");
   });
 
   it("leaves a worker whose dialog is still open", () => {
