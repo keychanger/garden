@@ -604,7 +604,11 @@ function completeFinalization(
     ? { changedFiles: [], syncFailed: false }
     : syncWorktreeAfterMerge(projectName, branchName, entry, sentinelPresent);
   notifyPostMerge(projectName, projectPath, baseBranch, entry, preMergeChangedFiles);
-  transitionToTerminal(projectName, projectPath, baseBranch, branchName, entry, sentinelPresent, sync, preMergeChangedFiles);
+  // Read again for the terminal state: postMerge can run for minutes, and the
+  // Stop hook leaves a merging worker's state to this write, so a turn that
+  // wrote the sentinel while it ran is only seen here.
+  const doneNow = sentinelPresent || isDoneSet(entry.worktreePath);
+  transitionToTerminal(projectName, projectPath, baseBranch, branchName, entry, doneNow, sync, preMergeChangedFiles);
   refreshDashboard();
   // Merges are serial, so the pass that merged this worker skipped any sibling
   // queued behind it. Wake the next pass now. Garden's own push used to supply

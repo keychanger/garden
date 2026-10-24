@@ -3278,6 +3278,32 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  // The Stop hook leaves a merging worker's prState alone, so a turn that runs
+  // while the merge finalizes and writes the sentinel must be read at the
+  // terminal write, after postMerge.
+  it("sets prState=done when .garden-done appears while the merge finalizes", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    let sentinel = false;
+    vi.mocked(isDoneSet).mockImplementation(() => sentinel);
+    vi.mocked(fastForwardBase).mockImplementation(() => {
+      sentinel = true;
+      return { ok: true, advanced: "worktree" };
+    });
+
+    poll("myproject");
+
+    const calls = vi.mocked(updateWorkerFields).mock.calls.filter(c => c[1] === "bold-ash");
+    expect(calls.find(c => (c[2] as Record<string, unknown>).prState === "done")).toBeDefined();
+    expect(calls.find(c => (c[2] as Record<string, unknown>).prState === "merged")).toBeUndefined();
+  });
+
   it("merges to `merged` (not done) but skips auto-continue when .garden-awaiting-input is set (human gate)", () => {
     // A mid-task worker paused at a human gate (designer / garden blocked) wrote
     // .garden-awaiting-input, not .garden-done: the merge still finalizes to the

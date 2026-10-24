@@ -713,6 +713,72 @@ describe("handleClaudeHook — core events", () => {
     expect(typeof entry.mergedAt).toBe("string");
   });
 
+  // The pipeline states belong to the poller, and two of them meet this
+  // branch's condition: a holistic pass reviews a branch fast-forwarded to
+  // base, and a merge has pushed before its terminal write. A Stop there (an
+  // operator question answered mid-pass) must not overwrite them. An unknown
+  // value from a newer build is skipped the same way.
+  it.each(["reviewing", "merge-pending", "resolving", "ci-fixing", "failing", "landing"])(
+    "stop leaves prState %s alone despite .garden-done and no commits ahead",
+    async (prState) => {
+      seedWorker("garden", "bold-ash", {
+        agentStatus: "working",
+        worktreePath: "/tmp/wt/garden/bold-ash",
+        prState: prState as import("../src/dashboard/registry.js").PrState,
+        holisticFinalActive: true,
+        reviewWindowName: "_garden-review-bold-ash",
+      });
+      setCwd("garden", "bold-ash");
+      const fs = (await import("node:fs")).default;
+      vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) =>
+        String(p) === "/tmp/wt/garden/bold-ash/.garden-done");
+      const { execFileSync } = await import("node:child_process");
+      vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+        const argv = gitSubcommandArgs(args[1] as string[] | undefined);
+        if (argv && argv[0] === "rev-list") return "0" as unknown as Buffer;
+        return "" as unknown as Buffer;
+      });
+
+      handleClaudeHook("stop");
+
+      const entry = entries.garden.find(e => e.name === "bold-ash")!;
+      expect(entry.agentStatus).toBe("idle");
+      expect(entry.prState).toBe(prState);
+      expect(entry.mergedAt).toBeUndefined();
+      expect(log.info).not.toHaveBeenCalledWith("hook", "stop hook set done prState", expect.anything());
+    },
+  );
+
+  // `working` is where the finalize race leaves a worker whose sentinel is
+  // still on disk (STATUS.md: its no-commit Stop re-trips done); `merged` is
+  // the spec's other Stop edge; `done` re-pokes the poller for a holistic
+  // dispatch that deferred while the worker was working.
+  it.each(["working", "merged", "done"])(
+    "stop still sets done from prState %s with .garden-done and no commits ahead",
+    async (prState) => {
+      seedWorker("garden", "bold-ash", {
+        agentStatus: "working",
+        worktreePath: "/tmp/wt/garden/bold-ash",
+        prState: prState as import("../src/dashboard/registry.js").PrState,
+      });
+      setCwd("garden", "bold-ash");
+      const fs = (await import("node:fs")).default;
+      vi.mocked(fs.existsSync).mockImplementation((p: fs.PathLike) =>
+        String(p) === "/tmp/wt/garden/bold-ash/.garden-done");
+      const { execFileSync } = await import("node:child_process");
+      vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+        const argv = gitSubcommandArgs(args[1] as string[] | undefined);
+        if (argv && argv[0] === "rev-list") return "0" as unknown as Buffer;
+        return "" as unknown as Buffer;
+      });
+
+      handleClaudeHook("stop");
+
+      const entry = entries.garden.find(e => e.name === "bold-ash")!;
+      expect(entry.prState).toBe("done");
+      expect(typeof entry.mergedAt).toBe("string");
+    },
+  );
 
   it("stop does NOT set done when .garden-done is absent", async () => {
     seedWorker("garden", "bold-ash", {
