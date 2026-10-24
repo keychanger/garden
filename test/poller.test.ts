@@ -371,8 +371,9 @@ beforeEach(() => {
   // The CI recheck-poke dedup marker is a real file under SESSIONS_DIR (it has
   // to outlive the poll process). Clear it so each test starts unarmed.
   try { fs.rmSync("/tmp/fake-sessions/ci-recheck-myproject"); } catch { /* not armed */ }
-  // Same for the review-cap re-poke dedup marker, which lives in the control tree.
+  // Same for the review re-poke dedup markers, which live in the control tree.
   try { fs.rmSync(path.join(CONTROL_DIR, "review-cap-recheck-myproject")); } catch { /* not armed */ }
+  try { fs.rmSync(path.join(CONTROL_DIR, "review-retry-recheck-myproject")); } catch { /* not armed */ }
   // Re-establish factory defaults after reset
   vi.mocked(windowExists).mockReturnValue(true);
   // Review cap defaults to unlimited with no live reviewer windows, so the
@@ -873,6 +874,24 @@ describe("poll — working state", () => {
     expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({ dedupKey: "push-failed:myproject:bold-ash" }));
   });
 
+  // Every poke re-runs the publish, and the watchdog pokes a working worker with
+  // a review armed, so a retry armed per failed push started another
+  // self-perpetuating sleeper for as long as the push kept failing (offline).
+  it("a designer push that keeps failing arms one retry per window across polls", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
+    ]);
+    vi.mocked(getChangedFiles).mockReturnValue(["docs/future/notification-levels.md"]);
+    vi.mocked(forcePushBranch).mockImplementation(() => { throw new Error("remote hung up"); });
+
+    poll("myproject");
+    __simulatePollerRestartForTest();
+    poll("myproject");
+
+    expect(forcePushBranch).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(scheduleDelayedPoke).mock.calls.filter(c => c[1] === 30_000)).toHaveLength(1);
+  });
+
   it("designer committing a file outside docs/ parks in failing with an operator alert", () => {
     registryMock._setEntries("myproject", [
       makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now(), workflow: "designer" }),
@@ -911,6 +930,38 @@ describe("poll — working state", () => {
     expect(clearedPending).toBe(false);
     // And a retry is scheduled.
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 30_000);
+  });
+
+  // The commit check's retry re-runs every worker's check, so a retry armed per
+  // failing worker per poll multiplied while git kept failing, the shape the
+  // review-cap and CI recheck markers were added for.
+  it("arms one commit-check retry per window across workers and polls", () => {
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      registryMock._setEntries("myproject", [
+        makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: t0 }),
+        makeWorker({
+          name: "calm-fen", branchName: "calm-fen", worktreePath: "/tmp/wt/myproject/calm-fen",
+          prState: "working", agentStatus: "idle", pendingReviewAt: t0,
+        }),
+      ]);
+      vi.mocked(hasCommitsAhead).mockReturnValue(null);
+      const retryPokes = () => vi.mocked(scheduleDelayedPoke).mock.calls.filter(c => c[1] === 30_000);
+
+      // Two failing workers, two polls (each its own process in production).
+      poll("myproject");
+      __simulatePollerRestartForTest();
+      poll("myproject");
+      expect(retryPokes()).toEqual([["myproject", 30_000]]);
+
+      // The armed poke has fired by now; a check still failing re-arms.
+      nowSpy.mockReturnValue(t0 + 30_000);
+      poll("myproject");
+      expect(retryPokes()).toHaveLength(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it("launchReview clears pendingReviewAt", () => {

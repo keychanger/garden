@@ -196,7 +196,7 @@ export function handleWorking(
     // The git call failed (transient error/timeout), NOT "no commits". Clearing
     // pendingReviewAt here would silently cancel a review that should still
     // happen. Leave it set and re-poke so the next cycle retries the check.
-    scheduleDelayedPoke(projectName, 30_000);
+    armReviewRecheck(projectName, "retry");
     return false;
   }
   if (!ahead) {
@@ -309,7 +309,7 @@ function handleSkipReviewMerge(
       message: `Pushing ${entry.name}'s published design failed; retrying. ${String(err).slice(0, 200)}`,
       dedupKey: `push-failed:${projectName}:${entry.name}`,
     });
-    scheduleDelayedPoke(projectName, 30_000);
+    armReviewRecheck(projectName, "retry");
     return true;
   }
   log.info("poller", "designer publish: skipping review, merging directly", {
@@ -1565,6 +1565,9 @@ export function countActiveReviewWindows(): number {
 // cap. Short enough that a freed slot is picked up promptly, long enough not to
 // spin — the poll is also woken by any sibling FIFO event (a review finishing).
 const REVIEW_CAP_RETRY_MS = 20_000;
+// Re-poke cadence when a git step stopped the launch: the commit check failed,
+// or a designer publish's push did.
+const REVIEW_GIT_RETRY_MS = 30_000;
 
 // The fleet-wide review cap (garden-level limits.maxConcurrentReviews), asked
 // by every launch of a new review: a per-phase review (handleWorking) and the
@@ -1580,33 +1583,35 @@ export function deferForReviewCap(projectName: string, workerName: string): bool
     worker: workerName,
     data: { project: projectName, cap },
   });
-  armReviewCapRecheck(projectName);
+  armReviewRecheck(projectName, "cap");
   return true;
 }
 
 // Every poke re-runs every deferred launch, so a re-poke armed per deferral
 // multiplies: each poke landing during the stall starts another self-
 // perpetuating sleeper, the amplification armCiRecheck (poller-merge.ts) was
-// fixed for. One outstanding re-poke per project re-drives all of them. The
-// marker's MTIME is the arming time, and it lives in the control tree, where no
-// worker sandbox can hold it fresh to starve the re-poke. When it cannot be read
-// or written the poke is armed anyway: a duplicate poke is harmless, while a
-// dropped one leaves a quiet done worker's holistic pass waiting on nothing.
-function armReviewCapRecheck(projectName: string): void {
-  const marker = path.join(CONTROL_DIR, `review-cap-recheck-${projectName}`);
+// fixed for. One outstanding re-poke per project and cadence re-drives all of
+// them. The marker's MTIME is the arming time, and it lives in the control
+// tree, where no worker sandbox can hold it fresh to starve the re-poke. When
+// it cannot be read or written the poke is armed anyway: a duplicate poke is
+// harmless, while a dropped one leaves a quiet done worker's holistic pass
+// waiting on nothing.
+function armReviewRecheck(projectName: string, kind: "cap" | "retry"): void {
+  const delayMs = kind === "cap" ? REVIEW_CAP_RETRY_MS : REVIEW_GIT_RETRY_MS;
+  const marker = path.join(CONTROL_DIR, `review-${kind}-recheck-${projectName}`);
   try {
-    if (Date.now() - fs.statSync(marker).mtimeMs < REVIEW_CAP_RETRY_MS) return;
+    if (Date.now() - fs.statSync(marker).mtimeMs < delayMs) return;
   } catch {
     // No marker yet (or unreadable): nothing is armed.
   }
   try {
     atomicWriteFile(marker, "", { durable: false });
   } catch (err) {
-    log.warn("poller", "review cap: recheck marker unwritten", {
-      data: { project: projectName, error: String(err) },
+    log.warn("poller", "review recheck marker unwritten", {
+      data: { project: projectName, kind, error: String(err) },
     });
   }
-  scheduleDelayedPoke(projectName, REVIEW_CAP_RETRY_MS);
+  scheduleDelayedPoke(projectName, delayMs);
 }
 
 function launchReview(
