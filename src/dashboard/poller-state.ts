@@ -4,7 +4,7 @@
 // poller-review / poller-merge / poller-resolve and import transitionState
 // from this module. Valid transitions are defined per-workflow in
 // workflows/types.ts (a leaf module); transitionState reads them via
-// getValidTransitions() rather than going through workflows/index.ts. That
+// isValidTransition() rather than going through workflows/index.ts. That
 // indirection breaks a module-init cycle that closed in earlier shapes
 // of this code (see workflows/types.ts comment).
 import fs from "node:fs";
@@ -25,7 +25,7 @@ import {
 import { handoffCallbackText } from "./handoff-callback-text.js";
 import { scheduleDelayedPoke } from "./poller-fifo.js";
 import { recordStateTransition } from "./telemetry.js";
-import { getValidTransitions } from "./workflows/types.js";
+import { isValidTransition } from "./workflows/types.js";
 import {
   maybeDispatchHolisticReview, evaluateHolisticGate,
 } from "./poller-holistic-review.js";
@@ -44,6 +44,9 @@ interface HandoffCallbackDispatch {
 
 interface TransitionResult {
   applied: boolean;
+  // Why a move was not applied: the worker had left the state the caller
+  // decided on, or its workflow holds no such edge.
+  refusal?: "moved" | "invalid";
   fromState: PrState;
   workflowName: string;
   requestedWorkflow?: string;
@@ -111,23 +114,34 @@ function dispatchHandoffCallback(callback: HandoffCallbackDispatch, owed: boolea
   });
 }
 
+// expectedFrom is the prState the caller's decision was made on, or null for
+// a forced recovery move, which applies from whatever state the worker is in.
 function applyTransition(
   projectName: string,
   workerName: string,
   toState: PrState,
-  extraFields?: Omit<WorkerFieldsUpdate, "prState">,
-  allowInvalid = false,
+  extraFields: Omit<WorkerFieldsUpdate, "prState"> | undefined,
+  expectedFrom: PrState | null,
 ): boolean {
   const now = Date.now();
   const result = updateWorkerFieldsIf<TransitionResult>(projectName, workerName, (entry, find) => {
     const fromState: PrState = entry.prState ?? "working";
     const workflowName = entry.workflow ?? "default";
-    const valid = getValidTransitions(workflowName)[fromState]?.includes(toState) === true;
-    if (!valid && !allowInvalid) {
+    // A handler decides from the entry it read when the poll began, and the
+    // steps between that read and this write (another worker's merge, a fetch,
+    // a 45s verdict classification) leave time for a hook or another command
+    // to move the worker. A move that is still a valid edge from the newer
+    // state would otherwise land on a decision made about the older one.
+    const refusal = expectedFrom === null ? undefined
+      : fromState !== expectedFrom ? "moved"
+      : !isValidTransition(workflowName, fromState, toState) ? "invalid"
+      : undefined;
+    if (refusal) {
       return {
         fields: null,
         result: {
           applied: false,
+          refusal,
           fromState,
           workflowName,
           requestedWorkflow: entry.workflow,
@@ -162,7 +176,10 @@ function applyTransition(
 
   if (!result) return false;
   if (!result.applied) {
-    log.warn("poller", `invalid state transition: ${result.fromState} -> ${toState}`, {
+    const message = result.refusal === "moved"
+      ? `stale state transition: ${expectedFrom} -> ${toState}, worker is now ${result.fromState}`
+      : `invalid state transition: ${result.fromState} -> ${toState}`;
+    log.warn("poller", message, {
       worker: workerName,
       data: {
         project: projectName,
@@ -186,13 +203,16 @@ function applyTransition(
   return true;
 }
 
+// `entry` is the worker as the caller read it: the move is refused, and
+// returns false, unless the worker is still in the prState that entry holds.
+// Pass the entry the decision was made on, not a fresh read.
 export function transitionState(
   projectName: string,
-  workerName: string,
+  entry: Pick<WorkerEntry, "name" | "prState">,
   toState: PrState,
   extraFields?: Omit<WorkerFieldsUpdate, "prState">,
 ): boolean {
-  return applyTransition(projectName, workerName, toState, extraFields);
+  return applyTransition(projectName, entry.name, toState, extraFields, entry.prState ?? "working");
 }
 
 export function forceTransitionState(
@@ -201,7 +221,7 @@ export function forceTransitionState(
   toState: PrState,
   extraFields?: Omit<WorkerFieldsUpdate, "prState">,
 ): boolean {
-  return applyTransition(projectName, workerName, toState, extraFields, true);
+  return applyTransition(projectName, workerName, toState, extraFields, null);
 }
 
 // The marker that lets a worker's PreToolUse Bash hook exit before starting
@@ -319,7 +339,7 @@ export function handleFailing(
       });
     }
 
-    transitionState(projectName, entry.name, "working", {
+    transitionState(projectName, entry, "working", {
       failingSha: undefined,
       failingReason: undefined,
       lastSeenSha: undefined,
@@ -378,7 +398,7 @@ export function handleDone(
     worker: entry.name,
     data: { project: projectName },
   });
-  transitionState(projectName, entry.name, "working", {
+  transitionState(projectName, entry, "working", {
     mergedAt: undefined,
     lastSeenSha: undefined,
   });

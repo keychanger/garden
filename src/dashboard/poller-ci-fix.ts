@@ -34,7 +34,7 @@ import {
   signalFifoPath, scheduleDelayedPoke, isWorkerClaudeWorking,
 } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
-import { cleanCiFixFiles } from "./poller-window.js";
+import { cleanCiFixFiles, killCiFixWindow } from "./poller-window.js";
 import { recordCiFixOutcome } from "./telemetry.js";
 import {
   ciFixPromptPath,
@@ -155,7 +155,7 @@ export function launchCiFix(
         baseBranch,
       },
     });
-    transitionState(projectName, entry.name, "failing", {
+    transitionState(projectName, entry, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
       failingReason: "ci",
       failingSha: sha,
@@ -199,7 +199,7 @@ export function launchCiFix(
     ?? preCiFixSha ?? entry.lastSeenSha;
 
   const nextAttempts = attempts + 1;
-  transitionState(projectName, entry.name, "ci-fixing", {
+  const started = transitionState(projectName, entry, "ci-fixing", {
     reviewWindowName: cfWindow,
     reviewStartedAt: Date.now(),
     headlessHarness: ciFix.harness,
@@ -209,6 +209,13 @@ export function launchCiFix(
     lastShaChangeAt: new Date().toISOString(),
     mergePendingAt: undefined,
   });
+  if (!started) {
+    // The worker moved while the fix agent was being prepared, so no handler
+    // will verify what it pushes. Stop it rather than leave it pushing to a
+    // branch no merge owns.
+    killCiFixWindow(projectName, entry.name);
+    return false;
+  }
   refreshDashboard();
 
   const detail = failed
@@ -283,7 +290,7 @@ function escalateCiFixBudget(
     dedupKey: `ci-fix-exhausted:${projectName}:${entry.name}:${sha}`,
   });
   const headSha = getBranchHeadSha(wtPath);
-  transitionState(projectName, entry.name, "failing", {
+  transitionState(projectName, entry, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
     // A transient outage is kick-recoverable; the `ci` reason (push a fix) is
     // for a genuinely red CI the agent couldn't repair.
@@ -401,7 +408,7 @@ export function handleCiFixing(
         worker: entry.name,
         data: { project: projectName },
       });
-      transitionState(projectName, entry.name, "working", {
+      transitionState(projectName, entry, "working", {
         lastShaChangeAt: new Date().toISOString(),
         reviewWindowName: undefined,
         reviewStartedAt: undefined,
@@ -437,7 +444,7 @@ export function handleCiFixing(
     data: { project: projectName, attempts: entry.ciFixAttempts ?? 0, newSha: headSha?.slice(0, 7) },
   });
 
-  transitionState(projectName, entry.name, "merge-pending", {
+  transitionState(projectName, entry, "merge-pending", {
     mergePendingAt: entry.mergePendingAt ?? new Date().toISOString(),
     mergeReadySha: headSha ?? undefined,
     reviewWindowName: undefined,
@@ -479,7 +486,7 @@ function handleCiFixTimeout(
   });
   const wtPath = entry.worktreePath ?? projectPath;
   const headSha = getBranchHeadSha(wtPath);
-  transitionState(projectName, entry.name, "failing", {
+  transitionState(projectName, entry, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
     failingReason: "ci",
     failingSha: headSha ?? undefined,

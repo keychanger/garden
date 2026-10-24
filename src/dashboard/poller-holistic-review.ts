@@ -38,7 +38,7 @@ import { signalFifoPath, isWorkerClaudeWorking } from "./poller-fifo.js";
 import { transitionState } from "./poller-state.js";
 import { autoContinueGateReason } from "./poller-merge.js";
 import {
-  deferForReviewCap, reviewPromptPath, reviewResultPath, scheduleReviewTimeoutPoke,
+  deferForReviewCap, killReviewWindow, reviewPromptPath, reviewResultPath, scheduleReviewTimeoutPoke,
 } from "./poller-review.js";
 import { MAX_REVIEW_PROMPT_BYTES, reviewPromptBytes } from "./prompt-compose.js";
 import { addAlert } from "./alerts.js";
@@ -269,7 +269,7 @@ function launchHolisticFinalReview(
   });
 
   const preReviewSha = getBranchHeadSha(wtPath) ?? undefined;
-  transitionState(projectName, entry.name, "reviewing", {
+  const started = transitionState(projectName, entry, "reviewing", {
     reviewWindowName: revWindow,
     reviewStartedAt: Date.now(),
     // Every headless launch stamps it, so no reader sees an earlier agent's.
@@ -288,6 +288,13 @@ function launchHolisticFinalReview(
     pendingContinueChangedFiles: undefined,
     pendingContinueSyncFailed: undefined,
   });
+  if (!started) {
+    // The worker left `done` while the pass was being prepared (a prompt
+    // reopened it), so no handler will read this verdict, and the worker may
+    // be editing the same worktree. Stop the reviewer.
+    killReviewWindow(projectName, entry.name);
+    return;
+  }
   refreshDashboard();
 
   log.info("poller", "holistic final review launched", {

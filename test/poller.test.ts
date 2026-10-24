@@ -381,6 +381,27 @@ function makeWorker(overrides: Partial<WorkerEntry> = {}): WorkerEntry {
   };
 }
 
+// Replace the stored entry with `moved` as the named agent window opens. The
+// poll's own entry is then no longer the one the registry holds, as when a
+// hook or another command moves the worker while the poller prepares an agent.
+function moveWorkerOnLaunch(windowName: string, moved: WorkerEntry): void {
+  vi.mocked(newDashboardWindow).mockImplementation((name: string) => {
+    if (name === windowName) registryMock._setEntries("myproject", [moved]);
+  });
+}
+
+// Whether the named agent window was killed after it opened. The launcher
+// clears a same-named window before opening one, so a kill alone does not
+// show that the new agent was stopped.
+function killedAfterLaunch(windowName: string): boolean {
+  const launches = vi.mocked(newDashboardWindow).mock;
+  const launch = launches.calls.findIndex(c => c[0] === windowName);
+  if (launch < 0) return false;
+  const kills = vi.mocked(killWindowSafe).mock;
+  return kills.calls.some((c, i) =>
+    c[0] === windowName && kills.invocationCallOrder[i] > launches.invocationCallOrder[launch]);
+}
+
 beforeEach(() => {
   vi.resetAllMocks();
   registryMock._clear();
@@ -502,6 +523,26 @@ describe("poll — working state", () => {
         reviewWindowName: "_myproject-review-bold-ash",
       }),
     );
+  });
+
+  // The reviewer is already running when the review's state is written. A
+  // worker moved meanwhile (here the Stop hook turned it `done`) keeps its
+  // state, and the reviewer is stopped rather than left in a worktree no
+  // review owns.
+  it("stops the reviewer when the worker moved before the review could start", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({ prState: "working", agentStatus: "idle", pendingReviewAt: Date.now() }),
+    ]);
+    moveWorkerOnLaunch("_myproject-review-bold-ash", makeWorker({ prState: "done", agentStatus: "idle" }));
+
+    poll("myproject");
+
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("done");
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "reviewing" }));
+    expect(killedAfterLaunch("_myproject-review-bold-ash")).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith("poller", "stale state transition: working -> reviewing, worker is now done",
+      expect.objectContaining({ worker: "bold-ash" }));
   });
 
   it("clears a leaked mid-review-edit marker on a fresh review launch", () => {
@@ -1267,6 +1308,16 @@ describe("poll — working state", () => {
       poll("myproject");
 
       expect(iterationWrites()).toEqual([]);
+    });
+
+    it("does not advance when the worker moved before the review could start", () => {
+      registryMock._setEntries("myproject", [growWorker()]);
+      moveWorkerOnLaunch("_myproject-review-tall-fern", { ...growWorker(), prState: "done" });
+
+      poll("myproject");
+
+      expect(iterationWrites()).toEqual([]);
+      expect(killedAfterLaunch("_myproject-review-tall-fern")).toBe(true);
     });
 
     it("does not advance when the prompt is over the ceiling and the worker parks", () => {
@@ -3816,6 +3867,29 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  // In production each poll reads the registry into its own objects, so the
+  // entry a handler holds never sees the poll's own writes. The race clear runs
+  // after the terminal write and decides on the read taken after it.
+  it("clears the terminal state from the read taken after the terminal write", () => {
+    vi.mocked(registryMock.getWorkers).mockImplementation((project: string) =>
+      (registryMock.readRegistry().workers[project] ?? []).map(e => structuredClone(e)));
+    registryMock._setEntries("myproject", [makeWorker({
+      prState: "merge-pending",
+      agentStatus: "idle",
+      mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+    })]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "ok" });
+    vi.mocked(fastForwardBase).mockReturnValue({ ok: true, advanced: "worktree" });
+    vi.mocked(mergeToBase).mockImplementation(() => {
+      updateWorkerFields("myproject", "bold-ash", { agentStatus: "working" });
+    });
+
+    poll("myproject");
+
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({ prState: "working", mergedAt: undefined });
+    expect(log.warn).not.toHaveBeenCalledWith("poller", expect.stringContaining("state transition"), expect.anything());
+  });
+
   it("clears done to working when the worker is asking at finalization (missed-question race)", () => {
     // Observed 2026-08-20 (omi-godot/dark-dull-bough): the worker wrote
     // .garden-done and pushed, was re-prompted mid-review, and called
@@ -4670,6 +4744,26 @@ describe("poll — merge-pending state", () => {
     );
   });
 
+  it("stops the resolver when the worker moved before it could start", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending",
+        agentStatus: "idle",
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(rebaseBranch).mockReturnValue({ kind: "conflict" });
+    moveWorkerOnLaunch("_myproject-review-bold-ash", makeWorker({ prState: "working", agentStatus: "idle" }));
+
+    poll("myproject");
+
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({ prState: "working" });
+    expect(findWorkerByName("myproject", "bold-ash")?.resolveAttempts).toBeUndefined();
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "resolving" }));
+    expect(killedAfterLaunch("_myproject-review-bold-ash")).toBe(true);
+  });
+
   it("escalates to failing when resolver budget is exhausted", () => {
     registryMock._setEntries("myproject", [
       makeWorker({
@@ -5058,6 +5152,23 @@ describe("poll — merge-pending CI gate", () => {
     // the unchanged update from upstream handlers.
     const fields = vi.mocked(updateWorkerFields).mock.calls.filter(c => c[1] === "bold-ash");
     expect(fields.find(c => (c[2] as Record<string, unknown>).prState !== undefined)).toBeUndefined();
+  });
+
+  it("stops the fix agent when the worker moved before it could start", () => {
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "failed",
+      failed: [{ name: "lint-and-test", conclusion: "failure" }],
+    });
+    registryMock._setEntries("myproject", [pending()]);
+    moveWorkerOnLaunch("_myproject-ci-fix-bold-ash", { ...pending(), prState: "working" });
+
+    poll("myproject");
+
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("working");
+    expect(findWorkerByName("myproject", "bold-ash")?.ciFixAttempts).toBeUndefined();
+    expect(updateWorkerFields).not.toHaveBeenCalledWith("myproject", "bold-ash",
+      expect.objectContaining({ prState: "ci-fixing" }));
+    expect(killedAfterLaunch("_myproject-ci-fix-bold-ash")).toBe(true);
   });
 
   it("dispatches the ci-fix agent when ci is red — does NOT park in failing on first attempt", () => {

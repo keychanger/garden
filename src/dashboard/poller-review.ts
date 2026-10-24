@@ -298,7 +298,7 @@ function handleSkipReviewMerge(
         + `A designer publishes design docs, not code. Remove the non-doc files and re-push to retry.`,
       dedupKey: `designer-scope:${projectName}:${entry.name}`,
     });
-    transitionState(projectName, entry.name, "failing", {
+    transitionState(projectName, entry, "failing", {
       pendingReviewAt: undefined,
       failingReason: "designer-scope",
       // Park until a NEW commit (the fix) lands: handleFailing re-arms on a sha
@@ -330,7 +330,7 @@ function handleSkipReviewMerge(
   log.info("poller", "designer publish: skipping review, merging directly", {
     worker: entry.name, data: { project: projectName },
   });
-  transitionState(projectName, entry.name, "merge-pending", {
+  transitionState(projectName, entry, "merge-pending", {
     mergePendingAt: new Date().toISOString(),
     mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
     pendingReviewAt: undefined,
@@ -583,7 +583,7 @@ function handleHolisticFinalReview(
   // Finalize the worker back to `done`, clearing the final-review markers and
   // bumping the high-water guard past this mergeCount so it never re-fires.
   const finalizeDone = (): void => {
-    transitionState(projectName, entry.name, "done", {
+    transitionState(projectName, entry, "done", {
       holisticReviewedThroughMergeCount: mergeCount,
       ...CLEAR_HOLISTIC,
       reviewWindowName: undefined,
@@ -632,7 +632,7 @@ function handleHolisticFinalReview(
       message: `Holistic review could not fix a cross-phase defect for ${entry.name}: ${review.body.slice(0, 300)}`,
       dedupKey: `holistic-failed:${projectName}:${entry.name}`,
     });
-    transitionState(projectName, entry.name, "failing", {
+    transitionState(projectName, entry, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
       failingReason: "code",
       failingSha: headSha ?? undefined,
@@ -672,7 +672,7 @@ function handleHolisticFinalReview(
     log.info("poller", "holistic review fixed a cross-phase defect; merging", {
       worker: entry.name, data: { project: projectName },
     });
-    transitionState(projectName, entry.name, "merge-pending", {
+    transitionState(projectName, entry, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
       mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
       lastReviewBody: review?.body,
@@ -810,7 +810,7 @@ function handleTransientReviewFailure(
       // repeated exhaustions don't spam.
       dedupKey: `transient-review-exhausted:${projectName}:${entry.name}`,
     });
-    transitionState(projectName, entry.name, "failing", {
+    transitionState(projectName, entry, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
       failingReason: "transient-review",
       failingSha: headSha ?? undefined,
@@ -840,7 +840,7 @@ function handleTransientReviewFailure(
       lastLine: tail,
     },
   });
-  transitionState(projectName, entry.name, "working", {
+  transitionState(projectName, entry, "working", {
     pendingReviewAt: Date.now(),
     reviewRetryCount: next,
     reviewRetryAt: nextAt,
@@ -903,7 +903,7 @@ function handleQuotaLimitReview(
         `\`garden kick ${entry.name}\` once its window has reset.`,
       dedupKey: `quota-review-exhausted:${projectName}:${entry.name}`,
     });
-    transitionState(projectName, entry.name, "failing", {
+    transitionState(projectName, entry, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
       failingReason: "quota",
       failingSha: headSha ?? undefined,
@@ -944,7 +944,7 @@ function handleQuotaLimitReview(
       resetHint,
     },
   });
-  transitionState(projectName, entry.name, "working", {
+  transitionState(projectName, entry, "working", {
     pendingReviewAt: Date.now(),
     quotaRetryCount: next,
     reviewRetryAt: nextAt,
@@ -994,7 +994,7 @@ function handleQuotaFallbackReview(
       `review. ${label} resumes automatically once its window resets.`,
     dedupKey: `quota-fallback:${projectName}:${entry.name}`,
   });
-  transitionState(projectName, entry.name, "working", {
+  transitionState(projectName, entry, "working", {
     pendingReviewAt: Date.now(),
     reviewFallbackHarness: "claude-code",
     reviewWindowName: undefined,
@@ -1044,7 +1044,7 @@ function handleUnparseableReview(
         worker: entry.name,
         data: { project: projectName, error: String(err) },
       });
-      transitionState(projectName, entry.name, "failing", {
+      transitionState(projectName, entry, "failing", {
         failCount: (entry.failCount ?? 0) + 1,
         failingReason: "code",
         // Pin the failing SHA so handleFailing's debounce gate refuses
@@ -1063,7 +1063,7 @@ function handleUnparseableReview(
       worker: entry.name,
       data: { project: projectName },
     });
-    transitionState(projectName, entry.name, "working", {
+    transitionState(projectName, entry, "working", {
       // First, so the one-shot marker set below survives the set's clear of it.
       ...FRESH_REVIEW_CYCLE,
       pendingReviewAt: Date.now(),
@@ -1106,7 +1106,7 @@ function handleUnparseableReview(
           backoffMs: UNPARSEABLE_REVIEW_BACKOFF_MS,
         },
       });
-      transitionState(projectName, entry.name, "working", {
+      transitionState(projectName, entry, "working", {
         pendingReviewAt: Date.now(),
         unparseableRetryCount: next,
         reviewRetryAt: nextAt,
@@ -1134,7 +1134,7 @@ function handleUnparseableReview(
     worker: entry.name,
     message: `Review failed for worker ${entry.name}: Claude unavailable or unparseable output`,
   });
-  transitionState(projectName, entry.name, "failing", {
+  transitionState(projectName, entry, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
     // unparseable-verdict is its own failingReason, distinct from "code"
     // failures.
@@ -1190,7 +1190,7 @@ function tryForcePushAfterReview(
       message: `Force-push after ${context} failed for '${entry.name}'; re-queuing a review to retry. ${String(err).slice(0, 200)}`,
       dedupKey: `push-failed:${projectName}:${entry.name}`,
     });
-    transitionState(projectName, entry.name, "working", {
+    transitionState(projectName, entry, "working", {
       pendingReviewAt: Date.now(),
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
@@ -1245,7 +1245,7 @@ function dispatchDefaultVerdict(
     // intentionally survives this transition: finalizeMerge needs it to diff
     // the worker's pre-review HEAD against the merged tip and tell the worker
     // which files the reviewer touched. finalizeMerge clears it.
-    transitionState(projectName, entry.name, "merge-pending", {
+    transitionState(projectName, entry, "merge-pending", {
       mergePendingAt: new Date().toISOString(),
       mergeReadySha: getBranchHeadSha(wtPath) ?? undefined,
       lastReviewBody: review.body,
@@ -1278,7 +1278,7 @@ function dispatchDefaultVerdict(
   });
   const wtPath = entry.worktreePath ?? projectPath;
   const headSha = getBranchHeadSha(wtPath);
-  transitionState(projectName, entry.name, "failing", {
+  transitionState(projectName, entry, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
     failingReason: "code",
     failingSha: headSha ?? undefined,
@@ -1356,7 +1356,7 @@ export function resetToWorkingOnWorkerPush(
   const commitSummary = getCommitSummary(wtPath, baseBranch);
   const hasCommits = commitSummary.length > 0;
 
-  transitionState(projectName, entry.name, "working", {
+  transitionState(projectName, entry, "working", {
     lastShaChangeAt: new Date().toISOString(),
     reviewWindowName: undefined,
     reviewStartedAt: undefined,
@@ -1418,7 +1418,7 @@ export function cancelReviewOnWorkerEdit(
   }
   const hasCommits = getCommitSummary(wtPath, baseBranch).length > 0;
 
-  transitionState(projectName, entry.name, "working", {
+  transitionState(projectName, entry, "working", {
     reviewInterruptedAt: undefined,
     reviewBashBaselines: undefined,
     reviewWindowName: undefined,
@@ -1487,7 +1487,7 @@ export function handleReviewTimeout(
   // for the kick-recoverable review to certify, as the timeout contract says.
   if (hasRebaseInProgress(wtPath)) abortRebase(wtPath);
   const headSha = getBranchHeadSha(wtPath);
-  transitionState(projectName, entry.name, "failing", {
+  transitionState(projectName, entry, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
     // A timeout says nothing about the code — the agent was killed before it
     // could speak. Any work it committed is still on the branch, so a re-run
@@ -1728,7 +1728,7 @@ function launchReview(
         baseBranch,
       },
     });
-    transitionState(projectName, entry.name, "failing", {
+    transitionState(projectName, entry, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
       failingReason: "oversized-diff",
       failingSha: headSha ?? undefined,
@@ -1760,18 +1760,6 @@ function launchReview(
     onLaunched: () => scheduleReviewTimeoutPoke(projectName),
   });
 
-  // Grow workflow: count the iteration now that its review has launched. A
-  // launch that stopped above (no prompt, an oversized one, a window tmux
-  // would not open) never reached `reviewing`, so it is not an iteration. No
-  // budget check here: grow's terminal-on-budget is `done`, fired post-merge
-  // in maybeAutoContinue. The increment goes through the shared loop
-  // primitive (persistIteration) and growLoopHooks.
-  if (isGrow && !isRetryRelaunch) {
-    const state = growLoopHooks.readIteration(entry);
-    const nextIter = (state?.iteration ?? 0) + 1;
-    persistIteration(projectName, entry.name, entry, growLoopHooks, nextIter);
-  }
-
   // Capture the remote tracking SHA at launch time. handleReviewing compares
   // origin/<branch> against this baseline to detect mid-review pushes. We use
   // the remote ref (not local HEAD) because the reviewer rebases locally,
@@ -1779,7 +1767,7 @@ function launchReview(
   const branchName = entry.branchName ?? entry.name;
   const launchSha = getRemoteTrackingSha(wtPath, branchName) ?? getBranchHeadSha(wtPath) ?? entry.lastSeenSha;
   const preReviewSha = getBranchHeadSha(wtPath) ?? undefined;
-  transitionState(projectName, entry.name, "reviewing", {
+  const started = transitionState(projectName, entry, "reviewing", {
     reviewWindowName: revWindow,
     reviewStartedAt: Date.now(),
     headlessHarness: reviewer.harness,
@@ -1805,6 +1793,25 @@ function launchReview(
     // the pass resolves — this is the resolution point for that merge-failed leg.
     ...CLEAR_HOLISTIC,
   });
+  if (!started) {
+    // The worker left `working` while the review was being prepared, so no
+    // handler will read this reviewer's verdict. Stop it rather than leave an
+    // agent editing, and perhaps pushing, a worktree no review owns.
+    killReviewWindow(projectName, entry.name);
+    return false;
+  }
+
+  // Grow workflow: count the iteration now that its review has started. A
+  // launch that stopped short of `reviewing` (no prompt, an oversized one, a
+  // window tmux would not open, a worker that moved meanwhile) is not an
+  // iteration. No budget check here: grow's terminal-on-budget is `done`,
+  // fired post-merge in maybeAutoContinue. The increment goes through the
+  // shared loop primitive (persistIteration) and growLoopHooks.
+  if (isGrow && !isRetryRelaunch) {
+    const state = growLoopHooks.readIteration(entry);
+    const nextIter = (state?.iteration ?? 0) + 1;
+    persistIteration(projectName, entry.name, entry, growLoopHooks, nextIter);
+  }
   refreshDashboard();
 
   log.info("poller", "launched review", {

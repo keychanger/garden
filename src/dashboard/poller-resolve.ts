@@ -32,7 +32,7 @@ import {
 import { transitionState } from "./poller-state.js";
 import { recordResolveOutcome } from "./telemetry.js";
 import {
-  cleanReviewFiles, handleReviewTimeout, isReviewTimedOut,
+  cleanReviewFiles, handleReviewTimeout, isReviewTimedOut, killReviewWindow,
   resetToWorkingOnWorkerPush, reviewPromptPath, reviewResultPath,
   scheduleReviewTimeoutPoke,
 } from "./poller-review.js";
@@ -129,7 +129,7 @@ export function launchResolver(
   const launchSha = getRemoteTrackingSha(wtPath, entry.branchName ?? entry.name)
     ?? preResolveSha ?? entry.lastSeenSha;
 
-  transitionState(projectName, entry.name, "resolving", {
+  const started = transitionState(projectName, entry, "resolving", {
     reviewWindowName: revWindow,
     reviewStartedAt: Date.now(),
     headlessHarness: resolver.harness,
@@ -139,6 +139,13 @@ export function launchResolver(
     lastShaChangeAt: new Date().toISOString(),
     mergePendingAt: undefined,
   });
+  if (!started) {
+    // The worker left merge-pending while the resolver was being prepared, so
+    // no handler will verify its rebase. Stop it rather than leave it
+    // rewriting a worktree no merge owns.
+    killReviewWindow(projectName, entry.name);
+    return false;
+  }
   refreshDashboard();
 
   log.info("poller", "launched resolver", {
@@ -182,7 +189,7 @@ function escalateResolveBudget(
     dedupKey: `resolve-budget:${projectName}:${entry.name}`,
   });
   const headSha = getBranchHeadSha(wtPath);
-  transitionState(projectName, entry.name, "failing", {
+  transitionState(projectName, entry, "failing", {
     failCount: (entry.failCount ?? 0) + 1,
     failingReason: wasTransient ? "transient-review" : "code",
     failingSha: headSha ?? undefined,
@@ -293,7 +300,7 @@ export function handleResolving(
     // Re-enter merge-pending with the same mergePendingAt so queue order is
     // preserved. The next poll cycle will re-attempt the rebase and, on
     // conflict, launch another resolver (counting toward the budget).
-    transitionState(projectName, entry.name, "merge-pending", {
+    transitionState(projectName, entry, "merge-pending", {
       mergePendingAt: entry.mergePendingAt ?? new Date().toISOString(),
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
@@ -329,7 +336,7 @@ export function handleResolving(
       message: `Force-push after conflict resolution failed for '${entry.name}'; re-queuing a review to retry. ${String(err).slice(0, 200)}`,
       dedupKey: `push-failed:${projectName}:${entry.name}`,
     });
-    transitionState(projectName, entry.name, "working", {
+    transitionState(projectName, entry, "working", {
       pendingReviewAt: Date.now(),
       reviewWindowName: undefined,
       reviewStartedAt: undefined,
@@ -345,7 +352,7 @@ export function handleResolving(
     return true;
   }
 
-  transitionState(projectName, entry.name, "merge-pending", {
+  transitionState(projectName, entry, "merge-pending", {
     mergePendingAt: entry.mergePendingAt ?? new Date().toISOString(),
     mergeReadySha: headSha ?? undefined,
     reviewWindowName: undefined,

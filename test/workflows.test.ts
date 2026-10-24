@@ -15,7 +15,7 @@ import {
   type WorkflowDefinition,
   type StateHandler,
 } from "../src/dashboard/workflows/index.js";
-import { getValidTransitions } from "../src/dashboard/workflows/types.js";
+import { getValidTransitions, isValidTransition } from "../src/dashboard/workflows/types.js";
 import { log } from "../src/dashboard/log.js";
 import type { PrState } from "../src/dashboard/registry.js";
 
@@ -276,6 +276,30 @@ describe("plannerWorkflow", () => {
 
   it("skipsReviewMerge is true (its deliverable lives in the bd store, not a commit)", () => {
     expect(plannerWorkflow.skipsReviewMerge).toBe(true);
+  });
+});
+
+// The edge lookup transitionState decides with. The registry keeps a prState
+// this build does not know as written, so a stored value is never trusted to
+// name a row of the table.
+describe("isValidTransition", () => {
+  it("reads an unset prState as working", () => {
+    expect(isValidTransition("default", undefined, "reviewing")).toBe(true);
+    expect(isValidTransition("default", undefined, "merged")).toBe(false);
+  });
+
+  it("holds no moves from a state this build does not know", () => {
+    expect(isValidTransition("default", "landing" as PrState, "working")).toBe(false);
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      expect(isValidTransition("default", name as PrState, "working"), name).toBe(false);
+    }
+  });
+
+  it("reads the worker's own workflow, and default's table for one it does not know", () => {
+    expect(isValidTransition("designer", "working", "merge-pending")).toBe(true);
+    expect(isValidTransition("default", "working", "merge-pending")).toBe(false);
+    expect(isValidTransition(undefined, "failing", "working")).toBe(true);
+    expect(isValidTransition("retired-flow", "failing", "merged")).toBe(false);
   });
 });
 

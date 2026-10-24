@@ -52,7 +52,7 @@ describe("edits-unwatched marker", () => {
     const marker = await seed();
     const { syncEditsUnwatchedMarker, transitionState } = await import("../src/dashboard/poller-state.js");
     syncEditsUnwatchedMarker("wolf", "bold-ash");
-    expect(transitionState("wolf", "bold-ash", "reviewing")).toBe(true);
+    expect(transitionState("wolf", { name: "bold-ash" }, "reviewing")).toBe(true);
     expect(fs.existsSync(marker)).toBe(false);
   });
 
@@ -90,7 +90,7 @@ describe("edits-unwatched marker", () => {
   it("comes back after the merge, and survives the settings sweep", async () => {
     const marker = await seed("merge-pending");
     const { syncEditsUnwatchedMarker, transitionState } = await import("../src/dashboard/poller-state.js");
-    expect(transitionState("wolf", "bold-ash", "merged")).toBe(true);
+    expect(transitionState("wolf", { name: "bold-ash", prState: "merge-pending" }, "merged")).toBe(true);
     syncEditsUnwatchedMarker("wolf", "bold-ash");
     expect(fs.existsSync(marker)).toBe(true);
     // Older than the sweep's grace, the way a long-idle worker's marker is,
@@ -123,7 +123,7 @@ describe("prState transition stamp", () => {
     await seed();
     const { transitionState } = await import("../src/dashboard/poller-state.js");
     const { updateWorkerFields } = await import("../src/dashboard/registry.js");
-    expect(transitionState("wolf", "bold-ash", "reviewing")).toBe(true);
+    expect(transitionState("wolf", { name: "bold-ash" }, "reviewing")).toBe(true);
     const moved = (await entry()).prStateChangedAt;
     expect(moved).toBeTypeOf("number");
     expect(moved).toBe((await entry()).lastStateChangeAt);
@@ -135,7 +135,54 @@ describe("prState transition stamp", () => {
   it("is not stamped by a transition that keeps the state", async () => {
     await seed("ci-fixing");
     const { transitionState } = await import("../src/dashboard/poller-state.js");
-    expect(transitionState("wolf", "bold-ash", "ci-fixing")).toBe(true);
+    expect(transitionState("wolf", { name: "bold-ash", prState: "ci-fixing" }, "ci-fixing")).toBe(true);
     expect((await entry()).prStateChangedAt).toBeUndefined();
+  });
+});
+
+// A handler decides from the entry it read when its poll began, and a hook or
+// command can move the worker before the handler writes. The write carries the
+// state the decision was made on and is refused once the worker has left it,
+// including where the table holds an edge from the newer state.
+describe("transition decided on an entry the worker has since left", () => {
+  afterEach(() => vi.resetModules());
+
+  it("is refused without writing, though the table holds the edge from the newer state", async () => {
+    await seed("done");
+    const { transitionState } = await import("../src/dashboard/poller-state.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+    const { log } = await import("../src/dashboard/log.js");
+    const warn = vi.spyOn(log, "warn");
+
+    // Decided while the worker read as working. done -> reviewing is itself an
+    // edge (the holistic interposition), so only the stale check refuses it.
+    expect(transitionState("wolf", { name: "bold-ash" }, "reviewing", { reviewWindowName: "_wolf-review-bold-ash" }))
+      .toBe(false);
+
+    const after = findWorkerByName("wolf", "bold-ash")!;
+    expect(after.prState).toBe("done");
+    expect(after.reviewWindowName).toBeUndefined();
+    expect(after.prStateChangedAt).toBeUndefined();
+    expect(warn).toHaveBeenCalledWith("poller", "stale state transition: working -> reviewing, worker is now done", {
+      worker: "bold-ash", data: { project: "wolf", workflow: "default", requested: undefined },
+    });
+  });
+
+  it("reads an unset prState and `working` as the same state", async () => {
+    await seed("working");
+    const { transitionState } = await import("../src/dashboard/poller-state.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+
+    expect(transitionState("wolf", { name: "bold-ash" }, "reviewing")).toBe(true);
+    expect(findWorkerByName("wolf", "bold-ash")?.prState).toBe("reviewing");
+  });
+
+  it("still applies a forced recovery move from whatever state the worker is in", async () => {
+    await seed("done");
+    const { forceTransitionState } = await import("../src/dashboard/poller-state.js");
+    const { findWorkerByName } = await import("../src/dashboard/registry.js");
+
+    expect(forceTransitionState("wolf", "bold-ash", "failing")).toBe(true);
+    expect(findWorkerByName("wolf", "bold-ash")?.prState).toBe("failing");
   });
 });

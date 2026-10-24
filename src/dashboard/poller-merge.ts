@@ -345,7 +345,7 @@ export function handleMergePending(
       message: `Rebase failed (not a conflict) — manual intervention needed: ${detail}`,
     });
     const headSha = getBranchHeadSha(wtPath);
-    transitionState(projectName, entry.name, "failing", {
+    transitionState(projectName, entry, "failing", {
       failCount: (entry.failCount ?? 0) + 1,
       failingReason: "code",
       failingSha: headSha ?? undefined,
@@ -378,7 +378,7 @@ export function handleMergePending(
       message: `Force-push in the merge queue failed for '${entry.name}'; re-queuing a review to retry. ${String(err).slice(0, 200)}`,
       dedupKey: `push-failed:${projectName}:${entry.name}`,
     });
-    transitionState(projectName, entry.name, "working", {
+    transitionState(projectName, entry, "working", {
       pendingReviewAt: Date.now(),
       mergePendingAt: undefined,
       // Fresh cycle: reset the resolver budget and stale resolve state, matching
@@ -663,7 +663,7 @@ function finalizeMerge(
       // `working` — the point of the escalation is to stop automatic retries
       // until the operator kicks it or pushes a new commit.
       const headSha = getBranchHeadSha(entry.worktreePath ?? projectPath);
-      transitionState(projectName, entry.name, "failing", {
+      transitionState(projectName, entry, "failing", {
         failCount,
         failingReason: "transient-review",
         failingSha: headSha ?? undefined,
@@ -685,7 +685,7 @@ function finalizeMerge(
     // Set pendingReviewAt so the worker gets re-reviewed instead of being
     // stuck in "working" with no trigger to advance; count the failure so a
     // persistent one escalates instead of looping forever.
-    transitionState(projectName, entry.name, "working", {
+    transitionState(projectName, entry, "working", {
       pendingReviewAt: Date.now(),
       failCount,
       mergePendingAt: undefined,
@@ -945,7 +945,7 @@ function transitionToTerminal(
   const holisticTouchedFiles = [
     ...new Set([...(entry.holisticTouchedFiles ?? []), ...preMergeChangedFiles]),
   ];
-  transitionState(projectName, entry.name, terminalState, {
+  transitionState(projectName, entry, terminalState, {
     mergedAt: new Date().toISOString(),
     failCount: 0,
     mergePendingAt: undefined,
@@ -1016,7 +1016,9 @@ function transitionToTerminal(
       worker: entry.name,
       data: { project: projectName, clearedFrom: terminalState, agentStatus: fresh.agentStatus },
     });
-    transitionState(projectName, entry.name, "working", {
+    // Decided on the read taken after the terminal write, so the move is
+    // expected from the terminal state, not from merge-pending.
+    transitionState(projectName, fresh, "working", {
       mergedAt: undefined,
       lastSeenSha: undefined,
     });
@@ -1073,7 +1075,7 @@ export function handleMerged(
       worker: entry.name,
       data: { project: projectName },
     });
-    transitionState(projectName, entry.name, "working", {
+    transitionState(projectName, entry, "working", {
       mergedAt: undefined,
       lastSeenSha: undefined,
     });
@@ -1124,7 +1126,7 @@ function maybeAutoContinue(
     const max = entry.grow?.maxIterations ?? 5;
     if (iter >= max) {
       setDoneSentinel(entry.worktreePath);
-      transitionState(projectName, entry.name, "done", {});
+      transitionState(projectName, entry, "done", {});
       log.info("poller", "grow loop completed at iteration budget", {
         worker: entry.name,
         data: { project: projectName, iterations: iter, max },

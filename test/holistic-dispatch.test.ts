@@ -20,14 +20,19 @@ vi.mock("../src/dashboard/header.js", async (orig) => ({
 // factory's result outlives useTmpHome's per-test module reset, so the real
 // poller-fifo it spreads would keep reading the first test's registry; the
 // working check reads the current test's instead (`current.registry`).
-const { listAllWindowNames, scheduleDelayedPoke, current } = vi.hoisted(() => ({
+const { listAllWindowNames, scheduleDelayedPoke, current, windowExists, killWindowSafe } = vi.hoisted(() => ({
   listAllWindowNames: vi.fn((): string[] => []),
   scheduleDelayedPoke: vi.fn(),
   current: { registry: undefined as undefined | typeof import("../src/dashboard/registry.js") },
+  // Nothing is launched for real, so no window exists unless a test says so.
+  windowExists: vi.fn((_name: string) => false),
+  killWindowSafe: vi.fn(),
 }));
 vi.mock("../src/dashboard/tmux.js", async (orig) => ({
   ...(await orig<typeof import("../src/dashboard/tmux.js")>()),
   listAllWindowNames,
+  windowExists,
+  killWindowSafe,
 }));
 vi.mock("../src/dashboard/poller-fifo.js", async (orig) => ({
   ...(await orig<typeof import("../src/dashboard/poller-fifo.js")>()),
@@ -194,6 +199,38 @@ describe("interposed final review launch (touched files present)", () => {
     const { prompt } = launchHeadlessAgent.mock.calls[0][0] as { prompt: string };
     expect(prompt).not.toContain("AGENTS-BODY");
     expect(prompt).toContain("AGENTS.md is already in your context");
+  });
+});
+
+// The pass is prepared from the entry the dispatcher read, and its reviewer is
+// running before the state is written. An operator prompt landing meanwhile
+// reopens the worker (the prompt hook clears `done`), so the pass must not
+// claim it: the worker stays working and the reviewer is stopped.
+describe("interposed final review on a worker reopened while it launches", () => {
+  it("leaves the worker working and stops the reviewer", async () => {
+    const { reg, hol } = await setup("shadow", { holisticTouchedFiles: ["src/a.ts"] });
+    launchHeadlessAgent.mockClear();
+    killWindowSafe.mockClear();
+    windowExists.mockImplementation((name: string) => name === "_proj-review-multi-phase");
+    launchHeadlessAgent.mockImplementationOnce(() => {
+      reg.updateWorkerFields("proj", "multi-phase", { prState: undefined, agentStatus: "working" });
+      return { windowName: "_proj-review-multi-phase", launchedAt: 0 };
+    });
+    try {
+      hol.maybeDispatchHolisticReview(
+        "proj", env.gardenDir, "main", reg.findWorkerByName("proj", "multi-phase")!, "transitionToTerminal",
+      );
+
+      const after = reg.findWorkerByName("proj", "multi-phase")!;
+      expect(after.prState).toBeUndefined();
+      expect(after.holisticFinalActive).toBeUndefined();
+      expect(after.reviewWindowName).toBeUndefined();
+      expect(launchHeadlessAgent).toHaveBeenCalledTimes(1);
+      expect(killWindowSafe).toHaveBeenCalledWith("_proj-review-multi-phase");
+    } finally {
+      windowExists.mockReset();
+      windowExists.mockReturnValue(false);
+    }
   });
 });
 

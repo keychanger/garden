@@ -64,6 +64,10 @@ async function seedChild(opts: {
   });
 }
 
+// The child as a poller handler holds it when it decides the move: seedChild
+// lands it in merge-pending.
+const CHILD = { name: "bold-ash", prState: "merge-pending" } as const;
+
 // The registry file as a poller killed at this instant leaves it: read straight
 // from disk, before any deferred work in this process gets to run.
 function registryOnDisk(): { workers: Record<string, Array<Record<string, unknown>>> } {
@@ -88,7 +92,7 @@ describe("transitionState handoff callback chokepoint", () => {
     const { transitionState } = await import("../src/dashboard/poller-state.js");
     const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
 
-    transitionState("wolf", "bold-ash", "merged");
+    transitionState("wolf", CHILD, "merged");
     // The dispatch path uses a dynamic import; let the microtask flush.
     await new Promise(r => setImmediate(r));
 
@@ -112,7 +116,7 @@ describe("transitionState handoff callback chokepoint", () => {
     const { transitionState } = await import("../src/dashboard/poller-state.js");
     const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
 
-    transitionState("wolf", "bold-ash", "done");
+    transitionState("wolf", CHILD, "done");
     await new Promise(r => setImmediate(r));
 
     expect(notifyHandoffCallback).toHaveBeenCalledWith(
@@ -131,7 +135,7 @@ describe("transitionState handoff callback chokepoint", () => {
 
     // failing is reachable from working, reviewing, merge-pending, resolving
     // — seedChild lands the entry in merge-pending, so this is valid.
-    transitionState("wolf", "bold-ash", "failing");
+    transitionState("wolf", CHILD, "failing");
     await new Promise(r => setImmediate(r));
 
     expect(notifyHandoffCallback).toHaveBeenCalled();
@@ -146,7 +150,7 @@ describe("transitionState handoff callback chokepoint", () => {
     const { transitionState } = await import("../src/dashboard/poller-state.js");
     const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
 
-    transitionState("wolf", "bold-ash", "merged");
+    transitionState("wolf", CHILD, "merged");
     await new Promise(r => setImmediate(r));
 
     expect(notifyHandoffCallback).not.toHaveBeenCalled();
@@ -161,7 +165,7 @@ describe("transitionState handoff callback chokepoint", () => {
     const { transitionState } = await import("../src/dashboard/poller-state.js");
     const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
 
-    transitionState("wolf", "bold-ash", "working");
+    transitionState("wolf", CHILD, "working");
     await new Promise(r => setImmediate(r));
 
     expect(notifyHandoffCallback).not.toHaveBeenCalled();
@@ -172,7 +176,7 @@ describe("transitionState handoff callback chokepoint", () => {
     const { transitionState } = await import("../src/dashboard/poller-state.js");
     const { findWorkerByName } = await import("../src/dashboard/registry.js");
 
-    expect(transitionState("wolf", "bold-ash", "reviewing")).toBe(false);
+    expect(transitionState("wolf", CHILD, "reviewing")).toBe(false);
     expect(findWorkerByName("wolf", "bold-ash")?.prState).toBe("merge-pending");
   });
 
@@ -195,7 +199,7 @@ describe("transitionState handoff callback chokepoint", () => {
     const { transitionState } = await import("../src/dashboard/poller-state.js");
     const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
 
-    transitionState("wolf", "bold-ash", "merged");
+    transitionState("wolf", CHILD, "merged");
     await new Promise(r => setImmediate(r));
 
     expect(notifyHandoffCallback).not.toHaveBeenCalled();
@@ -210,7 +214,7 @@ describe("transitionState handoff callback chokepoint", () => {
     const { transitionState } = await import("../src/dashboard/poller-state.js");
     const { findWorkerByName } = await import("../src/dashboard/registry.js");
 
-    transitionState("wolf", "bold-ash", "merged");
+    transitionState("wolf", CHILD, "merged");
 
     const after = findWorkerByName("wolf", "bold-ash");
     expect(typeof after?.handoffCallbackFiredAt).toBe("number");
@@ -227,7 +231,7 @@ describe("transitionState handoff callback chokepoint", () => {
     });
     const { transitionState } = await import("../src/dashboard/poller-state.js");
 
-    transitionState("wolf", "bold-ash", "merged");
+    transitionState("wolf", CHILD, "merged");
 
     const { workers } = registryOnDisk();
     expect(workers.wolf[0].handoffCallbackFiredAt).toEqual(expect.any(Number));
@@ -246,7 +250,7 @@ describe("transitionState handoff callback chokepoint", () => {
     const { transitionState } = await import("../src/dashboard/poller-state.js");
     const { notifyHandoffCallback } = await import("../src/dashboard/continue.js");
 
-    transitionState("wolf", "bold-ash", "merged");
+    transitionState("wolf", CHILD, "merged");
     await new Promise(r => setImmediate(r));
 
     const { workers } = registryOnDisk();

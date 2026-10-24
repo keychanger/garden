@@ -158,3 +158,18 @@ export function getValidTransitions(workflowName: string): Record<PrState, PrSta
   if (workflowName === "planner") return plannerValidTransitions;
   return defaultValidTransitions;
 }
+
+// Whether the workflow's table holds the move. An unset prState reads as
+// `working`. A state this build does not know holds no moves: the registry
+// keeps such a value as written (a newer build's state read after a
+// rollback), and the own-key check stops a value such as "constructor" from
+// reading an Object.prototype member as its row.
+export function isValidTransition(
+  workflowName: string | undefined,
+  from: PrState | undefined,
+  to: PrState,
+): boolean {
+  const table = getValidTransitions(workflowName ?? "default");
+  const state = from ?? "working";
+  return Object.hasOwn(table, state) && table[state].includes(to);
+}
