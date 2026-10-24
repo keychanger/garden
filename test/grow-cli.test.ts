@@ -245,8 +245,7 @@ describe("garden workers new --workflow grow", () => {
     ).rejects.toThrow(/--model requires a non-empty value/);
   });
 
-  // The flag parser accepts any --flag, so the retired one is named instead of
-  // being silently ignored.
+  // The retired flag is named rather than refused as an unknown option.
   it("rejects the retired --trellis flag", async () => {
     await setupProject("proj");
     const { workers } = await importWorkersCmd();
@@ -1242,4 +1241,53 @@ describe("garden workers new --effort", () => {
     expect(newWorker).not.toHaveBeenCalled();
   });
 
+});
+
+// A flag the parser stored but never read let `--modle opus` spawn an unpinned
+// worker with nothing but a missing suffix to show for it. `garden handoff`
+// already refuses unknown and repeated options; the direct spawn path matches.
+describe("unknown, repeated, and stray arguments", () => {
+  it("workers new refuses a misspelled flag before spawning anything", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+    await expect(workers(["new", "proj", "--modle", "opus"]))
+      .rejects.toThrow(/Unknown or repeated option '--modle'/);
+    await expect(workers(["new", "proj", "--workflow", "grow", "--seed", "x", "--efort", "high"]))
+      .rejects.toThrow(/Unknown or repeated option '--efort'/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+
+  it("workers new refuses a repeated flag rather than keeping the last value", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+    await expect(workers(["new", "proj", "--model", "opus", "--model", "sonnet"]))
+      .rejects.toThrow(/Unknown or repeated option '--model'/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+
+  it("workers new refuses a stray positional such as a single-dash flag", async () => {
+    await setupProject("proj");
+    const { workers } = await importWorkersCmd();
+    const { newWorker } = await importDashboardWorkers();
+    await expect(workers(["new", "proj", "-model", "opus"]))
+      .rejects.toThrow(/Unexpected extra arguments: '-model', 'opus'/);
+    expect(newWorker).not.toHaveBeenCalled();
+  });
+
+  it("workers grow refuses a flag the convert does not take, leaving the worker unconverted", async () => {
+    const projectDir = await setupProject("proj");
+    const wtPath = path.join(projectDir, "..", "wt-unknown-flag");
+    fs.mkdirSync(wtPath, { recursive: true });
+    await addDefaultWorker("proj", "tall-fern", wtPath);
+    const { workers } = await importWorkersCmd();
+    await expect(workers(["grow", "tall-fern", "--seed", "x", "--max-iteration", "3"]))
+      .rejects.toThrow(/Unknown or repeated option '--max-iteration'/);
+    await expect(workers(["grow", "tall-fern", "--seed", "x", "--model", "opus"]))
+      .rejects.toThrow(/Unknown or repeated option '--model'/);
+    const reg = await importRegistry();
+    expect(reg.findWorkerByName("proj", "tall-fern")!.workflow).toBe("default");
+    expect(fs.existsSync(path.join(wtPath, ".garden", "grow-goal.md"))).toBe(false);
+  });
 });

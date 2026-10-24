@@ -46,30 +46,63 @@ export async function workers(args: string[]): Promise<void> {
   );
 }
 
-async function newCommand(args: string[]): Promise<void> {
-  // Positional: <project>. Flags: --workflow, --max-iterations, and the
-  // launch flags below. Workflow defaults to "default".
+// Splits `<positional...> --flag value ...`, accepting only the flags a command
+// takes, once each. A misspelled flag (`--modle opus`) used to be stored and
+// never read, so the worker spawned on the default the operator meant to
+// override; `garden handoff` refuses the same way.
+function parseFlags(
+  args: string[], allowed: readonly string[],
+): { positional: string[]; flags: Map<string, string> } {
   const positional: string[] = [];
   const flags = new Map<string, string>();
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a.startsWith("--")) {
-      const key = a.slice(2);
-      const val = args[i + 1];
-      if (val === undefined || val.startsWith("--")) {
-        throw new Error(`--${key} requires a value`);
-      }
-      flags.set(key, val);
-      i++;
-    } else {
+    if (!a.startsWith("--")) {
       positional.push(a);
+      continue;
     }
+    const key = a.slice(2);
+    if (!allowed.includes(key) || flags.has(key)) {
+      throw new Error(
+        `Unknown or repeated option '${a}'. Supported once each: ${allowed.map(f => `--${f}`).join(", ")}.`,
+      );
+    }
+    const val = args[i + 1];
+    if (val === undefined || val.startsWith("--")) {
+      throw new Error(`--${key} requires a value`);
+    }
+    flags.set(key, val);
+    i++;
   }
+  return { positional, flags };
+}
+
+// Every flag `workers new` takes. A workflow that does not use one of these
+// refuses it by name below.
+const NEW_FLAGS = [
+  "workflow", "base", "seed", "seed-file", "model", "effort", "harness", "crew", "max-iterations",
+] as const;
+
+async function newCommand(args: string[]): Promise<void> {
+  // Positional: <project>. Flags: --workflow, --max-iterations, and the
+  // launch flags below. Workflow defaults to "default". The retired flag is
+  // named rather than refused as unknown; a value cannot start with "--", so
+  // this token is always the flag.
+  if (args.includes("--trellis")) {
+    throw new Error("--trellis was removed along with the trellis workflow");
+  }
+  const { positional, flags } = parseFlags(args, NEW_FLAGS);
 
   const projectName = positional[0];
   if (!projectName) {
     throw new Error(
       "Usage: garden workers new <project> [--workflow grow|designer|planner] [--max-iterations N]",
+    );
+  }
+  if (positional.length > 1) {
+    throw new Error(
+      `Unexpected extra arguments: ${positional.slice(1).map(a => `'${a}'`).join(", ")}. `
+      + `Usage: garden workers new <project> [--flag value ...]`,
     );
   }
   const project = tryGetProject(projectName);
@@ -80,11 +113,6 @@ async function newCommand(args: string[]): Promise<void> {
   const workflow = flags.get("workflow") ?? "default";
   if (workflow !== "default" && workflow !== "grow" && workflow !== "designer" && workflow !== "planner") {
     throw new Error(`--workflow must be 'default', 'grow', 'designer', or 'planner', got '${workflow}'`);
-  }
-  // This parser accepts any --flag, so the retired one is named rather than
-  // silently ignored.
-  if (flags.has("trellis")) {
-    throw new Error("--trellis was removed along with the trellis workflow");
   }
 
   // Worker harness (agent CLI). Default and designer only — grow's
@@ -382,22 +410,7 @@ async function stopCommand(args: string[]): Promise<void> {
 // conversation into `.garden/grow-goal.md`, then runs this command to flip
 // the workflow.
 async function growCommand(args: string[]): Promise<void> {
-  const positional: string[] = [];
-  const flags = new Map<string, string>();
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a.startsWith("--")) {
-      const key = a.slice(2);
-      const val = args[i + 1];
-      if (val === undefined || val.startsWith("--")) {
-        throw new Error(`--${key} requires a value`);
-      }
-      flags.set(key, val);
-      i++;
-    } else {
-      positional.push(a);
-    }
-  }
+  const { positional, flags } = parseFlags(args, ["seed", "seed-file", "goal-file", "max-iterations"]);
 
   // Reject extra positional args — `garden workers grow w1 w2 --seed x`
   // would otherwise silently use w1 and discard w2. The user almost

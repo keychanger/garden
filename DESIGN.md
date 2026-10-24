@@ -853,6 +853,8 @@ garden workers new <project> [--workflow grow|designer|planner]
                                    # --effort sets the reasoning rung (default/grow/designer/planner;
                                    # ultra = the ultracode preset: max effort + dynamic workflows).
                                    # --max-iterations defaults to project.maxGrowIterations or 5.
+                                   # An unknown or repeated flag, or a stray argument, is refused
+                                   # (here and on `workers grow`), as `garden handoff` refuses one.
 garden workers grow [<worker>] [--seed <text> | --seed-file <path> | --goal-file <path>]
                              [--max-iterations N]
                                    # Convert an active default worker into grow. Self-resolves the
