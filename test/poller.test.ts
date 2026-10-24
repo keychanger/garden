@@ -4734,6 +4734,52 @@ describe("poll — merge-pending CI gate", () => {
     }));
   });
 
+  // A gh timeout, 5xx or rate limit leaves the SHA's CI result unknown, the
+  // same as runs not having appeared yet. On a project with CI it passed at
+  // once, so any GitHub API hiccup merged a red or unfinished SHA.
+  it("defers a transient gh failure on a CI project, passing only after its window", () => {
+    const t0 = Date.now();
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
+    try {
+      vi.mocked(projectDefinesCi).mockReturnValue(true);
+      vi.mocked(checkCiStatus).mockReturnValue({
+        kind: "unavailable", reason: "gh-exit-1: gh: Server Error (HTTP 502)", transient: true,
+      });
+      registryMock._setEntries("myproject", [pending()]);
+
+      __simulatePollerRestartForTest();
+      poll("myproject");
+      expect(mergeToBase).not.toHaveBeenCalled();
+      expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 60_000);
+
+      nowSpy.mockReturnValue(t0 + 9 * 60_000);
+      __simulatePollerRestartForTest();
+      poll("myproject");
+      expect(mergeToBase).not.toHaveBeenCalled();
+
+      nowSpy.mockReturnValue(t0 + 10 * 60_000 + 1);
+      __simulatePollerRestartForTest();
+      poll("myproject");
+      expect(mergeToBase).toHaveBeenCalledOnce();
+      expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+        message: expect.stringContaining("Merging without GitHub Actions verification"),
+      }));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("passes a transient gh failure through at once on a project without CI", () => {
+    vi.mocked(checkCiStatus).mockReturnValue({
+      kind: "unavailable", reason: "gh-spawn-error: Error: spawnSync gh ETIMEDOUT", transient: true,
+    });
+    registryMock._setEntries("myproject", [pending()]);
+
+    poll("myproject");
+
+    expect(mergeToBase).toHaveBeenCalled();
+  });
+
   it("passes through when the commit has no check-runs (no CI configured)", () => {
     vi.mocked(checkCiStatus).mockReturnValue({ kind: "no-ci" });
     registryMock._setEntries("myproject", [pending()]);

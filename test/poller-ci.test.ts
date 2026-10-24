@@ -162,6 +162,30 @@ describe("checkCiStatus", () => {
     }
   });
 
+  // Only a failure that can clear on its own may hold a CI project's merge;
+  // bad credentials and a 404 still pass through at once.
+  it.each([
+    ["gh: Server Error (HTTP 500)", true],
+    ["HTTP 502: Bad Gateway (https://api.github.com/repos/o/r/commits/x/check-runs)", true],
+    ["gh: API rate limit exceeded for user ID 1. (HTTP 403)", true],
+    ["gh: Too Many Requests (HTTP 429)", true],
+    ["error connecting to api.github.com\ncheck your internet connection", true],
+    ["gh: Bad credentials (HTTP 401)", false],
+    ["gh: Not Found (HTTP 404)", false],
+  ])("marks gh failure %j transient: %s", (stderr, transient) => {
+    vi.mocked(spawnSync).mockReturnValueOnce({ status: 1, pid: 1, output: [], signal: null, stdout: "", stderr });
+    expect(checkCiStatus("owner/repo", "deadbeef")).toMatchObject({ kind: "unavailable", transient });
+  });
+
+  it("marks a gh call killed by its timeout transient", () => {
+    const err = new Error("spawnSync gh ETIMEDOUT") as NodeJS.ErrnoException;
+    err.code = "ETIMEDOUT";
+    vi.mocked(spawnSync).mockReturnValueOnce({
+      status: null, pid: 1, output: [], signal: "SIGTERM", stdout: "", stderr: "", error: err,
+    });
+    expect(checkCiStatus("owner/repo", "deadbeef")).toMatchObject({ kind: "unavailable", transient: true });
+  });
+
   it("flattens paginated multi-line JSON arrays", () => {
     vi.mocked(spawnSync).mockReturnValueOnce({
       status: 0,

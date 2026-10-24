@@ -101,6 +101,10 @@ const projectHasCi = new Map<string, boolean>();
 // The grace stamp itself lives on WorkerEntry.ciNoRuns — see the note there for
 // why it cannot be a module Map.
 const CI_NO_RUNS_GRACE_MS = 3 * 60_000;
+// A gh timeout, 5xx, rate limit or lost connection on a CI project leaves the
+// SHA's result unknown too, but outages outlast run creation, so the wait is
+// longer. It shares the ciNoRuns stamp, which then means "unknown since".
+const CI_UNAVAILABLE_GRACE_MS = 10 * 60_000;
 
 // Marker file recording that a 60s recheck poke is already in flight for a
 // project. Its MTIME is the arming time — a poke is outstanding while the
@@ -337,7 +341,8 @@ export function handleMergePending(
 // projects with zero check-runs on the SHA that have never been observed to
 // run CI (nothing to gate against). On a project already known to run CI,
 // zero check-runs means they haven't materialized yet, so the merge defers
-// within a bounded grace window (CI_NO_RUNS_GRACE_MS) before passing through.
+// within a bounded grace window (CI_NO_RUNS_GRACE_MS) before passing through;
+// a transient gh failure there defers the same way (CI_UNAVAILABLE_GRACE_MS).
 // The handoff explicitly called out the `gh`/non-github cases: blocking
 // workers from merging just because the operator's box doesn't have `gh`
 // installed would be a worse regression than the bug this fixes.
@@ -368,6 +373,9 @@ function gateCiStatus(
   }
 
   const status: CiStatus = checkCiStatus(slug, sha);
+  // Read only on the paths that need it: it parses the workflow files.
+  const hasCi = () => projectDefinesCi(projectPath, entry.branchName ?? entry.name)
+    || projectHasCi.get(projectName) === true;
 
   // Learn that this project has CI the moment we observe any check-run, and
   // clear a stale no-runs grace stamp for this SHA now that runs exist.
@@ -398,17 +406,8 @@ function gateCiStatus(
       // could never be set, because setting it required observing a check-run
       // that this same race hides (see projectDefinesCi). The flag remains as an
       // OR for CI that has no workflow file in the repo.
-      if (projectDefinesCi(projectPath, entry.branchName ?? entry.name)
-          || projectHasCi.get(projectName) === true) {
-        // The stamp is per-SHA: a stamp for a different SHA belongs to a
-        // superseded commit (reviewer fix, ci-fix force-push), so the new tip
-        // starts its own window rather than inheriting an expired one.
-        let since = entry.ciNoRuns?.sha === sha ? entry.ciNoRuns.since : undefined;
-        if (since === undefined) {
-          since = Date.now();
-          updateWorkerFields(projectName, entry.name, { ciNoRuns: { sha, since } });
-        }
-        const waited = Date.now() - since;
+      if (hasCi()) {
+        const waited = ciUnknownForMs(projectName, entry, sha);
         if (waited < CI_NO_RUNS_GRACE_MS) {
           log.info("poller", "ci gate: no check-runs yet, deferring", {
             worker: entry.name,
@@ -449,8 +448,24 @@ function gateCiStatus(
       return false;
 
     case "unavailable":
-      // Don't block on infrastructure problems. One alert per reason to
-      // surface the gap without spamming on every poll cycle.
+      // On a project with CI a transient failure leaves this SHA's result as
+      // unknown as zero check-runs do, and passing it at once let any GitHub
+      // API hiccup merge a red or unfinished SHA. Wait within a bound.
+      if (status.transient && hasCi()) {
+        const waited = ciUnknownForMs(projectName, entry, sha);
+        if (waited < CI_UNAVAILABLE_GRACE_MS) {
+          log.info("poller", "ci gate: gh api failed, deferring merge", {
+            worker: entry.name,
+            data: { project: projectName, sha: sha.slice(0, 7), reason: status.reason, waitedMs: waited },
+          });
+          armCiRecheck(projectName);
+          return false;
+        }
+        updateWorkerFields(projectName, entry.name, { ciNoRuns: undefined });
+      }
+      // Past that window, or for a failure waiting cannot fix, don't block on
+      // infrastructure problems. One alert per reason to surface the gap
+      // without spamming on every poll cycle.
       log.warn("poller", "ci gate unavailable, passing through", {
         worker: entry.name,
         data: { project: projectName, reason: status.reason },
@@ -492,6 +507,19 @@ function gateCiStatus(
       return false;
     }
   }
+}
+
+// How long this SHA's CI result has been unknown, stamping the start on the
+// entry the first time. The stamp is per-SHA: a stamp for a different SHA
+// belongs to a superseded commit (reviewer fix, ci-fix force-push), so the new
+// tip starts its own window rather than inheriting an expired one.
+function ciUnknownForMs(projectName: string, entry: WorkerEntry, sha: string): number {
+  let since = entry.ciNoRuns?.sha === sha ? entry.ciNoRuns.since : undefined;
+  if (since === undefined) {
+    since = Date.now();
+    updateWorkerFields(projectName, entry.name, { ciNoRuns: { sha, since } });
+  }
+  return Date.now() - since;
 }
 
 function finalizeMerge(

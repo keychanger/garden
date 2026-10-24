@@ -8,7 +8,10 @@
 // module provides the defense-in-depth gate.
 //
 // Contract for handleMergePending (poller-merge.ts):
-//   - "success" / "unavailable" → proceed with merge
+//   - "success" → proceed with merge
+//   - "unavailable" → proceed, UNLESS it is transient (gh timed out, a 5xx, a
+//     rate limit, no connection) on a project with CI: that leaves the SHA's
+//     CI result unknown, so the merge waits within a bounded window first
 //   - "no-ci" → proceed, UNLESS the project has CI (workflow files on disk, or
 //     a check-run observed earlier this poller's life), in which case zero
 //     check-runs is treated as "not yet materialized" and the merge defers
@@ -18,8 +21,8 @@
 //   - "pending" → defer (caller stays in merge-pending, schedules a re-poke)
 //   - "failed" → caller transitions worker to `failing` with reason "ci"
 //
-// "unavailable" (gh missing, not a github remote, or API error) always passes
-// through — failing closed there would block legitimate non-GitHub projects.
+// Any other "unavailable" (gh missing, bad credentials, a 404) passes through
+// at once: none of them clears by waiting. Non-GitHub remotes never get here.
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -33,7 +36,7 @@ export type CiStatus =
   | { kind: "failed"; failed: Array<{ name: string; conclusion: string; htmlUrl?: string }> }
   | { kind: "no-ci" }
   | { kind: "missing-commit" }
-  | { kind: "unavailable"; reason: string };
+  | { kind: "unavailable"; reason: string; transient?: boolean };
 
 // Parse a GitHub repo slug ("owner/repo") from the origin remote URL.
 // Returns null when the remote isn't github (e.g., gitlab, self-hosted,
@@ -194,15 +197,24 @@ export function checkCiStatus(repoSlug: string, sha: string): CiStatus {
     // ENOENT — gh isn't installed. Operators on a fresh box hit this.
     const code = (result.error as NodeJS.ErrnoException).code;
     if (code === "ENOENT") return { kind: "unavailable", reason: "gh-not-installed" };
-    return { kind: "unavailable", reason: `gh-spawn-error: ${String(result.error)}` };
+    return {
+      kind: "unavailable",
+      reason: `gh-spawn-error: ${String(result.error)}`,
+      transient: code === "ETIMEDOUT",
+    };
   }
   if (result.status !== 0) {
     const stderr = (result.stderr ?? "").trim();
     if (/No commit found for SHA:/i.test(stderr)) return { kind: "missing-commit" };
-    // 404 on the commit, auth failure, rate limit — all surface here. Pass
-    // through rather than block. The alert path is the operator's signal
-    // that the gate isn't doing its job; we log enough to debug.
-    return { kind: "unavailable", reason: `gh-exit-${result.status}: ${stderr.slice(0, 200)}` };
+    // 404 on the repo, auth failure, rate limit, server error — all surface
+    // here. The alert path is the operator's signal that the gate isn't doing
+    // its job; we log enough to debug. A server error, a rate limit or a lost
+    // connection can clear on its own, so the caller may wait on those.
+    return {
+      kind: "unavailable",
+      reason: `gh-exit-${result.status}: ${stderr.slice(0, 200)}`,
+      transient: /HTTP (5\d\d|429)\b|rate limit|error connecting to/i.test(stderr),
+    };
   }
 
   // --paginate concatenates JSON arrays as separate lines, NOT as one big

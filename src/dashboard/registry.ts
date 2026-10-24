@@ -283,9 +283,10 @@ export interface WorkerEntry {
   // so that an unparseable verdict with real work attached can be recovered
   // instead of silently discarded.
   preReviewSha?: string;
-  // CI-gate grace stamp: when the gate first saw zero check-runs on this SHA,
-  // on a project that HAS CI. Bounds the "not yet materialized" defer (see
-  // CI_NO_RUNS_GRACE_MS, poller-merge.ts). Persisted per-worker rather than
+  // CI-gate grace stamp: when the gate first found this SHA's CI result
+  // unknown (zero check-runs, or a transient gh failure) on a project that HAS
+  // CI. Bounds those defers (CI_NO_RUNS_GRACE_MS and CI_UNAVAILABLE_GRACE_MS,
+  // poller-merge.ts). Persisted per-worker rather than
   // held in a poller-module Map because the poller loop execs a FRESH process
   // per poll (`while true; do garden dashboard _poll; read; done`) — an
   // in-memory stamp was re-created as "now" on every poll, so the elapsed check
