@@ -108,6 +108,23 @@ describe("readLandedPrompt", () => {
     expect(readLandedPrompt("claude-code", f)).toBe(SENT);
   });
 
+  // Auto-compaction appends its summary as a user record with no promptSource,
+  // so it read as the newest prompt and a truncated landing near a compaction
+  // could only ever classify as `pending`.
+  it("does not read a claude-code compaction summary as the newest prompt", () => {
+    const f = path.join(tmp, "compacted.jsonl");
+    fs.writeFileSync(f, [
+      JSON.stringify({ type: "user", promptSource: "typed", message: { content: SENT } }),
+      JSON.stringify({ type: "system", subtype: "compact_boundary" }),
+      JSON.stringify({
+        type: "user", isCompactSummary: true, isVisibleInTranscriptOnly: true,
+        message: { role: "user", content: "This session is being continued from a previous conversation." },
+      }),
+      JSON.stringify({ type: "attachment", attachment: { type: "todo" } }),
+    ].join("\n") + "\n");
+    expect(readLandedPrompt("claude-code", f)).toBe(SENT);
+  });
+
   it("joins multi-part claude-code content", () => {
     const f = path.join(tmp, "parts.jsonl");
     fs.writeFileSync(f, JSON.stringify({

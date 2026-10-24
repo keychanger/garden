@@ -807,6 +807,15 @@ describe("readOpeningPrompt — what a worker was first asked to do", () => {
     expect(readOpeningPrompt(p)).toBe("Fix the dinner scene");
   });
 
+  it("skips a compaction summary", () => {
+    const p = write("g.jsonl", jsonl([
+      user("This session is being continued from a previous conversation.",
+        "2026-09-18T16:00:00Z", { isCompactSummary: true, isVisibleInTranscriptOnly: true }),
+      user("Fix the dinner scene", "2026-09-18T16:00:01Z", { promptSource: "typed" }),
+    ]));
+    expect(readOpeningPrompt(p)).toBe("Fix the dinner scene");
+  });
+
   it("returns null when nothing has been asked yet", () => {
     const p = write("e.jsonl", jsonl([assistant([{ type: "text", text: "booted" }])]));
     expect(readOpeningPrompt(p)).toBeNull();

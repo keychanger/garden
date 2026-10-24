@@ -226,7 +226,9 @@ export function readLatestTranscriptModel(transcriptPath: string): string | unde
 // the very end of the file, and a whole-file parse on every delivery would put
 // transcript-sized work on a path that runs per prompt. Injected system
 // messages (task notifications, slash-command echoes) are skipped — they are
-// user-role records that would otherwise read as "a prompt landed".
+// user-role records that would otherwise read as "a prompt landed". So is a
+// compaction summary: it carries no promptSource, and as the newest user record
+// it hid the prompt it summarized, leaving a truncated landing `pending`.
 export function readLatestPrompt(transcriptPath: string): string | null {
   let raw: string;
   let partialHead = false;
@@ -259,7 +261,7 @@ export function readLatestPrompt(transcriptPath: string): string | null {
       continue;
     }
     if (!obj || typeof obj !== "object" || obj.type !== "user") continue;
-    if (obj.isSidechain === true || obj.isMeta === true) continue;
+    if (obj.isSidechain === true || obj.isMeta === true || obj.isCompactSummary === true) continue;
     const text = userText(obj);
     if (text === null) continue;
     const source = typeof obj.promptSource === "string" ? obj.promptSource : undefined;
@@ -312,7 +314,7 @@ export function readOpeningPrompt(transcriptPath: string): string | null {
       continue;
     }
     if (!obj || typeof obj !== "object" || obj.type !== "user") continue;
-    if (obj.isSidechain === true) continue;
+    if (obj.isSidechain === true || obj.isCompactSummary === true) continue;
     const peer = peerMessageBody(obj);
     if (peer) return peer;
     if (obj.isMeta === true) continue;
