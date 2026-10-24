@@ -431,7 +431,17 @@ const onPromptSubmitted: HookMethod = (ctx) => {
     fields.prState = undefined;
     clearDoneSentinel(ctx.workerInfo.entry.worktreePath);
   }
-  // Clear the human-gate sentinel unconditionally: a worker paused for operator
+  // A turn Claude Code starts itself to deliver a background task's result or
+  // another session's message (a subagent's hand-back included) fires this hook
+  // like a typed prompt, but it does not answer the operator's question. Keep
+  // the gate and the flag, and unstamp the asking turn's end so this turn's
+  // tool calls do not read as the answer either; its Stop stamps it again.
+  if (isHarnessPrompt(ctx.input.prompt)) {
+    if (ctx.workerInfo.entry.blockedTurnEndedAt !== undefined) fields.blockedTurnEndedAt = undefined;
+    applyAndLog(ctx, fields);
+    return;
+  }
+  // Clear the human-gate sentinel whatever the prState: a worker paused for operator
   // input (designer, or any worker using `garden blocked`) holds it while prState is still
   // `working`, so unlike the done-sentinel its clear is not gated on a terminal
   // prState. The operator's prompt is the resume signal.
@@ -450,6 +460,15 @@ const onPromptSubmitted: HookMethod = (ctx) => {
   clearAnsweredBlock(ctx.workerInfo.entry, fields);
   applyAndLog(ctx, fields);
 };
+
+// The frames Claude Code puts on a prompt it submits itself: a background
+// command's, Monitor's or async agent's report, and a message from another
+// session, which is how a subagent's final report arrives. Read off 2.1.280
+// through 2.1.309, whose transcripts record these as system-sourced prompts.
+function isHarnessPrompt(prompt: unknown): boolean {
+  return typeof prompt === "string"
+    && (prompt.startsWith("<task-notification>") || prompt.startsWith("Another Claude session sent a message"));
+}
 
 function clearAnsweredBlock(entry: WorkerEntry, fields: FieldsDelta): void {
   if ((entry.blockedQuestion !== undefined || entry.blockedAt !== undefined)

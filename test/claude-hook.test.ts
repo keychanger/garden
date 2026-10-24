@@ -636,6 +636,86 @@ describe("handleClaudeHook — core events", () => {
     expect(repaints).toBe(1);
   });
 
+  // Claude Code starts a turn on its own when a background command, Monitor or
+  // async agent reports, and fires UserPromptSubmit for it like a typed prompt.
+  // That turn is not the operator's answer: neither its prompt nor its tool
+  // calls may clear the question. The operator's `!` answer after it still does.
+  it("a background task's notification turn leaves a blocked question open", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      blockedQuestion: "Approve the spend?",
+      blockedAt: 123,
+      blockedTurnEndedAt: 456,
+    });
+    setCwd("garden", "bold-ash");
+    const fs = (await import("node:fs")).default;
+    let awaiting = true;
+    vi.mocked(fs.existsSync).mockImplementation(p =>
+      awaiting && String(p).endsWith(".garden-awaiting-input"));
+    vi.mocked(fs.unlinkSync).mockImplementation(p => {
+      if (String(p).endsWith(".garden-awaiting-input")) awaiting = false;
+    });
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation(() => "0" as unknown as Buffer);
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      prompt: "<task-notification>\n<task-id>b7k2</task-id>\n<status>completed</status>\n</task-notification>",
+    }));
+    handleClaudeHook("prompt");
+    expect(entry.agentStatus).toBe("working");
+    expect(entry.blockedQuestion).toBe("Approve the spend?");
+    expect(awaiting).toBe(true);
+
+    handleClaudeHook("posttooluse");
+    expect(entry.blockedQuestion).toBe("Approve the spend?");
+    expect(awaiting).toBe(true);
+
+    handleClaudeHook("stop");
+    expect(entry.blockedTurnEndedAt).toEqual(expect.any(Number));
+
+    handleClaudeHook("posttooluse");
+    expect(entry.blockedQuestion).toBeUndefined();
+    expect(awaiting).toBe(false);
+    vi.mocked(fs.unlinkSync).mockImplementation(() => undefined);
+    vi.mocked(fs.existsSync).mockImplementation(() => false);
+  });
+
+  // An async agent's result arrives framed as a message from another session,
+  // and a peer session's message is framed the same way: neither is the operator.
+  it("a subagent's or peer session's message leaves a blocked question open", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      blockedQuestion: "Approve the spend?",
+      blockedAt: 123,
+      blockedTurnEndedAt: 456,
+    });
+    setCwd("garden", "bold-ash");
+    const fs = (await import("node:fs")).default;
+    let awaiting = true;
+    vi.mocked(fs.existsSync).mockImplementation(p =>
+      awaiting && String(p).endsWith(".garden-awaiting-input"));
+    vi.mocked(fs.unlinkSync).mockImplementation(p => {
+      if (String(p).endsWith(".garden-awaiting-input")) awaiting = false;
+    });
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      prompt: "Another Claude session sent a message:\n<agent-message from=\"a1\">done</agent-message>",
+    }));
+
+    handleClaudeHook("prompt");
+
+    const entry = entries.garden.find(e => e.name === "bold-ash")!;
+    expect(entry.blockedQuestion).toBe("Approve the spend?");
+    expect(entry.blockedTurnEndedAt).toBeUndefined();
+    expect(awaiting).toBe(true);
+    vi.mocked(fs.unlinkSync).mockImplementation(() => undefined);
+    vi.mocked(fs.existsSync).mockImplementation(() => false);
+  });
+
   // The `garden blocked` call is itself a tool call in the turn that asks.
   it("a tool call in the turn that asked keeps the block", async () => {
     seedWorker("garden", "bold-ash", {
