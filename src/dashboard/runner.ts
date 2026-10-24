@@ -144,16 +144,16 @@ export function resolveHookRunner(): string {
 // Node's on-disk V8 compile cache (Node >= 22.1), as a ready-to-prepend shell
 // prefix for the per-tool-call hook command. That hook cold-starts a fresh node
 // process on every fire by every agent; caching the compiled bytecode of the
-// ~120KB hook.js bundle shaves a measured ~8% off each cold start. The dir is
+// ~141KB hook.js bundle shaves a measured ~8% off each cold start. The dir is
 // shared across every worker and project, so the first fire compiles and all
 // later fires across the whole fleet reuse it. It lives in the control tree,
 // not the sandbox-writable ~/.cache: the hook runs unsandboxed, and Node checks
 // an entry only against a keyless CRC32, so a worker able to write the dir
 // could hand that process bytecode of its choosing (a substituted entry was
-// shown to crash it in V8). Node namespaces the dir by engine version+arch and
-// keys entries by source-content hash, so a node upgrade or a hook.js rebuild
-// self-invalidates; an unwritable
-// or unsupported dir is silently ignored (best-effort), so this can never fail a
+// shown to crash it in V8). Node namespaces the dir by engine version+arch,
+// keys entries by the module's file path and discards one whose source CRC32 no
+// longer matches, so a node upgrade or a hook.js rebuild self-invalidates; an
+// unwritable or unsupported dir is silently ignored (best-effort), so this can never fail a
 // hook. Returned already shell-escaped with a trailing space; empty when HOME is
 // unknown. Applied only on the claude-code path (buildSettingsJson), whose hook
 // commands are verified to run through a shell — NOT folded into resolveHookRunner,
