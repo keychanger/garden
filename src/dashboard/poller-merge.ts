@@ -1094,24 +1094,6 @@ export function handleMerged(
 // trigger "merge" is the one-shot call from finalizeMerge; trigger "sweep"
 // is handleMerged replaying the decision on every poke for a worker still
 // parked in `merged`.
-//
-// Per-worker throttle for the "blocked by closed gate" info line: the sweep
-// replays maybeAutoContinue on every poke, so this caps the log at one line per
-// worker per hour instead of one per poke. Cleared when the worker's gate opens
-// again (see below) — a fresh strand after that logs immediately.
-//
-// CAVEAT: the poller's fresh-process-per-poll model empties this Map every
-// poll, so the throttle does not actually fire and the line logs once per
-// poke after all. Log-only; the durable fix is a marker file
-// or an entry field (see WorkerEntry.ciNoRuns).
-const GATE_BLOCK_LOG_WINDOW_MS = 60 * 60 * 1000;
-const gateBlockLoggedAt = new Map<string, number>();
-
-/** Test-only: clear the gate-block log throttle between cases. */
-export function _resetGateBlockThrottleForTest(): void {
-  gateBlockLoggedAt.clear();
-}
-
 function maybeAutoContinue(
   projectName: string,
   branchName: string,
@@ -1128,25 +1110,10 @@ function maybeAutoContinue(
   }
   const gateReason = autoContinueGateReason(projectName, entry.provider, entry.harness);
   if (gateReason) {
-    // The sweep replays this on every poke for each stranded worker, so a raw
-    // info line would flood. Throttle to once per worker per hour (mirrors
-    // addAlert's dedup window) so `garden logs` shows "parked because the gate
-    // is closed" without the per-poke spam that kept this at debug before.
-    const gateKey = `${projectName}/${entry.name}`;
-    const lastLogged = gateBlockLoggedAt.get(gateKey) ?? 0;
-    if (Date.now() - lastLogged >= GATE_BLOCK_LOG_WINDOW_MS) {
-      gateBlockLoggedAt.set(gateKey, Date.now());
-      log.info("poller", "auto-continue blocked by global gate", {
-        worker: entry.name,
-        data: { project: projectName, reason: gateReason, trigger },
-      });
-    }
+    logGateBlock(projectName, entry.name, gateReason, trigger);
     return false;
   }
-  // Gate is open again (or was never closed): drop any throttle record so a
-  // future re-strand logs immediately rather than being suppressed by a stale
-  // timestamp from a previous gate-closure episode.
-  gateBlockLoggedAt.delete(`${projectName}/${entry.name}`);
+  forgetGateBlock(projectName, entry.name);
   // Grow budget check: if iter K just completed and K >= max, the loop is
   // done — budget exhaustion lands on `done`, not `failing`, because grow
   // has no convergence target to fail against. Write the sentinel so any
@@ -1198,6 +1165,67 @@ function maybeAutoContinue(
     dispatchDelayedAutoContinue(resolveGardenRunner(), projectName, entry.name);
   }
   return true;
+}
+
+// The "blocked by global gate" info line, once per worker per hour (addAlert's
+// dedup window) rather than once per poke: the sweep replays maybeAutoContinue
+// on every poke for each stranded worker. A worker whose gate opens again
+// leaves the record, so its next strand logs at once. The record is on disk
+// because each poll is a fresh process; as a module Map it was empty at every
+// poke, and the line logged once per poke after all. It holds one
+// `<worker> <epoch ms>` line per worker logged within the window, and older
+// lines fall away at the next write. No lock, as with the merge-hold record: a
+// project's polls run one at a time, and a record that cannot be read or
+// written only repeats this line or holds it back for the rest of the hour.
+const GATE_BLOCK_LOG_WINDOW_MS = 60 * 60 * 1000;
+
+function gateBlockRecordPath(projectName: string): string {
+  return path.join(CONTROL_DIR, `gate-blocked-${projectName}`);
+}
+
+// When each worker's line was logged, for the lines still inside the window.
+function readGateBlockRecord(projectName: string, now: number): Map<string, number> {
+  const logged = new Map<string, number>();
+  let text = "";
+  try {
+    text = fs.readFileSync(gateBlockRecordPath(projectName), "utf-8");
+  } catch {
+    // Nothing logged yet.
+  }
+  for (const line of text.split("\n")) {
+    const space = line.lastIndexOf(" ");
+    const at = Number(line.slice(space + 1));
+    const age = now - at;
+    if (space > 0 && age >= 0 && age < GATE_BLOCK_LOG_WINDOW_MS) logged.set(line.slice(0, space), at);
+  }
+  return logged;
+}
+
+function writeGateBlockRecord(projectName: string, logged: Map<string, number>): void {
+  const record = gateBlockRecordPath(projectName);
+  try {
+    if (logged.size === 0) fs.rmSync(record, { force: true });
+    else atomicWriteFile(record, [...logged].map(([worker, at]) => `${worker} ${at}`).join("\n"), { durable: false });
+  } catch {
+    // A repeated or held-back line at worst (see above).
+  }
+}
+
+function logGateBlock(projectName: string, workerName: string, reason: string, trigger: "merge" | "sweep"): void {
+  const now = Date.now();
+  const logged = readGateBlockRecord(projectName, now);
+  if (logged.has(workerName)) return;
+  log.info("poller", "auto-continue blocked by global gate", {
+    worker: workerName,
+    data: { project: projectName, reason, trigger },
+  });
+  logged.set(workerName, now);
+  writeGateBlockRecord(projectName, logged);
+}
+
+function forgetGateBlock(projectName: string, workerName: string): void {
+  const logged = readGateBlockRecord(projectName, Date.now());
+  if (logged.delete(workerName)) writeGateBlockRecord(projectName, logged);
 }
 
 function autoContinueSkipReason(

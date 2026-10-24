@@ -26,7 +26,7 @@ vi.mock("node:child_process", () => ({
 // being on disk rather than in a module Map.
 const fsMtimes = vi.hoisted(() => new Map<string, number>());
 // Contents too, for the state a poll reads back from disk (the base checkout's
-// last fast-forward outcome).
+// last fast-forward outcome, the gate-block log record).
 const fsContents = vi.hoisted(() => new Map<string, string>());
 
 vi.mock("node:fs", () => ({
@@ -330,9 +330,7 @@ import path from "node:path";
 import {
   ensureProjectPoller, poll, postPush, restartLongLivedPollers, startProjectPoller, stopProjectPoller,
 } from "../src/dashboard/poller.js";
-import {
-  __simulatePollerRestartForTest, _resetGateBlockThrottleForTest,
-} from "../src/dashboard/poller-merge.js";
+import { __simulatePollerRestartForTest } from "../src/dashboard/poller-merge.js";
 import { tryGetProject, getAutoContinueConfig, getMaxConcurrentReviews, workerUsageGateExempt } from "../src/config.js";
 import { updateWorkerFields, findWorkerByName } from "../src/dashboard/registry.js";
 import {
@@ -6588,7 +6586,6 @@ describe("poll — merged state", () => {
     vi.mocked(getAutoContinueConfig).mockReturnValue({
       enabled: true, usageThreshold: 95, resumeAfterReset: false,
     });
-    _resetGateBlockThrottleForTest();
   });
 
   function strandedWorker(overrides: Partial<WorkerEntry> = {}) {
@@ -6642,6 +6639,35 @@ describe("poll — merged state", () => {
     );
     expect(infoBlocks).toHaveLength(1);
     expect(infoBlocks[0][2]).toMatchObject({ data: { reason: "usage-paused" } });
+  });
+
+  // Each poll is a fresh process, so the throttle has to come back from disk:
+  // these stamps were written by an earlier poll, not by this process.
+  it("throttles the gate-closed line from the record earlier polls left on disk", () => {
+    vi.mocked(getAutoContinueConfig).mockReturnValue({
+      enabled: false, usageThreshold: 95, resumeAfterReset: false,
+      pausedUntil: "2099-01-01T00:00:00Z", pausedReason: "5h at 100%",
+    });
+    registryMock._setEntries("myproject", [
+      strandedWorker(),
+      strandedWorker({ name: "calm-bay", worktreePath: "/tmp/wt/myproject/calm-bay", branchName: "calm-bay" }),
+    ]);
+    const record = path.join(CONTROL_DIR, "gate-blocked-myproject");
+    const minutesAgo = (m: number) => Date.now() - m * 60_000;
+    fsContents.set(record, `bold-ash ${minutesAgo(30)}\ncalm-bay ${minutesAgo(61)}`);
+
+    poll("myproject");
+
+    const logged = vi.mocked(log.info).mock.calls
+      .filter(c => c[1] === "auto-continue blocked by global gate")
+      .map(c => c[2]?.worker);
+    expect(logged).toEqual(["calm-bay"]);
+    const stamps = new Map(fsContents.get(record)!.split("\n").map(line => {
+      const [worker, at] = line.split(" ");
+      return [worker, Number(at)] as const;
+    }));
+    expect(stamps.get("bold-ash")).toBeLessThan(minutesAgo(29));
+    expect(stamps.get("calm-bay")).toBeGreaterThan(minutesAgo(1));
   });
 
   it("sweep auto-continues a Codex worker through a usage pause", () => {
