@@ -111,6 +111,7 @@ vi.mock("../src/dashboard/registry.js", () => {
       },
     ),
     batchUpdateWorkerFields: vi.fn(),
+    isDelegating: vi.fn(() => false),
   };
 });
 
@@ -1155,6 +1156,173 @@ describe("handleClaudeHook — session id capture (self-assigning harness)", () 
     handleClaudeHook("posttooluse");
     const entry = entries["garden"]?.find(e => e.name === "bold-ash");
     expect(entry?.sessionId).toBe("claude-uuid");
+  });
+});
+
+// Hooks reach a worker by cwd alone, and other sessions fire them from its
+// worktree. Codex runs a `/side` conversation as its own thread inside the
+// worker's process, with its own session id: on burnt-mild-reed (2026-09-22)
+// the side thread's start, prompt and Stop moved the worker to ready, working
+// and idle while its own thread sat mid-turn, and tight-shrewd-drift
+// (2026-09-17) showed the same with a `startup` source.
+describe("handleClaudeHook — events from another session in the worktree", () => {
+  async function fire(event: string, input: Record<string, unknown>) {
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.readFileSync).mockReturnValueOnce(JSON.stringify(input));
+    handleClaudeHook(event);
+  }
+
+  function worker() {
+    return entries.garden.find(e => e.name === "bold-ash")!;
+  }
+
+  it("a side thread's Stop leaves the worker working and arms no review", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working", sessionId: "main-thread", worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+    const { execFileSync } = await import("node:child_process");
+    vi.mocked(execFileSync).mockImplementation((...args: unknown[]) => {
+      const argv = gitSubcommandArgs(args[1] as string[] | undefined);
+      if (argv?.[0] === "rev-list") return "1" as unknown as Buffer;
+      return "" as unknown as Buffer;
+    });
+
+    await fire("stop", { session_id: "side-thread", hook_event_name: "Stop" });
+
+    expect(worker().agentStatus).toBe("working");
+    expect(worker().pendingReviewAt).toBeUndefined();
+  });
+
+  // A session naming a transcript of its own can be the pane's own
+  // conversation after a switch whose start never arrived. Dropping its
+  // events would freeze the row at its pre-switch status.
+  it("takes a turn end from a session that names its own transcript, even unadopted", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "working", sessionId: "old-session", worktreePath: "/tmp/wt/garden/bold-ash",
+    });
+    setCwd("garden", "bold-ash");
+
+    await fire("stop", {
+      session_id: "new-session", transcript_path: "/p/new-session.jsonl", hook_event_name: "Stop",
+    });
+
+    expect(worker().agentStatus).toBe("idle");
+  });
+
+  it("a side thread's prompt keeps the worker's terminal state, gates and question", async () => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle",
+      sessionId: "main-thread",
+      prState: "done",
+      worktreePath: "/tmp/wt/garden/bold-ash",
+      blockedQuestion: "Ship it?",
+      blockedAt: 123,
+      continueSentAt: 456,
+    });
+    setCwd("garden", "bold-ash");
+    const fs = (await import("node:fs")).default;
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    await fire("prompt", { session_id: "side-thread", prompt: "Why is this so slow?" });
+
+    expect(worker().agentStatus).toBe("idle");
+    expect(worker().prState).toBe("done");
+    expect(worker().blockedQuestion).toBe("Ship it?");
+    expect(worker().continueSentAt).toBe(456);
+    expect(fs.unlinkSync).not.toHaveBeenCalled();
+  });
+
+  // Codex 0.163 relays a spawned subagent's task message as UserPromptSubmit
+  // carrying agent_id and the root session's id.
+  it("a subagent's prompt is not the operator's", async () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "idle", sessionId: "main-thread", prState: "merged" });
+    setCwd("garden", "bold-ash");
+
+    await fire("prompt", { session_id: "main-thread", agent_id: "agent-1", prompt: "audit the fixtures" });
+
+    expect(worker().agentStatus).toBe("idle");
+    expect(worker().prState).toBe("merged");
+  });
+
+  // A side thread is ephemeral, so no transcript is named for it; and a
+  // compaction is a session continuing, never the pane switching to it.
+  it.each([
+    ["fork", null],
+    ["startup", null],
+    ["fork", "/s/rollout-2026-09-21T14-28-31-main-thread.jsonl"],
+    ["compact", "/p/side-thread.jsonl"],
+  ])("a side thread's %s session start never returns the worker to ready (transcript %s)",
+    async (source, transcript) => {
+      seedWorker("garden", "bold-ash", { agentStatus: "working", sessionId: "main-thread" });
+      setCwd("garden", "bold-ash");
+
+      await fire("sessionstart", { session_id: "side-thread", source, transcript_path: transcript });
+
+      expect(worker().agentStatus).toBe("working");
+      expect(worker().sessionId).toBe("main-thread");
+    });
+
+  it("a side thread's tool call reads as background work, not the worker resuming", async () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "idle", sessionId: "main-thread" });
+    setCwd("garden", "bold-ash");
+
+    await fire("posttooluse", { session_id: "side-thread", tool_name: "Read" });
+
+    expect(worker().agentStatus).toBe("idle");
+    expect(typeof worker().subagentActivityAt).toBe("number");
+  });
+
+  it("a side thread's permission request does not flag the worker as asking", async () => {
+    seedWorker("garden", "bold-ash", { agentStatus: "working", sessionId: "main-thread" });
+    setCwd("garden", "bold-ash");
+
+    await fire("pretooluse", { session_id: "side-thread", hook_event_name: "PermissionRequest", tool_name: "Bash" });
+
+    expect(worker().agentStatus).toBe("working");
+  });
+
+  // The pane's own conversation can change under it: `/clear` and `/resume`,
+  // and Claude Code's `/branch` (which starts the branch with a `fork` source),
+  // switch it in place. Every later event carries the new id, so a start that
+  // reports a transcript named for it is adopted.
+  it.each([
+    ["clear", "/p/new-session.jsonl", "ready"],
+    ["fork", "/p/new-session.jsonl", undefined],
+    ["resume", "/s/rollout-2026-10-01T10-00-00-new-session.jsonl", "idle"],
+  ])("adopts the session the pane switched to with a %s start", async (source, transcript, status) => {
+    seedWorker("garden", "bold-ash", {
+      agentStatus: "idle", sessionId: "old-session", transcriptPath: "/p/old-session.jsonl",
+    });
+    setCwd("garden", "bold-ash");
+
+    await fire("sessionstart", { session_id: "new-session", source, transcript_path: transcript });
+
+    expect(worker().sessionId).toBe("new-session");
+    expect(worker().transcriptPath).toBe(transcript);
+    if (status) expect(worker().agentStatus).toBe(status);
+
+    await fire("prompt", { session_id: "new-session" });
+    expect(worker().agentStatus).toBe("working");
+  });
+
+  // A resume start preserves agentStatus, and a Codex worker writes no
+  // background-task baseline, so nothing else lifts the heartbeat throttle.
+  it("adopts a Codex /resume switch that lands inside the heartbeat window", async () => {
+    seedWorker("garden", "bold-ash", {
+      harness: "codex",
+      task: "D1 SOXS historical fault analysis",
+      agentStatus: "idle",
+      sessionId: "old-thread",
+      lastEventAt: Date.now(),
+    });
+    setCwd("garden", "bold-ash");
+    const transcript = "/s/rollout-2026-10-01T10-00-00-new-thread.jsonl";
+
+    await fire("sessionstart", { session_id: "new-thread", source: "resume", transcript_path: transcript });
+
+    expect(worker().sessionId).toBe("new-thread");
+    expect(worker().transcriptPath).toBe(transcript);
   });
 });
 

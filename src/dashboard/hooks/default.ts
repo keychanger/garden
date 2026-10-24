@@ -287,7 +287,9 @@ function applyAndLog(
   // must land even inside the heartbeat window: a bounce mid-turn arrives within
   // seconds of the last tool event, and a dropped reset lets the next Stop scan
   // revive launches the dead process made — with no freshness window to decay.
-  const backgroundReset = "backgroundTasks" in fields;
+  // So must a session the pane switched to (onSessionStart): every later
+  // event's ownership check reads it, and a Codex resume carries no reset.
+  const backgroundReset = "backgroundTasks" in fields || "sessionId" in fields;
   if (!stateChanged && !blockCleared && !activityUnset && !delegatingChanged && !backgroundReset
       && now - (ctx.workerInfo.entry.lastEventAt ?? 0) < HOOK_HEARTBEAT_MS) {
     return;
@@ -307,22 +309,18 @@ function applyAndLog(
   // their events carry the SUBAGENT's rollout path — capturing it pointed the
   // history view, readActivity, and the asking/turn-end reconciler at a side
   // thread instead of the worker's conversation. Both harnesses embed the
-  // session id in the transcript filename (claude `<id>.jsonl`, codex
-  // `rollout-<ts>-<id>.jsonl`), so a path that doesn't name the worker's own
-  // session belongs to some other thread and is skipped. With no session id
-  // known yet, validate against the id from this payload when present; that
-  // is also the id captured below.
+  // session id in the transcript filename (transcriptNamesSession), so a path
+  // that doesn't name the worker's own session belongs to some other thread
+  // and is skipped. With no session id known yet, validate against the id from
+  // this payload when present; that is also the id captured below. A session
+  // the pane switched to (onSessionStart) is validated as the worker's own.
   const tp = ctx.input.transcript_path;
-  const ownSession = ctx.workerInfo.entry.sessionId;
+  const ownSession = fields.sessionId ?? ctx.workerInfo.entry.sessionId;
   const reportedSession = typeof ctx.input.session_id === "string"
     ? ctx.input.session_id
     : "";
   const transcriptSession = ownSession || reportedSession;
-  const transcriptName = typeof tp === "string" ? path.basename(tp) : "";
-  const ownsTranscript = !transcriptSession
-    || transcriptName === `${transcriptSession}.jsonl`
-    || (transcriptName.startsWith("rollout-")
-      && transcriptName.endsWith(`-${transcriptSession}.jsonl`));
+  const ownsTranscript = !transcriptSession || transcriptNamesSession(tp, transcriptSession);
   if (typeof tp === "string" && tp && tp !== ctx.workerInfo.entry.transcriptPath
       && ownsTranscript) {
     fields.transcriptPath = tp;
@@ -384,6 +382,37 @@ function applyAndLog(
   if (stateChanged || blockCleared || taskChanged || delegatingChanged) refreshDashboard();
 }
 
+// Both harnesses embed the session id in the transcript filename: claude
+// `<id>.jsonl`, codex `rollout-<ts>-<id>.jsonl`.
+function transcriptNamesSession(tp: unknown, sessionId: string): boolean {
+  const name = typeof tp === "string" ? path.basename(tp) : "";
+  return name === `${sessionId}.jsonl`
+    || (name.startsWith("rollout-") && name.endsWith(`-${sessionId}.jsonl`));
+}
+
+// Hooks reach a worker by cwd alone, so every session firing garden's hooks
+// in its worktree arrives here. Codex runs a `/side` conversation as its own
+// thread inside the worker's process, with its own session id and no rollout;
+// its start, prompt and Stop moved the worker while the worker's own thread
+// was mid-turn. A session naming a transcript of its own is not judged
+// foreign: it can be the pane's own conversation after a switch whose start
+// was missed, and ignoring it would freeze the row. A Codex worker's id is
+// unset until its first hook captures it.
+function isForeignSession(ctx: HookContext): boolean {
+  const own = ctx.workerInfo!.entry.sessionId;
+  const sid = ctx.input.session_id;
+  return !!own && typeof sid === "string" && sid !== "" && sid !== own
+    && !transcriptNamesSession(ctx.input.transcript_path, sid);
+}
+
+// The only trace of an event the worker's row did not take.
+function ignoreOtherThread(ctx: HookContext): void {
+  log.info("hook", "ignored a hook event from another thread", {
+    worker: ctx.workerInfo!.name,
+    data: { project: ctx.workerInfo!.project, event: ctx.event, session: ctx.input.session_id },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Hook handlers
 // ---------------------------------------------------------------------------
@@ -392,6 +421,17 @@ const onSessionStart: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
   const fields: FieldsDelta = {};
   const source = typeof ctx.input.source === "string" ? ctx.input.source : "";
+  if (isForeignSession(ctx)) return ignoreOtherThread(ctx);
+  // Any other start in a session other than the recorded one names a
+  // transcript of its own: the pane switched conversations in place (`/clear`,
+  // `/resume`, Claude Code's `/branch`, which reports a `fork` source), and
+  // every later event carries its id, so adopt it. A compaction continues a
+  // session rather than switching to one.
+  const sid = ctx.input.session_id;
+  const own = ctx.workerInfo.entry.sessionId;
+  if (source !== "compact" && own && typeof sid === "string" && sid && sid !== own) {
+    fields.sessionId = sid;
+  }
   if (source === "resume" || source === "compact") {
     // A resumed or auto-compacted session has already received input, so per
     // STATUS.md it must NEVER return to the one-time "ready" state. On a rebuild
@@ -418,6 +458,9 @@ const onSessionStart: HookMethod = (ctx) => {
 
 const onPromptSubmitted: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
+  // A side thread's prompt (or a Codex subagent's task message) reached that
+  // thread, not the worker: its gates, question and terminal state stand.
+  if (isOtherThread(ctx)) return ignoreOtherThread(ctx);
   // A landed prompt (garden's own or the operator's) means the input box was
   // submitted or superseded — clear the garden-paste marker so a later draft
   // can't be misread as garden's stuck paste (continue.ts isOwnStuckPaste).
@@ -483,6 +526,9 @@ function clearAnsweredBlock(entry: WorkerEntry, fields: FieldsDelta): void {
 
 const onTurnEnded: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
+  // Another thread finishing says nothing about the worker's own turn, which
+  // may still be running: no idle, no review, no callbacks pasted mid-turn.
+  if (isOtherThread(ctx)) return ignoreOtherThread(ctx);
   if (ctx.input.hook_event_name === "StopFailure") {
     log.info("hook", "turn ended on an API error", {
       worker: ctx.workerInfo.name,
@@ -526,6 +572,9 @@ function claudeTranscriptPath(ctx: HookContext): string | undefined {
 // ExitPlanMode) — the two wire events signal the same condition.
 const onBlockedOnOperator: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
+  // A subagent's request still blocks the worker (isOtherThread's note);
+  // another session's blocks only that session.
+  if (isForeignSession(ctx)) return ignoreOtherThread(ctx);
   const fields = midTurnAskingFields(ctx);
   applyAndLog(ctx, fields);
   // applyAndLog stamps lastStateChangeAt onto `fields` when it raised asking;
@@ -562,10 +611,11 @@ const onToolActivity: HookMethod = (ctx) => {
   // false `working` after Stop (which defers the merge gate via
   // isWorkerClaudeWorking). Only agent_id separates the two: session_id and
   // transcript_path are byte-identical on both, so the transcript-ownership
-  // guard in applyAndLog cannot see this.
+  // guard in applyAndLog cannot see this. Another session's tool calls are
+  // read the same way (isForeignSession).
   const fields: FieldsDelta = {};
   const cs = ctx.workerInfo.entry.agentStatus;
-  if (!isSubagentEvent(ctx)) {
+  if (!isOtherThread(ctx)) {
     if (cs === "asking" || cs === "idle") fields.agentStatus = "working";
     // The worker is running again after the turn that asked had ended, so it
     // has its answer. Not every answer arrives as a prompt: a `!` shell command
@@ -592,14 +642,15 @@ const onToolActivity: HookMethod = (ctx) => {
   markReviewInterrupted(ctx);
 };
 
-// True when this tool event came from a subagent rather than the worker's main
-// conversation thread. `agent_id` is documented as present only on subagent
-// tool events; the raising side (onBlockedOnOperator) deliberately does not
-// consult it, since a subagent's permission request blocks the operator just
-// as a main-thread one does — raising the flag on either is right, clearing it
-// on unrelated activity is not.
-function isSubagentEvent(ctx: HookContext): boolean {
-  return typeof ctx.input.agent_id === "string" && ctx.input.agent_id.length > 0;
+// True when this event came from a subagent or another session rather than
+// the worker's main conversation thread. `agent_id` is documented as present
+// only on subagent tool events; the raising side (onBlockedOnOperator)
+// deliberately does not consult it, since a subagent's permission request
+// blocks the operator just as a main-thread one does — raising the flag on
+// either is right, clearing it on unrelated activity is not.
+function isOtherThread(ctx: HookContext): boolean {
+  return (typeof ctx.input.agent_id === "string" && ctx.input.agent_id.length > 0)
+    || isForeignSession(ctx);
 }
 
 // Tools that rewrite the worktree, from any thread.
@@ -615,7 +666,7 @@ const MUTATING_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 // mostly read, so their Bash calls are left alone.
 function mutatesWorktree(ctx: HookContext, toolName: string): boolean {
   if (MUTATING_TOOLS.has(toolName)) return true;
-  return toolName === "Bash" && !isSubagentEvent(ctx) && !bashLeftTreeUnchanged(ctx);
+  return toolName === "Bash" && !isOtherThread(ctx) && !bashLeftTreeUnchanged(ctx);
 }
 
 // HEAD, every changed path's index state, and the mtime and size of each
@@ -650,7 +701,7 @@ function toolUseId(ctx: HookContext): string | null {
 // command starts so its PostToolUse can tell whether the command wrote.
 // Keyed by tool_use_id because the worker can run Bash calls in parallel.
 const onToolStarting: HookMethod = (ctx) => {
-  if (!ctx.workerInfo || isSubagentEvent(ctx)) return;
+  if (!ctx.workerInfo || isOtherThread(ctx)) return;
   const { project, name, entry } = ctx.workerInfo;
   if (entry.prState !== "reviewing" || entry.reviewInterruptedAt || !entry.worktreePath) return;
   const id = toolUseId(ctx);
