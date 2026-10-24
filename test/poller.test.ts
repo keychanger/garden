@@ -4940,6 +4940,28 @@ describe("poll — resolving state", () => {
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
   });
 
+  // The resolver rebases the worker's own worktree. An edit the prompted
+  // worker makes meanwhile (marked by the hook) must not ride the verified
+  // result into the merge: the resolver finishes, and the merge queue sends
+  // the worker back through review instead of merging.
+  it("sends a worker that edited during resolution back to review after the resolver finishes", () => {
+    setupResolver({ reviewInterruptedAt: Date.now() });
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-rebase-sha");
+    vi.mocked(isAncestor).mockImplementation((_wt, _ancestor, descendant) =>
+      descendant === "post-rebase-sha");
+    vi.mocked(hasRebaseInProgress).mockReturnValue(false);
+
+    poll("myproject");
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("merge-pending");
+
+    poll("myproject");
+
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({
+      prState: "working", pendingReviewAt: expect.any(Number), reviewInterruptedAt: undefined,
+    });
+  });
+
   it("re-arms and alerts (does not silently strand) when force-push fails after resolve", () => {
     setupResolver();
     vi.mocked(getBranchHeadSha).mockReturnValue("post-rebase-sha"); // differs from preResolveSha
@@ -5222,6 +5244,25 @@ describe("poll — ci-fixing state", () => {
     expect(successAlert).toBeUndefined();
     expect(log.info).toHaveBeenCalledWith("poller", "ci-fix pushed", expect.anything());
     expect(scheduleDelayedPoke).toHaveBeenCalledWith("myproject", 0);
+  });
+
+  // The ci-fix agent pushes the worktree's HEAD. A worker edit made while it
+  // ran (marked by the hook) must not merge on the strength of the agent's
+  // verified push: the merge queue sends the worker back through review.
+  it("sends a worker that edited during the ci-fix run back to review instead of merging", () => {
+    setupCiFix({ reviewInterruptedAt: Date.now() });
+    vi.mocked(getBranchHeadSha).mockReturnValue("post-fix-sha");
+    vi.mocked(getRemoteTrackingSha).mockReturnValue("post-fix-sha");
+
+    poll("myproject");
+    expect(findWorkerByName("myproject", "bold-ash")?.prState).toBe("merge-pending");
+
+    poll("myproject");
+
+    expect(mergeToBase).not.toHaveBeenCalled();
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({
+      prState: "working", pendingReviewAt: expect.any(Number), reviewInterruptedAt: undefined,
+    });
   });
 
   it("retries when FIXED but no push happened (HEAD did not advance)", () => {

@@ -1,8 +1,8 @@
 // The mid-review-edit marker: onToolActivity stamps reviewInterruptedAt when a
 // mutating tool completes while the worker's review is in flight (the poller
 // then cancels the pass — see poller.test.ts "cancels the in-flight review").
-// These tests pin the hook-side trigger conditions: mutating tools only,
-// reviewing state only, stamped once.
+// These tests pin the hook-side trigger conditions: mutating tools only, the
+// review, repair and merge-pending states only, stamped once.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
@@ -144,11 +144,20 @@ describe("onToolActivity — mid-review-edit marker", () => {
     expect(interruptStamps()).toHaveLength(0);
   });
 
-  it("ignores mutating tools outside review and merge-pending", () => {
-    for (const prState of [undefined, "working", "resolving", "ci-fixing", "merged", "done"] as const) {
+  it("ignores mutating tools outside the review, repair and merge states", () => {
+    for (const prState of [undefined, "working", "merged", "done", "failing"] as const) {
       workerHookHandlers.onToolActivity(toolCtx({ prState }, "Edit"));
     }
     expect(interruptStamps()).toHaveLength(0);
+  });
+
+  // The resolver rebases and the CI-fix agent commits and pushes in the same
+  // worktree. An edit the prompted worker makes meanwhile is folded into what
+  // they verify, and merges with no review.
+  it.each(["resolving", "ci-fixing"] as const)("stamps a mutating tool while %s", prState => {
+    workerHookHandlers.onToolActivity(toolCtx({ prState }, "Edit"));
+    expect(interruptStamps()).toHaveLength(1);
+    expect(triggerProjectPoll).toHaveBeenCalledWith("myproject");
   });
 
   // After the verdict the merge queue rebases and pushes the tree it cleared,

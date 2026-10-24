@@ -698,14 +698,15 @@ function toolUseId(ctx: HookContext): string | null {
 }
 
 // From the review's launch until its verdict merges: the reviewer certifies
-// the tree, and the merge queue then rebases and pushes it.
+// the tree, a resolver or CI-fix agent on the way rebases or pushes it, and
+// the merge queue then rebases and pushes it.
 function editsWatched(prState: WorkerEntry["prState"]): boolean {
-  return prState === "reviewing" || prState === "merge-pending";
+  return prState === "reviewing" || prState === "merge-pending"
+    || prState === "resolving" || prState === "ci-fixing";
 }
 
-// PreToolUse for Bash: while a review is in flight or its verdict waits to
-// merge, record the tree as the command starts so its PostToolUse can tell
-// whether the command wrote.
+// PreToolUse for Bash: while edits are watched (editsWatched), record the tree
+// as the command starts so its PostToolUse can tell whether the command wrote.
 // Keyed by tool_use_id because the worker can run Bash calls in parallel.
 const onToolStarting: HookMethod = (ctx) => {
   if (!ctx.workerInfo || isOtherThread(ctx)) return;
