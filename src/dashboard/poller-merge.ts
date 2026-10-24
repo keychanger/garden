@@ -27,6 +27,7 @@ import {
 } from "./git.js";
 import { remoteBranchRef } from "./git-refs.js";
 import { gitTimedOut } from "./git-exec.js";
+import { discardedChangesPath } from "./headless-paths.js";
 import { refreshDashboard, setupStatusBar } from "./header.js";
 import { setupKeybindings } from "./hotkeys.js";
 import { log } from "./log.js";
@@ -1275,13 +1276,15 @@ function revertPostMergeChurn(
   dirtyBefore: ReadonlySet<string>,
 ): void {
   try {
-    const reverted = revertChurn(projectPath, dirtyBefore);
+    const patch = discardedChangesPath(projectName);
+    const reverted = revertChurn(projectPath, dirtyBefore, patch);
     if (reverted.length === 0) return;
     log.info("poller", "reverted postMerge working-tree churn", {
       data: {
         project: projectName,
         files: reverted.length,
         paths: reverted.slice(0, 5).join(", "),
+        patch,
       },
     });
   } catch (err) {

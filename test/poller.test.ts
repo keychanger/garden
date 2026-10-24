@@ -3950,6 +3950,7 @@ describe("poll — merge-pending state", () => {
     expect(revertChurn).toHaveBeenCalledWith(
       "/repo/myproject",
       new Set(["src/in-flight.ts"]),
+      expect.stringMatching(/control\/reports\/discarded-myproject-.*\.patch$/),
     );
   });
 
@@ -5756,6 +5757,25 @@ describe("poll — worker with no worktree on record", () => {
     expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
       level: "warn", worker: "bold-ash", dedupKey: "worktree-missing:myproject:bold-ash",
     }));
+  });
+
+  // The resume check read the project checkout's HEAD, which fastForwardBase
+  // keeps at origin/<base>, so it looked like a merge that had already landed:
+  // the worker's unmerged branch was deleted from origin and recorded merged.
+  it("does not finalize a merge-pending worker as merged from the project checkout's HEAD", () => {
+    registryMock._setEntries("myproject", [
+      makeWorker({
+        prState: "merge-pending", worktreePath: undefined,
+        mergePendingAt: new Date(Date.now() - 1000).toISOString(),
+      }),
+    ]);
+    vi.mocked(isAncestor).mockReturnValue(true);
+
+    poll("myproject");
+
+    expect(deleteRemoteBranch).not.toHaveBeenCalled();
+    expect(findWorkerByName("myproject", "bold-ash")).toMatchObject({ prState: "merge-pending" });
+    expect(findWorkerByName("myproject", "bold-ash")?.mergeCount).toBeUndefined();
   });
 
   it("does not launch a reviewer in the project checkout", () => {

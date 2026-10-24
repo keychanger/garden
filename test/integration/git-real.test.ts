@@ -1,8 +1,23 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { useGitTmpHome } from "./helpers.js";
+
+// Runs after each git command garden's helpers issue, so a test can land an
+// edit in the window between a check and the command that acts on it.
+const afterGit = vi.hoisted(() => ({ hook: undefined as undefined | ((args: readonly string[]) => void) }));
+vi.mock("../../src/dashboard/git-exec.js", async importOriginal => {
+  const actual = await importOriginal<typeof import("../../src/dashboard/git-exec.js")>();
+  return {
+    ...actual,
+    runGit: (...call: Parameters<typeof actual.runGit>) => {
+      const out = actual.runGit(...call);
+      afterGit.hook?.(call[1]);
+      return out;
+    },
+  };
+});
 
 const env = useGitTmpHome();
 
@@ -15,6 +30,7 @@ function git(cwd: string, ...args: string[]): string {
 let originPath: string;
 
 beforeEach(() => {
+  afterGit.hook = undefined;
   originPath = path.join(env.home, "origin.git");
   spawnSync("git", ["init", "--bare", "-b", "main", originPath], { stdio: "ignore" });
   git(env.repoPath, "remote", "add", "origin", originPath);
@@ -550,6 +566,31 @@ describe("postMerge churn revert (real git)", () => {
       .toBe("operator work in progress\n");
   });
 
+  // A file the operator saves while the hook runs is indistinguishable from
+  // the hook's own churn, so the revert has to leave a way back.
+  it("saves what it reverts as a patch that restores it", async () => {
+    const { listModifiedTrackedFiles, revertChurn } = await import("../../src/dashboard/git.js");
+    const before = new Set(listModifiedTrackedFiles(env.repoPath));
+    fs.writeFileSync(path.join(env.repoPath, "README.md"), "saved while the hook ran\n");
+    const patch = path.join(env.gardenDir, "control", "reports", "discarded-repo-test.patch");
+
+    expect(revertChurn(env.repoPath, before, patch)).toEqual(["README.md"]);
+
+    git(env.repoPath, "apply", patch);
+    expect(fs.readFileSync(path.join(env.repoPath, "README.md"), "utf8")).toBe("saved while the hook ran\n");
+  });
+
+  it("reverts nothing it could not save", async () => {
+    const { listModifiedTrackedFiles, revertChurn } = await import("../../src/dashboard/git.js");
+    const before = new Set(listModifiedTrackedFiles(env.repoPath));
+    fs.writeFileSync(path.join(env.repoPath, "README.md"), "saved while the hook ran\n");
+    // A file stands where the patch's directory would go.
+    const patch = path.join(env.repoPath, "README.md", "discarded.patch");
+
+    expect(revertChurn(env.repoPath, before, patch)).toEqual([]);
+    expect(fs.readFileSync(path.join(env.repoPath, "README.md"), "utf8")).toBe("saved while the hook ran\n");
+  });
+
   it("never touches untracked files", async () => {
     const { listModifiedTrackedFiles, revertChurn } = await import("../../src/dashboard/git.js");
     const before = new Set(listModifiedTrackedFiles(env.repoPath));
@@ -646,6 +687,135 @@ describe("postMerge churn revert (real git)", () => {
     const result = fastForwardBase(env.repoPath, "main");
     if (!result.ok && result.reason === "dirty") expect(result.behind).toBe(0);
     else expect(result.ok).toBe(true);
+  });
+});
+
+// The merge queue cleans a worker's worktree before it rebases. What is there
+// is normally the reviewer's leftovers, but an edit the worker made through a
+// channel no hook reports (a `!` shell command, the operator's editor, a
+// background command) looks the same, and `git checkout -- .` keeps no copy.
+describe("cleanWorktree (real git)", () => {
+  function reports(): string[] {
+    const dir = path.join(env.gardenDir, "control", "reports");
+    return fs.existsSync(dir) ? fs.readdirSync(dir).filter(name => name.endsWith(".patch")) : [];
+  }
+
+  it("saves what it discards as a patch that restores it", async () => {
+    const { createWorktree, cleanWorktree } = await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "clean");
+    createWorktree(env.repoPath, wt, "clean-branch");
+    fs.writeFileSync(path.join(wt, "README.md"), "edited from a ! shell command\n");
+
+    cleanWorktree(wt, { project: "repo", worker: "clean-branch" });
+
+    expect(fs.readFileSync(path.join(wt, "README.md"), "utf8")).toBe("# test\n");
+    const saved = reports();
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toMatch(/^discarded-repo-clean-branch-/);
+    git(wt, "apply", path.join(env.gardenDir, "control", "reports", saved[0]));
+    expect(fs.readFileSync(path.join(wt, "README.md"), "utf8")).toBe("edited from a ! shell command\n");
+  });
+
+  // A hook that rewrites a lockfile on every merge saves a patch each time.
+  it("deletes saved patches older than two weeks, and nothing else", async () => {
+    const { createWorktree, cleanWorktree } = await import("../../src/dashboard/git.js");
+    const dir = path.join(env.gardenDir, "control", "reports");
+    fs.mkdirSync(dir, { recursive: true });
+    const stale = path.join(dir, "discarded-repo-old-2026-01-01T00-00-00-000Z.patch");
+    const notes = path.join(dir, "review-notes-repo.jsonl");
+    for (const file of [stale, notes]) {
+      fs.writeFileSync(file, "old\n");
+      const old = new Date(Date.now() - 15 * 24 * 60 * 60 * 1000);
+      fs.utimesSync(file, old, old);
+    }
+    const wt = path.join(env.home, "wt", "prune");
+    createWorktree(env.repoPath, wt, "prune-branch");
+    fs.writeFileSync(path.join(wt, "README.md"), "reviewer churn\n");
+
+    cleanWorktree(wt, { project: "repo", worker: "prune-branch" });
+
+    expect(fs.existsSync(stale)).toBe(false);
+    expect(fs.existsSync(notes)).toBe(true);
+    expect(reports()).toEqual([expect.stringMatching(/^discarded-repo-prune-branch-/)]);
+  });
+
+  it("writes nothing when there is nothing to discard", async () => {
+    const { createWorktree, cleanWorktree } = await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "clean-tree");
+    createWorktree(env.repoPath, wt, "clean-tree-branch");
+
+    cleanWorktree(wt, { project: "repo", worker: "clean-tree-branch" });
+
+    expect(reports()).toEqual([]);
+  });
+});
+
+// Both resets ran after a clean-tree check, and `reset --hard` overwrites
+// whatever changed in between. `reset --keep` gives the same result on a clean
+// tree and refuses rather than overwrite a locally modified file.
+describe("an edit landing between the clean-tree check and the reset (real git)", () => {
+  it("survives fastForwardBase's auto-heal of a redundant local commit", async () => {
+    const { fastForwardBase } = await import("../../src/dashboard/git.js");
+    // origin and the checkout carry the same change as different commits, the
+    // divergence the auto-heal resets away.
+    const other = path.join(env.home, "heal-clone");
+    git(env.home, "clone", originPath, other);
+    fs.writeFileSync(path.join(other, "same.txt"), "same change\n");
+    git(other, "add", "-A");
+    git(other, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "upstream copy");
+    git(other, "push", "origin", "main");
+    const onOrigin = git(other, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(env.repoPath, "same.txt"), "same change\n");
+    git(env.repoPath, "add", "-A");
+    git(env.repoPath, "commit", "-m", "local copy");
+    // The operator saves a file just after the tree was found to match origin.
+    afterGit.hook = args => {
+      if (args[0] === "diff" && args.includes("--quiet")) {
+        fs.writeFileSync(path.join(env.repoPath, "README.md"), "saved meanwhile\n");
+      }
+    };
+
+    expect(fastForwardBase(env.repoPath, "main")).toEqual({ ok: true, advanced: "worktree" });
+
+    expect(git(env.repoPath, "rev-parse", "HEAD")).toBe(onOrigin);
+    expect(fs.readFileSync(path.join(env.repoPath, "README.md"), "utf8")).toBe("saved meanwhile\n");
+  });
+
+  it("survives syncWorktreeToRemote, which fetches between its check and its reset", async () => {
+    const { createWorktree, syncWorktreeToRemote } = await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "sync");
+    createWorktree(env.repoPath, wt, "sync-branch");
+    fs.writeFileSync(path.join(wt, "work.txt"), "merged work\n");
+    git(wt, "add", "work.txt");
+    git(wt, "commit", "-m", "work");
+    git(wt, "push", "origin", "sync-branch");
+    afterGit.hook = args => {
+      if (args[0] === "fetch") fs.writeFileSync(path.join(wt, "work.txt"), "edited meanwhile\n");
+    };
+
+    expect(syncWorktreeToRemote(wt, "sync-branch")).toEqual({ ok: true });
+
+    expect(fs.readFileSync(path.join(wt, "work.txt"), "utf8")).toBe("edited meanwhile\n");
+  });
+
+  it("makes syncWorktreeToRemote report dirty when the reset would overwrite it", async () => {
+    const { createWorktree, syncWorktreeToRemote } = await import("../../src/dashboard/git.js");
+    const wt = path.join(env.home, "wt", "sync-refused");
+    createWorktree(env.repoPath, wt, "sync-refused");
+    fs.writeFileSync(path.join(wt, "work.txt"), "merged work\n");
+    git(wt, "add", "work.txt");
+    git(wt, "commit", "-m", "work");
+    git(wt, "push", "origin", "sync-refused");
+    // A local commit the reset would undo, to the file then edited meanwhile.
+    fs.writeFileSync(path.join(wt, "work.txt"), "unpushed\n");
+    git(wt, "commit", "-am", "unpushed");
+    afterGit.hook = args => {
+      if (args[0] === "fetch") fs.writeFileSync(path.join(wt, "work.txt"), "edited meanwhile\n");
+    };
+
+    expect(syncWorktreeToRemote(wt, "sync-refused")).toMatchObject({ ok: false, reason: "dirty" });
+
+    expect(fs.readFileSync(path.join(wt, "work.txt"), "utf8")).toBe("edited meanwhile\n");
   });
 });
 

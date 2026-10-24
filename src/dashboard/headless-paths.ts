@@ -38,6 +38,16 @@ export function reviewNotesPath(project: string): string {
   return path.join(CONTROL_REPORTS_DIR, `review-notes-${artifactPart(project)}.jsonl`);
 }
 
+export const DISCARDED_PATCH_PREFIX = "discarded-";
+
+// Uncommitted changes garden saved before discarding them from a worktree or
+// the project checkout, so `git apply` can put them back. One file per discard.
+export function discardedChangesPath(project?: string, worker?: string): string {
+  const owner = !project ? "checkout" : worker ? artifactStem(project, worker) : artifactPart(project);
+  const at = new Date().toISOString().replace(/[:.]/g, "-");
+  return path.join(CONTROL_REPORTS_DIR, `${DISCARDED_PATCH_PREFIX}${owner}-${at}.patch`);
+}
+
 // Garden's Claude Code settings (hooks, sandbox, status line), passed to every
 // interactive Claude launch with `--settings` (a headless launch generates its
 // own `<promptFile>.settings.json` sidecar). Kept outside the worktree so a repo that

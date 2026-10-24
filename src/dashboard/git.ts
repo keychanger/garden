@@ -6,6 +6,7 @@ import { SESSIONS_DIR } from "../config.js";
 import type { ProjectConfig } from "../config.js";
 import type { WorkerEntry } from "./registry.js";
 import { atomicWriteFile } from "./atomic-write.js";
+import { DISCARDED_PATCH_PREFIX, discardedChangesPath } from "./headless-paths.js";
 import { isGeneratedWorkerName } from "./names.js";
 import { log } from "./log.js";
 import { runGit, runGitBytes } from "./git-exec.js";
@@ -427,19 +428,61 @@ export function readCommittedFiles(
   return files;
 }
 
+// Discard unstaged changes to tracked files before the merge queue rebases.
+// What is there is normally what the reviewer left behind, but the worker
+// shares the tree, and an edit no hook reports (a `!` shell command, the
+// operator's editor, a background command) looks the same. So the changes are
+// saved as a patch first, and kept when they cannot be.
 export function cleanWorktree(
   worktreePath: string,
   ctx?: { project?: string; worker?: string },
 ): void {
+  const paths = listModifiedTrackedFiles(worktreePath);
+  if (paths.length === 0) return;
+  const patch = discardedChangesPath(ctx?.project, ctx?.worker);
+  const data = {
+    ...(ctx?.project ? { project: ctx.project } : {}),
+    files: paths.length, paths: paths.slice(0, 5).join(", "), patch,
+  };
+  if (!saveUnstagedChanges(worktreePath, patch)) {
+    log.warn("git", "kept unstaged changes: could not save them", { worker: ctx?.worker, data });
+    return;
+  }
   try {
     git(worktreePath, "checkout", "--", ".");
-    log.info("git", "cleaned unstaged changes before rebase", {
-      worker: ctx?.worker,
-      data: ctx?.project ? { project: ctx.project } : undefined,
+    log.warn("git", "discarded unstaged changes before rebase", { worker: ctx?.worker, data });
+  } catch (err) {
+    log.warn("git", "could not discard unstaged changes", {
+      worker: ctx?.worker, data: { ...data, error: gitErrText(err) },
     });
-  } catch {
-    // nothing to clean
   }
+}
+
+// Write the unstaged changes to tracked files (all of them, or just `paths`)
+// to patchFile, binary-safe and without the diff programs a worktree's config
+// can name. False when git or the write fails: the caller must then keep the
+// changes rather than discard what it could not save.
+export function saveUnstagedChanges(repoPath: string, patchFile: string, paths: readonly string[] = []): boolean {
+  try {
+    const args = ["diff", "--binary", ...DIFF_SAFETY_ARGS];
+    if (paths.length > 0) args.push("--", ...paths);
+    atomicWriteFile(patchFile, runGit(repoPath, args));
+  } catch {
+    return false;
+  }
+  // Saved patches older than two weeks go. A hook that rewrites a lockfile on
+  // every merge saves one each time, so they would otherwise pile up without
+  // bound, and two weeks is time to notice a lost edit.
+  const DISCARDED_PATCH_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+  try {
+    const dir = path.dirname(patchFile);
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.startsWith(DISCARDED_PATCH_PREFIX)) continue;
+      const file = path.join(dir, name);
+      if (Date.now() - fs.statSync(file).mtimeMs > DISCARDED_PATCH_TTL_MS) fs.unlinkSync(file);
+    }
+  } catch { /* pruning is best-effort */ }
+  return true;
 }
 
 export type RebaseResult =
@@ -712,12 +755,14 @@ export function fastForwardBase(
         // local-only commit(s) carry no unique content (e.g. an operator heal
         // commit whose change also merged the normal way). Reset onto origin —
         // the reflog preserves the dropped commits and the working tree doesn't
-        // move, since its content already matches. Never reset a dirty tree:
-        // that would destroy uncommitted operator work.
+        // move, since its content already matches. --keep, not --hard: the tree
+        // was clean when checked, but a file the operator saves after that
+        // check is theirs, and --hard would overwrite it. --keep leaves it, and
+        // refuses outright in the middle of a merge.
         try {
           // No --end-of-options, as in syncWorktreeToRemote: reset rejects it
           // before git 2.44.
-          operatorGit(repoPath, "reset", "--hard", originTip, "--");
+          operatorGit(repoPath, "reset", "--keep", originTip, "--");
           log.info("git", "auto-healed redundant local base divergence onto origin", {
             worker,
             data: baseData,
@@ -1004,10 +1049,12 @@ export function syncWorktreeToRemote(
   }
   try {
     // No --end-of-options: reset rejects it before git 2.44, and a full ref
-    // cannot be read as an option anyway.
-    git(wtPath, "reset", "--hard", remoteBranchRef(branchName), "--");
+    // cannot be read as an option anyway. --keep, not --hard: the fetch above
+    // can take seconds after the clean check, and a worker prompted meanwhile
+    // writes in that window. --keep refuses rather than overwrite its edit.
+    git(wtPath, "reset", "--keep", remoteBranchRef(branchName), "--");
   } catch (err) {
-    return { ok: false, reason: "reset-failed", error: String(err) };
+    return { ok: false, reason: isWorktreeDirty(wtPath) ? "dirty" : "reset-failed", error: String(err) };
   }
   return { ok: true };
 }
@@ -1104,11 +1151,23 @@ export function listModifiedTrackedFiles(repoPath: string): string[] {
 
 // Restore tracked files that a command dirtied, leaving anything the operator
 // had already modified alone. `before` is the listModifiedTrackedFiles snapshot
-// taken immediately prior; only paths absent from it are reverted, so an
-// operator edit in flight is never discarded. Returns the reverted paths.
-export function revertChurn(repoPath: string, before: ReadonlySet<string>): string[] {
+// taken immediately prior; only paths absent from it are reverted. A file the
+// operator saves while the command runs is indistinguishable from its churn,
+// so what is reverted is saved to patchFile first, and kept if it cannot be.
+// Returns the reverted paths.
+export function revertChurn(
+  repoPath: string,
+  before: ReadonlySet<string>,
+  patchFile = discardedChangesPath(),
+): string[] {
   const churn = listModifiedTrackedFiles(repoPath).filter(p => !before.has(p));
   if (churn.length === 0) return [];
+  if (!saveUnstagedChanges(repoPath, patchFile, churn)) {
+    log.warn("git", "kept working-tree churn: could not save it", {
+      data: { files: churn.length, paths: churn.slice(0, 5).join(", "), patchFile },
+    });
+    return [];
+  }
   try {
     operatorGit(repoPath, "checkout", "--", ...churn);
     return churn;

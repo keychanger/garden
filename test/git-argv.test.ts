@@ -18,6 +18,9 @@ vi.mock("node:fs", () => ({
     existsSync: vi.fn(() => false),
     mkdirSync: vi.fn(),
     readFileSync: vi.fn(() => ""),
+    writeFileSync: vi.fn(),
+    renameSync: vi.fn(),
+    readdirSync: vi.fn(() => []),
   },
 }));
 
@@ -454,13 +457,32 @@ describe("deleteRemoteBranch", () => {
 });
 
 describe("cleanWorktree", () => {
-  it("discards all unstaged changes before rebase", () => {
-    cleanWorktree("/tmp/wt");
-    expect(mockExec).toHaveBeenCalledWith(
-      "git",
+  it("saves the unstaged changes as a patch, then discards them", () => {
+    mockExec
+      .mockReturnValueOnce("README.md\0")          // diff --name-only -z
+      .mockReturnValueOnce("diff --git a/README.md b/README.md\n"); // diff --binary
+    cleanWorktree("/tmp/wt", { project: "proj", worker: "swift-oak" });
+    expect(mockExec.mock.calls.map(c => c[1])).toEqual([
+      safe("diff", "--name-only", "-z"),
+      safe("diff", "--binary", "--no-ext-diff", "--no-textconv"),
       safe("checkout", "--", "."),
-      expect.objectContaining({ cwd: "/tmp/wt" }),
-    );
+    ]);
+    const [patchFile, patch] = mockFs.writeFileSync.mock.calls[0] as [string, string];
+    expect(patchFile).toContain(path.join(".garden", "control", "reports", "discarded-proj-swift-oak-"));
+    expect(patch).toBe("diff --git a/README.md b/README.md\n");
+  });
+
+  it("keeps the changes when the patch cannot be written", () => {
+    mockExec.mockReturnValueOnce("README.md\0").mockReturnValueOnce("diff\n");
+    mockFs.writeFileSync.mockImplementationOnce(() => { throw new Error("EACCES"); });
+    cleanWorktree("/tmp/wt");
+    expect(mockExec.mock.calls.some(c => (c[1] as string[]).includes("checkout"))).toBe(false);
+  });
+
+  it("runs no checkout when nothing is modified", () => {
+    cleanWorktree("/tmp/wt");
+    expect(mockExec.mock.calls.map(c => c[1])).toEqual([safe("diff", "--name-only", "-z")]);
+    expect(mockFs.writeFileSync).not.toHaveBeenCalled();
   });
 
   it("does not throw when there is nothing to clean", () => {
@@ -967,7 +989,7 @@ describe("fastForwardBase", () => {
     const result = fastForwardBase("/repo", "main");
     expect(result).toMatchObject({ ok: false, reason: "dirty", currentBranch: "main" });
     // A dirty checkout is never reset — that would clobber operator edits.
-    expect(mockExec.mock.calls.some(c => (c[1] as string[]).join(" ").startsWith("reset --hard"))).toBe(false);
+    expect(mockExec.mock.calls.some(c => (c[1] as string[]).join(" ").startsWith("reset "))).toBe(false);
   });
 
   it("auto-heals a redundant local commit: resets onto origin when the clean tree already matches", () => {
@@ -978,7 +1000,7 @@ describe("fastForwardBase", () => {
       .mockImplementationOnce(() => { throw new Error("fatal: Not possible to fast-forward, aborting."); }) // merge --ff-only (diverged)
       .mockReturnValueOnce("")       // status --porcelain (clean)
       .mockReturnValueOnce("")       // diff --quiet HEAD <sha> (exit 0 = identical -> no throw)
-      .mockReturnValueOnce("");      // reset --hard <sha>
+      .mockReturnValueOnce("");      // reset --keep <sha>
     expect(fastForwardBase("/repo", "main")).toEqual({ ok: true, advanced: "worktree" });
     const argvs = mockExec.mock.calls.map(c => (c[1] as string[]).join(" "));
     // The tree comparison that licenses the reset, and the reset itself, both
@@ -987,7 +1009,8 @@ describe("fastForwardBase", () => {
       safe("diff", "--quiet", "--no-ext-diff", "--no-textconv", "--end-of-options", "HEAD", "aaaaaaa").join(" "),
     );
     // No --end-of-options on reset: it rejects the flag before git 2.44.
-    expect(argvs).toContain("reset --hard aaaaaaa --");
+    // --keep, so a file saved after the clean check is not overwritten.
+    expect(argvs).toContain("reset --keep aaaaaaa --");
   });
 
   it("returns diverged (clean tree, real local commits) when the content differs from origin", () => {
@@ -1003,7 +1026,7 @@ describe("fastForwardBase", () => {
       ok: false, reason: "diverged", currentBranch: "main", ahead: 2, behind: 5,
     });
     // Real local-only content is never reset away.
-    expect(mockExec.mock.calls.some(c => (c[1] as string[]).join(" ").startsWith("reset --hard"))).toBe(false);
+    expect(mockExec.mock.calls.some(c => (c[1] as string[]).join(" ").startsWith("reset "))).toBe(false);
   });
 
   it("returns stuck when fetch fails", () => {
