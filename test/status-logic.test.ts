@@ -1280,6 +1280,24 @@ describe("identity badges + grammar (Phase 3)", () => {
     expect(line).toContain("…");
   });
 
+  it("keeps a row of two-column emoji inside the pane cap", () => {
+    // Pane titles, Haiku-written topics and blocked questions are model prose,
+    // and these emoji are East Asian Width W: a terminal gives each two columns.
+    // A row measured at one column apiece wraps, and the spinner overlay then
+    // repaints every later row one line off.
+    const wide = new Set(["✅", "❌", "⚡", "⭐"]);
+    const terminalColumns = (s: string): number =>
+      [...s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "")]
+        .reduce((n, ch) => n + (wide.has(ch) ? 2 : 1), 0);
+    vi.mocked(getWorkers).mockReturnValue([
+      { name: "bold-ash", sessionId: "a", agentStatus: "idle",
+        task: "✅ Fixed ❌ failing tests ⚡ fast path ⭐ done and the rest of the summary" },
+    ]);
+    const line = lineFor(renderQuickStatus(state, undefined, undefined, undefined, 60), "bold-ash");
+    expect(line).toContain("✅");
+    expect(terminalColumns(line)).toBeLessThanOrEqual(58); // paneWidth - 2
+  });
+
   it("leaves a detail that fits unmarked", () => {
     vi.mocked(getWorkers).mockReturnValue([
       { name: "bold-ash", sessionId: "a", agentStatus: "idle", task: "short summary" },
@@ -1311,6 +1329,21 @@ describe("visibleWidth", () => {
   });
   it("counts plain glyphs", () => {
     expect(visibleWidth("bold-ash")).toBe(8);
+  });
+  it("counts the emoji a terminal draws two columns wide, below the astral plane too", () => {
+    expect(visibleWidth("✅❌⚡⭐⏳⌛")).toBe(12);
+    expect(visibleWidth("🚀")).toBe(2);
+  });
+  it("leaves the narrow symbols the rows use at one column", () => {
+    // Status icons and the ambiguous-width marks: one column on a non-CJK terminal.
+    expect(visibleWidth("◆◇⚑✓✗→…⚠")).toBe(8);
+  });
+  it("widens a one-column glyph that asks for emoji presentation (VS16)", () => {
+    expect(visibleWidth("⚠\uFE0F")).toBe(2);
+    expect(visibleWidth("⚠\uFE0F ok")).toBe(5);
+    // After a glyph already two wide the selector overcounts by one: a row cut
+    // a column early, never one that wraps.
+    expect(visibleWidth("⭐\uFE0F")).toBe(3);
   });
 });
 
@@ -1398,6 +1431,17 @@ describe("truncateToVisibleWidth", () => {
   it("drops the marker below two columns, where it would be the whole cell", () => {
     expect(truncateToVisibleWidth("hello", 1, true)).toBe("h");
     expect(visible(truncateToVisibleWidth("hello", 0, true))).toBe(0);
+  });
+
+  it("counts a two-column emoji from the BMP as two columns", () => {
+    expect(truncateToVisibleWidth("✅✅✅ go", 4)).toBe("✅✅");
+    expect(truncateToVisibleWidth("ab✅", 3)).toBe("ab");
+  });
+
+  it("cuts before a VS16 that would push the glyph past the width", () => {
+    // ⚠ alone is one column; with its selector it is two, which does not fit.
+    expect(truncateToVisibleWidth("a⚠\uFE0Fb", 2)).toBe("a⚠");
+    expect(truncateToVisibleWidth("a⚠\uFE0Fb", 3)).toBe("a⚠\uFE0F");
   });
 
   it("treats combining marks as zero width", () => {

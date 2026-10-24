@@ -607,23 +607,35 @@ export function dimRow(line: string): string {
   return wrapRow("\x1b[2m", line);
 }
 
+// Emoji a terminal draws two columns wide by default. Below the astral plane
+// they sit between U+231A and U+2B55 (✅ ❌ ⚡ ⭐ ⏳ …) and are exactly the BMP's
+// East Asian Width W emoji; model prose (pane titles, written topics, blocked
+// questions) is full of them.
+const WIDE_EMOJI = /\p{Emoji_Presentation}/u;
+
 // Approximate terminal column width of one code point: 0 for combining marks,
-// zero-width joiners, and variation selectors; 2 for East-Asian Wide/Fullwidth
-// and all astral-plane code points (emoji, pictographs, astral CJK) so a wide
-// glyph is never UNDERcounted — an undercounted wide glyph lets a capped row
-// still wrap, the exact failure the cap prevents. Ambiguous-width BMP glyphs
-// (the geometric status icons, ●/○, arrows, ✓/✗) count as 1, correct on a
-// non-CJK terminal; the row cap's 2-column margin absorbs the rare terminal
-// that renders a couple of them double-wide.
+// zero-width joiners, and variation selectors other than VS16 (below); 2 for
+// East-Asian Wide/Fullwidth, the BMP emoji above, and all astral-plane code
+// points (emoji, pictographs, astral CJK) so a wide glyph is never
+// UNDERcounted — an undercounted wide glyph lets a capped row still wrap, the
+// exact failure the cap prevents. Ambiguous-width BMP glyphs (the geometric
+// status icons, ●/○, arrows, ✓/✗) count as 1, correct on a non-CJK terminal;
+// the row cap's 2-column margin absorbs the rare terminal that renders a
+// couple of them double-wide. A variation selector 16 asks for emoji
+// presentation, which tmux draws two columns wide unless its
+// variation-selector-always-wide option is off, so it counts one column: the
+// one it adds to a one-column glyph (⚠ → ⚠️). After a glyph already two wide,
+// or with that option off, it overcounts by one, the safe direction.
 function codePointWidth(cp: number): number {
-  if (cp === 0x200d || (cp >= 0xfe00 && cp <= 0xfe0f) || (cp >= 0x0300 && cp <= 0x036f)) return 0;
+  if (cp === 0x200d || (cp >= 0xfe00 && cp <= 0xfe0e) || (cp >= 0x0300 && cp <= 0x036f)) return 0;
   if ((cp >= 0x1100 && cp <= 0x115f)      // Hangul Jamo
       || (cp >= 0x2e80 && cp <= 0xa4cf)   // CJK radicals … Yi
       || (cp >= 0xac00 && cp <= 0xd7a3)   // Hangul syllables
       || (cp >= 0xf900 && cp <= 0xfaff)   // CJK compatibility ideographs
       || (cp >= 0xff00 && cp <= 0xff60)   // Fullwidth forms
       || (cp >= 0xffe0 && cp <= 0xffe6)   // Fullwidth signs
-      || cp >= 0x1f000)                    // astral: emoji, pictographs, CJK ext
+      || cp >= 0x1f000                     // astral: emoji, pictographs, CJK ext
+      || (cp >= 0x231a && cp <= 0x2b55 && WIDE_EMOJI.test(String.fromCodePoint(cp))))
     return 2;
   return 1;
 }
