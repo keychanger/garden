@@ -13,7 +13,7 @@ vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { getGitHubRepoSlug, checkCiStatus, projectDefinesCi } from "../src/dashboard/poller-ci.js";
+import { getGitHubRepoSlug, checkCiStatus, projectDefinesCi, workflowRunsOnPush } from "../src/dashboard/poller-ci.js";
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -189,17 +189,17 @@ describe("projectDefinesCi", () => {
   it("detects a .yml workflow", () => {
     fs.mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
     fs.writeFileSync(path.join(dir, ".github", "workflows", "test.yml"), "on: push\n");
-    expect(projectDefinesCi(dir)).toBe(true);
+    expect(projectDefinesCi(dir, "bold-ash")).toBe(true);
   });
 
   it("detects a .yaml workflow", () => {
     fs.mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
     fs.writeFileSync(path.join(dir, ".github", "workflows", "test.yaml"), "on: push\n");
-    expect(projectDefinesCi(dir)).toBe(true);
+    expect(projectDefinesCi(dir, "bold-ash")).toBe(true);
   });
 
   it("is false with no .github directory at all", () => {
-    expect(projectDefinesCi(dir)).toBe(false);
+    expect(projectDefinesCi(dir, "bold-ash")).toBe(false);
   });
 
   it("is false when the workflows directory holds no yaml", () => {
@@ -207,10 +207,54 @@ describe("projectDefinesCi", () => {
     // passing straight through rather than eating the 3-minute grace window.
     fs.mkdirSync(path.join(dir, ".github", "workflows"), { recursive: true });
     fs.writeFileSync(path.join(dir, ".github", "workflows", "README.md"), "notes\n");
-    expect(projectDefinesCi(dir)).toBe(false);
+    expect(projectDefinesCi(dir, "bold-ash")).toBe(false);
   });
 
   it("is false on an unreadable path rather than throwing", () => {
-    expect(projectDefinesCi(path.join(dir, "does-not-exist"))).toBe(false);
+    expect(projectDefinesCi(path.join(dir, "does-not-exist"), "bold-ash")).toBe(false);
+  });
+
+  // app-playground's only workflow deploys main. Worker SHAs never get its
+  // check-runs, so counting it held every merge for the full grace window.
+  it("is false when no workflow runs on a push to the worker's branch", () => {
+    const workflows = path.join(dir, ".github", "workflows");
+    fs.mkdirSync(workflows, { recursive: true });
+    fs.writeFileSync(path.join(workflows, "deploy-web.yml"),
+      "on:\n  push:\n    branches: [main]\n  workflow_dispatch:\n");
+    fs.writeFileSync(path.join(workflows, "review.yml"), "on: pull_request\n");
+    expect(projectDefinesCi(dir, "bold-ash")).toBe(false);
+
+    fs.writeFileSync(path.join(workflows, "test.yml"), "on:\n  push:\n    branches: ['**']\n");
+    expect(projectDefinesCi(dir, "bold-ash")).toBe(true);
+  });
+
+  it("counts a symlinked workflow without following it", () => {
+    const workflows = path.join(dir, ".github", "workflows");
+    fs.mkdirSync(workflows, { recursive: true });
+    fs.writeFileSync(path.join(dir, "elsewhere.yml"), "on: workflow_dispatch\n");
+    fs.symlinkSync(path.join(dir, "elsewhere.yml"), path.join(workflows, "ci.yml"));
+    expect(projectDefinesCi(dir, "bold-ash")).toBe(true);
+  });
+});
+
+describe("workflowRunsOnPush", () => {
+  it.each([
+    ["on: push", true],
+    ["on: [pull_request, push]", true],
+    ["on: [pull_request, workflow_dispatch]", false],
+    ["on:\n  push:\n  schedule:\n    - cron: '0 0 * * *'", true],
+    ["on:\n  push:\n    paths: ['src/**']", true],
+    ["on:\n  push:\n    branches: ['*-ash']", true],
+    ["on:\n  push:\n    branches: ['release/**']", false],
+    ["on:\n  push:\n    branches: ['**', '!bold-ash']", false],
+    ["on:\n  push:\n    branches-ignore: [main]", true],
+    ["on:\n  push:\n    branches-ignore: ['bold-*']", false],
+    ["on:\n  push:\n    tags: ['v*']", false],
+    // Unreadable answers yes: the cost is a grace window, not an ungated merge.
+    ["on: [push", true],
+    ["name: no triggers", true],
+    ["on:\n  push:\n    branches: ['[unclosed']", true],
+  ])("%j -> %s", (source, expected) => {
+    expect(workflowRunsOnPush(`${source}\n`, "bold-ash")).toBe(expected);
   });
 });

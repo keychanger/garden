@@ -23,7 +23,9 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import yaml from "js-yaml";
 import { log } from "./log.js";
+import { readStableRegularFile } from "./safe-read.js";
 
 export type CiStatus =
   | { kind: "success" }
@@ -72,16 +74,96 @@ export function getGitHubRepoSlug(projectPath: string): string | null {
 // The checkout on disk is the durable answer — it survives a restart and needs
 // no network. Kept as an OR with the learned flag, which still covers CI that
 // has no workflow file in the repo (CodeQL default setup, third-party apps).
-export function projectDefinesCi(projectPath: string): boolean {
+//
+// Only a workflow that a push to `branch` would start counts. A deploy-only
+// (push to main) or PR-only workflow never puts check-runs on a worker SHA, so
+// counting it cost every merge in that project the full grace window for
+// nothing.
+export function projectDefinesCi(projectPath: string, branch: string): boolean {
+  const dir = path.join(projectPath, ".github", "workflows");
   try {
     return fs
-      .readdirSync(path.join(projectPath, ".github", "workflows"))
-      .some((f) => f.endsWith(".yml") || f.endsWith(".yaml"));
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
+      .some((f) => {
+        // The files are merged worker commits; a symlinked one is not followed.
+        const file = readStableRegularFile(path.join(dir, f), dir, MAX_WORKFLOW_BYTES);
+        return file === null || workflowRunsOnPush(file.data.toString("utf-8"), branch);
+      });
   } catch {
     // No .github/workflows directory (or unreadable) — not a CI project as far
     // as the repo is concerned.
     return false;
   }
+}
+
+const MAX_WORKFLOW_BYTES = 256 * 1024;
+
+// Would a push to `branch` start this workflow? Of GitHub's triggers only
+// `push` runs for a worker branch: garden opens no pull requests, and the rest
+// fire on the default branch or by hand. Anything unreadable answers yes,
+// since a wrong yes costs one grace window and a wrong no lets the gate pass
+// a SHA whose check-runs have not appeared yet.
+export function workflowRunsOnPush(source: string, branch: string): boolean {
+  try {
+    const on = (yaml.load(source) as { on?: unknown } | null)?.on;
+    if (typeof on === "string") return on === "push";
+    if (Array.isArray(on)) return on.includes("push");
+    if (!on || typeof on !== "object") return true;
+    if (!("push" in on)) return false;
+    const push = (on as { push?: unknown }).push;
+    if (push === null || typeof push !== "object") return true;
+    const filters = push as Record<string, unknown>;
+    if (filters.branches !== undefined) return branchFilterMatches(filters.branches, branch);
+    if (filters["branches-ignore"] !== undefined) {
+      return !branchFilterMatches(filters["branches-ignore"], branch);
+    }
+    // Tag filters alone keep the workflow off branch pushes.
+    return filters.tags === undefined && filters["tags-ignore"] === undefined;
+  } catch {
+    return true;
+  }
+}
+
+// GitHub reads a branch filter list in order: the last pattern a branch
+// matches decides, and a leading `!` excludes. Throws on anything else.
+function branchFilterMatches(patterns: unknown, branch: string): boolean {
+  const list = typeof patterns === "string" ? [patterns] : patterns;
+  if (!Array.isArray(list)) throw new Error("unreadable branch filter");
+  let matched = false;
+  for (const pattern of list) {
+    if (typeof pattern !== "string") throw new Error("unreadable branch filter");
+    const negated = pattern.startsWith("!");
+    if (branchGlob(negated ? pattern.slice(1) : pattern).test(branch)) matched = !negated;
+  }
+  return matched;
+}
+
+// GitHub's filter glob: `*` stops at `/`, `**` does not, `?` and `+` repeat
+// the preceding character, `[...]` is a class, and `\` escapes. A malformed
+// pattern throws from the RegExp constructor.
+function branchGlob(pattern: string): RegExp {
+  let source = "";
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === "\\" && i + 1 < pattern.length) {
+      source += pattern[++i].replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+    } else if (c === "*") {
+      const deep = pattern[i + 1] === "*";
+      if (deep) i++;
+      source += deep ? ".*" : "[^/]*";
+    } else if (c === "?" || c === "+") {
+      source += c;
+    } else if (c === "[") {
+      const end = pattern.indexOf("]", i + 1);
+      if (end < 0) throw new Error("unclosed character class");
+      source += pattern.slice(i, end + 1);
+      i = end;
+    } else {
+      source += c.replace(/[.^${}()|\\/]/g, "\\$&");
+    }
+  }
+  return new RegExp(`^${source}$`);
 }
 
 // Query GitHub Actions check-runs for a commit and reduce to a single

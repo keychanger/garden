@@ -4774,6 +4774,8 @@ describe("poll — merge-pending CI gate", () => {
     poll("myproject");
 
     expect(mergeToBase).not.toHaveBeenCalled();
+    // Whether a workflow gates the SHA depends on the branch it was pushed to.
+    expect(projectDefinesCi).toHaveBeenCalledWith("/repo/myproject", "bold-ash");
   });
 
   it("passes a persistently no-ci SHA through once the grace window elapses", () => {

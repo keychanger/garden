@@ -398,7 +398,8 @@ function gateCiStatus(
       // could never be set, because setting it required observing a check-run
       // that this same race hides (see projectDefinesCi). The flag remains as an
       // OR for CI that has no workflow file in the repo.
-      if (projectDefinesCi(projectPath) || projectHasCi.get(projectName) === true) {
+      if (projectDefinesCi(projectPath, entry.branchName ?? entry.name)
+          || projectHasCi.get(projectName) === true) {
         // The stamp is per-SHA: a stamp for a different SHA belongs to a
         // superseded commit (reviewer fix, ci-fix force-push), so the new tip
         // starts its own window rather than inheriting an expired one.
