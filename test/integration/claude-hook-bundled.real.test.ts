@@ -42,7 +42,7 @@ const PROJECT = "myproject";
 const WORKER = "bold-ash";
 let worktreePath: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   // Reviewer env var leaks in when these tests run inside `garden review`
   // (the reviewer process exports GARDEN_REVIEWER=1, and the spawn helpers
   // inherit process.env). handleClaudeHook short-circuits on it before
@@ -52,6 +52,13 @@ beforeEach(() => {
   delete process.env.GARDEN_REVIEWER;
 
   runCli(["init"], { home: env.home });
+
+  // A usage snapshot stamped now keeps the Stop hook's usage refresh inside its
+  // cooldown. That route calls the real usage endpoint with whatever login this
+  // machine has (on macOS the Keychain entry, which a throwaway HOME does not
+  // hide), and every `stop` case here would otherwise spawn it.
+  const { writeUsageSnapshot } = await import("../../src/dashboard/usage.js");
+  writeUsageSnapshot({ fetchedAt: new Date().toISOString() });
 
   // Seed a worktree-shaped cwd. We don't need a real git worktree — just a
   // path that workerFromCwd parses as <home>/.garden/worktrees/<proj>/<wkr>.
@@ -177,16 +184,11 @@ describe("dashboard _claude-hook (bundled)", () => {
     spawnSync("git", ["init", "-q", worktreePath], { stdio: "ignore" });
 
     const { readDashState, writeDashState } = await import("../../src/dashboard/state.js");
-    const { writeUsageSnapshot } = await import("../../src/dashboard/usage.js");
     // The alerts view open in the garden pane: the hook checks this before it
     // spawns the repaint, and the route checks it again before writing. After
     // writing, the route signals the process in the named pane, so the id is
     // one no pane has.
     writeDashState({ ...readDashState(), gardenPaneType: "alerts", gardenShellPaneId: "%99999999" });
-    // A usage snapshot stamped now keeps the Stop hook's usage refresh inside
-    // its cooldown: that route calls the real usage endpoint with whatever
-    // login this machine has.
-    writeUsageSnapshot({ fetchedAt: new Date().toISOString() });
 
     const result = runHookBundle(["stop"], {
       home: env.home,
