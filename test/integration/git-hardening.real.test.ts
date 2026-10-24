@@ -334,6 +334,18 @@ describe("what garden hands git", () => {
     expect(fs.existsSync(marker)).toBe(false);
   });
 
+  it("refreshes origin's base by its full name, so a same-named tag on origin cannot leave it stale", async () => {
+    const { fetchBaseBranch } = await import("../../src/dashboard/git.js");
+    const stale = git(wt, "rev-parse", "refs/remotes/origin/main");
+    advanceOrigin("base.txt");
+    // Any worker can push a tag, and a bare "main" matches origin's tag first.
+    const other = path.join(env.home, "other");
+    git(other, "push", "-q", "origin", `${stale}:refs/tags/main`);
+
+    fetchBaseBranch(wt, "main");
+    expect(git(wt, "rev-parse", "refs/remotes/origin/main")).toBe(git(other, "rev-parse", "HEAD"));
+  });
+
   it("returns non-ASCII paths as themselves, not git's quoted form", async () => {
     const { getChangedFiles, getChangedFilesBetween, listModifiedTrackedFiles, revertChurn } =
       await import("../../src/dashboard/git.js");

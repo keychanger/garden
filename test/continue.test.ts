@@ -1324,8 +1324,10 @@ describe("continueWorkerAfterMerge", () => {
     const message = vi.mocked(pasteAndSubmit).mock.calls[0][1];
     expect(message).toContain("could not auto-sync");
     // The worker branch is deleted from origin post-merge, so the hint must
-    // target origin/<base>, not origin/<branch>.
-    expect(message).toContain("git fetch origin main && git reset --hard origin/main");
+    // target origin/<base>, not origin/<branch>. Named in full: a tag or
+    // branch any worker can create would otherwise stand in for it.
+    expect(message).toContain("git fetch origin refs/heads/main && git reset --hard refs/remotes/origin/main");
+    expect(message).not.toMatch(/(?<!refs\/remotes\/)origin\/main/);
     expect(message).not.toContain("origin/bold-ash");
   });
 

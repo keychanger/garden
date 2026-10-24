@@ -31,6 +31,7 @@ import {
   type PaneCursor,
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
+import { branchRef, remoteBranchRef } from "./git-refs.js";
 import { harnessSignalsPromptReady } from "./harness/core.js";
 import {
   classifyPromptDelivery,
@@ -62,12 +63,14 @@ const CONTINUE_PROMPT =
 // onto the OTHER worker's branch when it tried to "continue on the merged
 // base". Naming the worker's own branch and base, and forbidding sibling-branch
 // git operations, removes that ambiguity. Note the base operations the
-// sync-failed nudge relies on (`git reset --hard origin/<base>`) stay allowed —
-// only OTHER workers' branches are off-limits.
+// sync-failed nudge relies on (`git reset --hard refs/remotes/origin/<base>`)
+// stay allowed — only OTHER workers' branches are off-limits. The base is named
+// in full, as in the review prompts: any worker can create a tag or branch
+// named `origin/<base>`, which the short form would resolve to first.
 function branchIdentityLine(branch: string | undefined, base: string | undefined): string {
   const b = branch ? `\`${branch}\`` : "your own worker branch";
   const baseClause = base
-    ? ` It was branched from \`${base}\`; if you need the merged mainline, use \`origin/${base}\` — never a sibling worker's branch.`
+    ? ` It was branched from \`${base}\`; if you need the merged mainline, use \`${remoteBranchRef(base)}\` — never a sibling worker's branch.`
     : "";
   return (
     `[garden] You are working in your own git worktree on branch ${b}. This `
@@ -143,7 +146,7 @@ function buildMergeContinuePrompt(
       "[garden] I could not auto-sync your worktree to the merged tip "
       + "(uncommitted changes or git error). Your worker branch was already "
       + "deleted from origin after merge, so commit or stash any local edits "
-      + `and run \`git fetch origin ${base} && git reset --hard origin/${base}\` `
+      + `and run \`git fetch origin ${branchRef(base)} && git reset --hard ${remoteBranchRef(base)}\` `
       + "before resuming work.",
     );
   }
@@ -848,7 +851,7 @@ export function continueWorker(
   // exit `exec $SHELL`s the launch wrapper WITHOUT firing pane-died, so
   // agentStatus can still read `idle` while the pane is an interactive shell.
   // Pasting the continue prompt — which carries backticked git commands
-  // (`git reset --hard origin/<base>`) — would execute it in that shell. Skip:
+  // (`git reset --hard refs/remotes/origin/<base>`) — would execute it in that shell. Skip:
   // reviving an exited worker is `garden bounce` territory. Leave
   // interruptedWhileWorking set (like the draft skip below) so the prompt stays
   // owed for the bounce / gate-reopen replay.
