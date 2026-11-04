@@ -448,8 +448,9 @@ export interface WorkflowDefinition {
   validTransitions: Record<PrState, PrState[]>;
   /** Dispatched by pollWorker on the worker's current prState. Required —
    *  every PrState must have a handler. Workflows that don't use a state
-   *  register a no-op (`() => false`); the type contract leaves the
-   *  dispatcher in poller.ts free of defensive runtime guards. */
+   *  register a no-op (`() => false`). The type contract covers every
+   *  state this build knows; pollWorker skips, with a warn, a worker whose
+   *  stored prState this build does not know. */
   stateHandlers: Record<PrState, StateHandler>;
 }
 ```
@@ -560,7 +561,12 @@ function pollWorker(
 ): boolean {
   const state = entry.prState ?? "working";
   const workflow = getWorkflow(entry.workflow ?? "default");
-  // Record<PrState, StateHandler> guarantees coverage; no runtime guard.
+  // Record<PrState, StateHandler> covers every state this build knows; the
+  // registry keeps one it does not know as written, so skip that worker.
+  if (!Object.hasOwn(workflow.stateHandlers, state)) {
+    log.warn("poller", "unknown prState, skipping worker", { worker: entry.name });
+    return false;
+  }
   return workflow.stateHandlers[state](projectName, projectPath, baseBranch, entry);
 }
 ```
@@ -575,22 +581,25 @@ for it.
 Today, `transitionState` consults the global `VALID_TRANSITIONS`. After:
 
 ```ts
-export function transitionState(...): void {
-  const entry = findWorkerByName(projectName, workerName);
-  const workflow = getWorkflow(entry?.workflow ?? "default");
-  const fromState: PrState = entry?.prState ?? "working";
-  if (!workflow.validTransitions[fromState]?.includes(toState)) {
-    log.warn("poller", "invalid state transition", {
-      worker: workerName,
-      data: { from: fromState, to: toState, workflow: workflow.name },
-    });
-  }
-  updateWorkerFields(projectName, workerName, { ...extraFields, prState: toState });
+export function transitionState(
+  projectName: string,
+  entry: Pick<WorkerEntry, "name" | "prState">,
+  toState: PrState,
+  extraFields?: Omit<WorkerFieldsUpdate, "prState">,
+): boolean {
+  // One registry transaction (updateWorkerFieldsIf). The move lands only
+  // while the worker is still in entry.prState, the state the caller
+  // decided on, and only when the worker's workflow table holds the edge
+  // (isValidTransition). A refused move writes nothing, logs a warn and
+  // returns false. forceTransitionState applies from any state.
 }
 ```
 
-The `VALID_TRANSITIONS` exported constant is removed. Any external import
-breaks at compile time and is migrated to `getWorkflow(name).validTransitions`.
+The `VALID_TRANSITIONS` exported constant is removed. The per-workflow
+tables live in `workflows/types.ts`, which the poller reads through
+`isValidTransition` rather than the workflow registry, so the poller's
+state module does not import the registry directly (the two still share
+the handler import cycle that `import-cycles.real.test.ts` allows).
 
 #### 5c — Claude hook handler (`src/dashboard/hook-dispatcher.ts`)
 
@@ -882,9 +891,13 @@ implementation.
    poller.ts treated a missing handler as a config bug (warn + no-op),
    making the permissive type misleading. Tightened to required during
    the foundation hardening pass: alternate workflows declare a no-op
-   (`() => false`) for states they don't use, the dispatcher needs no
-   defensive runtime check, and incomplete workflows surface as
-   TypeScript errors instead of runtime warnings.
+   (`() => false`) for states they don't use, and incomplete workflows
+   surface as TypeScript errors instead of runtime warnings. The
+   dispatcher still checks the handler table at runtime, because the
+   registry guard checks only that `prState` is a string: a state this
+   build does not know (a newer build's state after a rollback, a
+   hand-edit, a worker's write) has no handler, so `pollWorker` logs a
+   warning and skips that worker, leaving its entry as written.
 
 ## Trellis workflow (retired)
 
@@ -1170,9 +1183,10 @@ write `<seed verbatim>` to `.garden/grow-goal.md`.
 The `⌥⇧N` workflow picker offers a `(h) hoop` row — `hoop` is this
 workflow's operator-facing name in the picker only; the workflow, the
 CLI (`--workflow grow`), and every on-disk field stay `grow`. It opens a tmux
-`command-prompt` for a single-line task description. Seeds with quotes
-or shell metacharacters break tmux substitution; for those, operators
-use the CLI plant path with `--seed-file`.
+`command-prompt` for a single-line task description. The reply reaches
+`_grow-plant` as one argument, exactly as typed, quotes and shell
+metacharacters included (`promptCommand`, `tmux.ts`); for a multi-line
+seed, operators use the CLI plant path with `--seed-file`.
 
 Convert — flip an active default worker to grow:
 
@@ -1312,9 +1326,10 @@ parked mid-phase also gets the alert and the top-band row placement, which a bar
 `touch` did not raise. The shipped planner workflow has no mid-run gate; its
 review gate is board-side promotion.
 Auto-continue skips a worker holding the sentinel (`autoContinueSkipReason`,
-`poller-merge.ts`); `onPromptSubmitted` clears it unconditionally (unlike
+`poller-merge.ts`); `onPromptSubmitted` clears it whatever the `prState` (unlike
 `.garden-done`, a gated worker holds it while `prState` is still `working`),
-along with the recorded question.
+along with the recorded question, unless Claude Code submitted the prompt itself
+(`isHarnessPrompt`) or another thread's prompt fired the hook.
 The status pane marks a worker holding it with the `⚑` icon and shows its question
 in the detail column; the older yellow `?` (`formatAwaitingInputGlyph`, `status.ts`)
 remains as the fallback for a worktree that holds the sentinel with no recorded
@@ -1346,9 +1361,14 @@ re-launch a reviewer and defeat skip-review.
 A designer's only committable output is a tracked doc under `docs/`
 (`isPublishablePath`, `designer-paths.ts`; `.garden/` is git-excluded so its
 artifacts never appear in a diff). Before the skip-review transition,
-`handleWorking` checks the committed diff: a file outside `docs/` (a designer
-that drifted into building code) parks the worker in `failing` with
-`failingReason: "designer-scope"` and an operator alert. It is not
+`handleWorking` waits on the same clean-tree gate a review launch does (without
+taking a review slot), then `handleSkipReviewMerge` checks the committed diff,
+listed with rename detection off (`getChangedFilesNoRenames`, `git.ts`) so the
+source side of a rename out of `src/` counts as a path outside `docs/`: a file
+outside `docs/` (a designer that drifted into building code) parks the worker
+in `failing` with `failingReason: "designer-scope"` and an operator alert. A
+diff git cannot list does not pass the check: the worker stays `working` with
+its review armed, and a 30s re-poke retries it. It is not
 operator-action-gated — removing the offending files and re-pushing auto-retries
 the publish after the failing debounce.
 
@@ -1615,7 +1635,10 @@ delta), builds the aggregated-diff prompt (`buildHolisticFinalReviewPrompt`,
 resolver use. The reviewer role (harness/model/env) comes from
 `resolveReviewRole(project, "default", "reviewer", …)`, so it honors `project.roles`
 and any crew (Codex-capable), independent of the worker's own harness. The worker
-transitions `done` → `reviewing` with `holisticFinalActive = true`.
+transitions `done` → `reviewing` with `holisticFinalActive = true`. The reviewer
+launches before that move, so when the worker has left `done` since the dispatch
+read it (as when a prompt reopens it), `transitionState` refuses the move and the
+dispatcher kills the reviewer's window (`killReviewWindow`); the guard stays set.
 
 Deferral (leaves the guard **unset** so a later poke retries): the worker's own
 Claude still working (`isWorkerClaudeWorking`, shared worktree), or the shared usage
