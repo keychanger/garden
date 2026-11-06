@@ -72,6 +72,7 @@ npm test               # vitest unit + integration; tsc --noEmit
   - `task-title.ts` — Haiku thread titles for rows a harness leaves blank (DESIGN.md "Thread titles for a row the harness left without one")
   - `model-drift.ts` — running model vs pin (DESIGN.md "Model drift")
   - `watchdog.ts` — the one recurring tick (DESIGN.md "Status tracking and the liveness watchdog")
+  - `pty-census.ts` + `pty-failure-capture.ts` — the watchdog's pseudo-terminal census, and the evidence a failed pane fork records (DESIGN.md "Alerts"; `docs/PTY-FORK-FAILURE.md`)
   - `codex-input.ts` — Codex asking and missed-turn-end signals from the rollout (same section; spec `docs/STATUS.md`)
   - `conversation.ts` — transcript parser for the `⌥h` history view (DESIGN.md "Panes")
   - `sandbox.ts`, `credentials.ts`, `claude-env.ts` — Claude profile / Keychain / sandbox config

@@ -417,6 +417,19 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     runWorkerCleanup(projectName, workerName);
     return;
   }
+  if (sub === "_pty-kernel-log") {
+    // Reads the kernel log around a pane fork failure (see
+    // pty-failure-capture.ts). Dispatched detached by the failing spawn,
+    // because the window it reads ends seconds after the failure.
+    const [, failedAtText, projectName, workerName] = args;
+    const failedAt = Number(failedAtText);
+    if (!Number.isFinite(failedAt) || !projectName || !workerName) {
+      throw new Error("usage: garden dashboard _pty-kernel-log <failedAtMs> <project> <worker>");
+    }
+    const { runKernelLogCapture } = await import("./pty-failure-capture.js");
+    await runKernelLogCapture(failedAt, projectName, workerName);
+    return;
+  }
   if (sub === "_worker-title") {
     // Generates one worker's thread title (see task-title.ts). Dispatched
     // detached by the watchdog sweep so the model call never runs on the

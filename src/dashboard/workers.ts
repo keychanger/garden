@@ -31,7 +31,7 @@ import { buildRulesContext } from "../rules.js";
 import { GARDEN_VERSION } from "../version.js";
 import { log } from "./log.js";
 import { readSeedFile } from "./seed-files.js";
-import { explainPtyFailure } from "./pty-census.js";
+import { capturePtyFailure, respawnProbingForkFailure } from "./pty-failure-capture.js";
 import { getWorkflow } from "./workflows/index.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
@@ -639,6 +639,16 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
 
   let stateForRefresh = initialState;
   const bootstrapCmd = `sh ${shellEscape(scriptFile)}`;
+  // Every recorded "fork failed: Device not configured" has come from this
+  // respawn, so a failure here is probed before the rollback below kills the
+  // pane (see pty-failure-capture.ts).
+  const respawnBootstrap = (workerPaneId: string) => respawnProbingForkFailure(
+    () => tmuxWorkerCommand(
+      launchPlan,
+      "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
+    ),
+    { paneId: workerPaneId, cwd: project.path },
+  );
   try {
     // Both branches below spawn the bootstrap shell only after the window is
     // sized to the right slot. Otherwise the new window comes up at tmux's
@@ -660,10 +670,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
         "sh", "-c", "exec sleep 86400");
       if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-      tmuxWorkerCommand(
-        launchPlan,
-        "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
-      );
+      respawnBootstrap(workerPaneId);
       if (workerPaneId) {
         setPaneLabel(workerPaneId, workerName);
         setPaneVar(workerPaneId, "garden_clock", "1");
@@ -727,10 +734,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
           const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
             "sh", "-c", "exec sleep 86400");
           if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-          tmuxWorkerCommand(
-            launchPlan,
-            "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
-          );
+          respawnBootstrap(workerPaneId);
           if (workerPaneId) setPaneLabel(workerPaneId, workerName);
           restoreFromHidden(workerWindowName, state);
           if (state.activePaneId !== workerPaneId) {
@@ -803,12 +807,16 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       preexistingWorktree ? undefined : wtPath,
       preexistingBranch ? undefined : branchName,
     );
-    const ptyFailure = explainPtyFailure(err);
+    const ptyFailure = capturePtyFailure(err, { project: targetProject, worker: workerName });
     log.error("workers", "tmux pane creation failed; rolled back registry entry", {
       worker: workerName,
-      data: { project: targetProject, error: String(err), ...(ptyFailure && { cause: ptyFailure }) },
+      data: {
+        project: targetProject,
+        error: String(err),
+        ...(ptyFailure && { cause: ptyFailure.cause, ...ptyFailure.data }),
+      },
     });
-    throw ptyFailure ? new Error(ptyFailure) : err;
+    throw ptyFailure ? new Error(ptyFailure.cause) : err;
   }
 
   log.info("workers", "created", {
