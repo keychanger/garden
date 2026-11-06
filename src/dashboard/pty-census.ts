@@ -189,12 +189,7 @@ export function isPtyPressure(census: PtyCensus): boolean {
 // is what posix_openpt returns at the pty cap but also occurs well below it.
 // Report the count at that moment, claiming exhaustion only when the count
 // proves it, with the census naming who holds the ptys either way.
-export function explainPtyFailure(err: unknown): string | null {
-  if (!String(err).includes("fork failed: Device not configured")) return null;
-  let census: PtyCensus | null = null;
-  try {
-    census = takePtyCensus();
-  } catch { /* the message below still states what tmux reported */ }
+export function describePtyFailure(census: PtyCensus | null): string {
   if (!census) return "tmux could not open a pseudo-terminal for the pane";
   const holders = `top holders: ${formatTopHolders(census)}`;
   if (census.limit === null) return `tmux could not open a pseudo-terminal for the pane (${census.inUse} in use; ${holders})`;

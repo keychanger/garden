@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import {
   parsePtmxHolders, parseParents, parsePanes, attributeHolder, workerFromCwd,
   countAllocatedPtys, takePtyCensus, unexplainedHoldings, isPtyPressure,
-  explainPtyFailure,
+  describePtyFailure,
 } from "../src/dashboard/pty-census.js";
 
 const LSOF = `COMMAND     PID USER   FD   TYPE DEVICE   SIZE/OFF NODE NAME
@@ -116,10 +116,8 @@ describe("takePtyCensus and its consumers", () => {
     expect(takePtyCensus()).toBeNull();
   });
 
-  const forkFailure = new Error("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured");
-
   it("reports a fork failure below the limit with the count, without claiming exhaustion", () => {
-    expect(explainPtyFailure(forkFailure)).toMatch(
+    expect(describePtyFailure(takePtyCensus())).toMatch(
       /^tmux could not open a pseudo-terminal for the pane, below the machine limit \(400\/511 in use; top holders: tmux server \(2 panes\): 2; /,
     );
   });
@@ -128,23 +126,19 @@ describe("takePtyCensus and its consumers", () => {
     vi.mocked(fs.readdirSync).mockReturnValue(
       Array.from({ length: 511 }, (_, i) => `ttys${String(i).padStart(3, "0")}`) as never,
     );
-    expect(explainPtyFailure(forkFailure)).toMatch(/^out of pseudo-terminals \(511\/511 in use; top holders: /);
+    expect(describePtyFailure(takePtyCensus())).toMatch(/^out of pseudo-terminals \(511\/511 in use; top holders: /);
   });
 
   it("reports the count without a limit comparison when the sysctl limit is unreadable", () => {
     vi.mocked(spawnSync).mockImplementation(((cmd: string) =>
       cmd === "sysctl" ? { status: 1, stdout: "" } : { status: 0, stdout: cmd === "lsof" ? LSOF : "" }) as never);
-    expect(explainPtyFailure(forkFailure)).toMatch(
+    expect(describePtyFailure(takePtyCensus())).toMatch(
       /^tmux could not open a pseudo-terminal for the pane \(400 in use; top holders: /,
     );
   });
 
   it("states only what tmux reported when no census can be taken", () => {
     Object.defineProperty(process, "platform", { value: "linux" });
-    expect(explainPtyFailure(forkFailure)).toBe("tmux could not open a pseudo-terminal for the pane");
-  });
-
-  it("leaves every other spawn failure alone", () => {
-    expect(explainPtyFailure(new Error("tmux swap-pane failed: can't find pane: %36"))).toBeNull();
+    expect(describePtyFailure(takePtyCensus())).toBe("tmux could not open a pseudo-terminal for the pane");
   });
 });

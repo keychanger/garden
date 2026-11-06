@@ -37,6 +37,7 @@ import {
   findWorkerByName, updateWorkerFields, type WorkerEntry,
 } from "./registry.js";
 import { resolveGardenRunner } from "./runner.js";
+import { capturePtyFailure, respawnProbingForkFailure } from "./pty-failure-capture.js";
 import { tmuxWorkerCommand } from "./claude-env.js";
 import { readDashState } from "./state.js";
 import {
@@ -260,13 +261,24 @@ export function loopAutoContinueAfterMerge(
   // the same pane. Same primitive bounceWorker uses; the difference is we
   // pass --session-id (fresh) instead of --resume.
   try {
-    tmuxWorkerCommand(
-      launchPlan,
-      "respawn-pane", "-k", "-c", wtPath, "-t", paneId, "sh", "-c", respawnCmd,
+    // No re-attempt on a fork failure: this pane is left in place, and a
+    // placeholder respawned into it would read as a live worker.
+    respawnProbingForkFailure(
+      () => tmuxWorkerCommand(
+        launchPlan,
+        "respawn-pane", "-k", "-c", wtPath, "-t", paneId, "sh", "-c", respawnCmd,
+      ),
+      null,
     );
   } catch (err) {
+    const ptyFailure = capturePtyFailure(err, { project: projectName, worker: workerName });
     log.error("workers", `${hooks.logTag} respawn-pane failed`, {
-      worker: workerName, data: { project: projectName, error: String(err) },
+      worker: workerName,
+      data: {
+        project: projectName,
+        error: String(err),
+        ...(ptyFailure && { cause: ptyFailure.cause, ...ptyFailure.data }),
+      },
     });
     return false;
   }

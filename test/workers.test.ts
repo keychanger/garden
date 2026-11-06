@@ -204,9 +204,10 @@ vi.mock("../src/dashboard/alerts.js", () => ({
   addAlert: vi.fn(),
 }));
 
-// The real census shells out to lsof/ps/sysctl; null means "not a pty fork failure".
-vi.mock("../src/dashboard/pty-census.js", () => ({
-  explainPtyFailure: vi.fn(() => null),
+// The real capture shells out to lsof/ps/sysctl/tmux; null means "not a pty fork failure".
+vi.mock("../src/dashboard/pty-failure-capture.js", () => ({
+  capturePtyFailure: vi.fn(() => null),
+  respawnProbingForkFailure: vi.fn((respawn: () => void) => respawn()),
 }));
 
 // bd shell-outs for the removal-time bead unclaim (Decision 12). Real beads.ts
@@ -245,7 +246,8 @@ import {
   decideHold, holdWorker, releaseWorker, holdActiveWorker,
 } from "../src/dashboard/workers.js";
 import { showBeads, reopenBead, unassignBead } from "../src/dashboard/beads.js";
-import { explainPtyFailure } from "../src/dashboard/pty-census.js";
+import { capturePtyFailure, respawnProbingForkFailure } from "../src/dashboard/pty-failure-capture.js";
+import { log } from "../src/dashboard/log.js";
 import { readDashState, writeDashState, withStateLock } from "../src/dashboard/state.js";
 import { parkToHidden, restoreFromHidden } from "../src/dashboard/layout.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
@@ -891,13 +893,33 @@ describe("newWorker", () => {
 
   it("names pty exhaustion instead of tmux's fork errno when pane creation fails", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
-    vi.mocked(explainPtyFailure).mockReturnValueOnce("out of pseudo-terminals (511/511 in use; top holders: x)");
+    vi.mocked(capturePtyFailure).mockReturnValueOnce({
+      cause: "out of pseudo-terminals (511/511 in use; top holders: x)",
+      data: { freshOpenpty: "ok" },
+    });
     vi.mocked(restoreFromHidden).mockImplementationOnce(() => {
       throw new Error("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured");
     });
 
     expect(() => newWorker()).toThrow("out of pseudo-terminals (511/511 in use; top holders: x)");
     expect(removeWorker).toHaveBeenCalledWith("myproject", "bold-ash");
+    expect(capturePtyFailure).toHaveBeenCalledWith(expect.anything(), { project: "myproject", worker: "bold-ash" });
+    expect(log.error).toHaveBeenCalledWith("workers", "tmux pane creation failed; rolled back registry entry", {
+      worker: "bold-ash",
+      data: expect.objectContaining({
+        cause: "out of pseudo-terminals (511/511 in use; top holders: x)",
+        freshOpenpty: "ok",
+      }),
+    });
+  });
+
+  it("probes the bootstrap respawn with its pane as the re-attempt target", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    newWorker();
+    expect(respawnProbingForkFailure).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ cwd: expect.any(String) }),
+    );
   });
 
   it("background handoff: bails (returns null) when target project is unknown, without touching state", () => {

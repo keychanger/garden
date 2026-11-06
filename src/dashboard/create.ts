@@ -30,6 +30,7 @@ import { startWatchdog } from "./watchdog.js";
 import { installPollTriggerHook, worktreeExists as wtExists, getWorkerBaseBranch, getRemoteHost, getGitCommonDir, getWorktreeAdminDir, worktreePath } from "./git.js";
 import { dispatchDelayedContinue } from "./continue.js";
 import { resolveGardenRunner, resolveHookRunner } from "./runner.js";
+import { capturePtyFailure, respawnProbingForkFailure } from "./pty-failure-capture.js";
 import { buildSandboxConfig } from "./sandbox.js";
 import {
   DONE_SKILL_CONTENT, DONE_SKILL_DIRNAME, DONE_SKILL_FILENAME,
@@ -1247,9 +1248,12 @@ export function respawnWorkerWindow(
   const workerPaneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
   if (workerPaneId) {
     try {
-      tmuxWorkerCommand(
-        launchPlan,
-        "respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd,
+      respawnProbingForkFailure(
+        () => tmuxWorkerCommand(
+          launchPlan,
+          "respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd,
+        ),
+        { paneId: workerPaneId, cwd: workerCwd },
       );
     } catch (err) {
       // One worker failing to relaunch is that worker's problem, not the
@@ -1262,9 +1266,14 @@ export function respawnWorkerWindow(
       // Report it the way an unresumable entry is already reported — null,
       // which both callers handle — and take the placeholder window back down
       // so no empty pane is left claiming to be the worker.
+      const ptyFailure = capturePtyFailure(err, { project: projectName, worker: entry.name });
       log.error("workers", "worker resume failed; leaving the worker unresumed", {
         worker: entry.name,
-        data: { project: projectName, error: String(err) },
+        data: {
+          project: projectName,
+          error: String(err),
+          ...(ptyFailure && { cause: ptyFailure.cause, ...ptyFailure.data }),
+        },
       });
       killWindowSafe(workerWindowName);
       return null;
