@@ -608,6 +608,39 @@ describe("respawnWorkerWindow capability gate", () => {
       vi.mocked(tryResolveProvider).mockReturnValue(null);
     }
   });
+
+  // The capture after a pane fork failure takes a census and the tmux server's
+  // counters. Left standing meanwhile, the failed window can be swapped into
+  // the right slot, where it reads as the worker; newWorker kills first too.
+  it("takes the failed window down before capturing a pane fork failure", async () => {
+    const { log } = await import("../src/dashboard/log.js");
+    vi.mocked(tmux).mockImplementation((...args: string[]) => {
+      if (args[0] === "respawn-pane") {
+        throw new Error("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured");
+      }
+      return "";
+    });
+    try {
+      const result = respawnWorkerWindow(
+        "myproject",
+        { name: "myproject", path: "/repo/myproject" },
+        {
+          name: "bold-ash", sessionId: "session-1", task: "", workflow: "default",
+          branchName: "bold-ash", worktreePath: "/wt/myproject/bold-ash",
+        },
+        null,
+      );
+
+      expect(result).toBeNull();
+      expect(log.error).toHaveBeenCalledWith(
+        "workers", "worker resume failed; leaving the worker unresumed", expect.anything(),
+      );
+      expect(vi.mocked(killWindowSafe).mock.invocationCallOrder[0])
+        .toBeLessThan(vi.mocked(log.error).mock.invocationCallOrder[0]);
+    } finally {
+      vi.mocked(tmux).mockReset();
+    }
+  });
 });
 
 describe("buildWorktreeWorkerCommand", () => {

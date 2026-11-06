@@ -1326,7 +1326,10 @@ export function respawnWorkerWindow(
       // would leave the whole fleet with dead hotkeys and no review pipeline.
       // Report it the way an unresumable entry is already reported — null,
       // which both callers handle — and take the placeholder window back down
-      // so no empty pane is left claiming to be the worker.
+      // so no empty pane is left claiming to be the worker. It goes down before
+      // the capture, as in newWorker: the at-failure probes have already run,
+      // and while the capture takes its census the window could be swapped in.
+      killWindowSafe(workerWindowName);
       const ptyFailure = capturePtyFailure(err, { project: projectName, worker: entry.name });
       log.error("workers", "worker resume failed; leaving the worker unresumed", {
         worker: entry.name,
@@ -1336,7 +1339,6 @@ export function respawnWorkerWindow(
           ...(ptyFailure && { cause: ptyFailure.cause, ...ptyFailure.data }),
         },
       });
-      killWindowSafe(workerWindowName);
       return null;
     }
     setPaneLabel(workerPaneId, entry.name);
