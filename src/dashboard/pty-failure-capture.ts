@@ -36,6 +36,7 @@ export const defaultRunner: Runner = (cmd, args, env) => {
   const r = spawnSync(cmd, args, {
     encoding: "utf-8",
     timeout: PROBE_TIMEOUT_MS,
+    killSignal: "SIGKILL",
     stdio: ["ignore", "pipe", "pipe"],
     env,
   });

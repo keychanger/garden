@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { defaultRunner, probeThrowawayServer } from "../../src/dashboard/pty-failure-capture.js";
+import { defaultRunner, describeRun, probeThrowawayServer } from "../../src/dashboard/pty-failure-capture.js";
 
 // An OS sandbox denies the tmux server socket; skip rather than hard-fail there.
 // See menu-dispatch.real.test.ts, including why the socket file is unlinked.
@@ -24,4 +24,16 @@ describe.skipIf(!tmuxServerAvailable())("throwaway tmux server probe (real tmux)
     expect(spawnSync("tmux", ["-L", sock, "list-sessions"], { encoding: "utf8" }).status).not.toBe(0);
     expect(fs.existsSync(path.join(socketDir, sock))).toBe(false);
   });
+});
+
+// The capture runs synchronously on the spawn path, so a probe past its
+// deadline is killed outright, as the census's commands are: one that ignores
+// SIGTERM would otherwise hold the failing spawn until it exits on its own.
+describe("probe deadline (real process)", () => {
+  it("kills a probe that outlives its deadline even when it ignores SIGTERM", () => {
+    const started = Date.now();
+    const result = defaultRunner("sh", ["-c", "trap '' TERM; i=0; while [ $i -lt 20 ]; do sleep 1; i=$((i+1)); done"]);
+    expect(describeRun(result)).toBe("no result: timed out after 5s");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 30_000);
 });
