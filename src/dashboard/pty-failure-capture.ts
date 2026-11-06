@@ -8,6 +8,9 @@
 // Everything here runs on the failure path only and fails soft: a probe the
 // caller's sandbox denies, or a command that is missing, is recorded as such
 // rather than left out, so an absent answer is never mistaken for a negative.
+//
+// CLI path only, never in dist/hook.js: the hook entry imports this module
+// through workers.ts, create.ts and loop.ts, and tree-shaking keeps it out.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
