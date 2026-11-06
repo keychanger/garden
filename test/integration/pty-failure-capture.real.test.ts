@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -18,11 +18,40 @@ function tmuxServerAvailable(): boolean {
 }
 
 describe.skipIf(!tmuxServerAvailable())("throwaway tmux server probe (real tmux)", () => {
+  // A short parent keeps the probe's socket under the unix-socket path limit,
+  // which the throwaway HOME the suite runs under would exceed.
+  let parent: string;
+  beforeEach(() => {
+    parent = fs.mkdtempSync("/tmp/gp-");
+  });
+  afterEach(() => {
+    fs.rmSync(parent, { recursive: true, force: true });
+  });
+
   it("creates and respawns a pane on its own server, then removes the server and its socket", () => {
-    expect(probeThrowawayServer(defaultRunner)).toBe("new-session ok; respawn-pane ok");
-    const sock = `garden-probe-${process.pid}`;
-    expect(spawnSync("tmux", ["-L", sock, "list-sessions"], { encoding: "utf8" }).status).not.toBe(0);
-    expect(fs.existsSync(path.join(socketDir, sock))).toBe(false);
+    expect(probeThrowawayServer(defaultRunner, parent)).toBe("new-session ok; respawn-pane ok");
+    expect(fs.readdirSync(parent)).toEqual([]);
+  });
+
+  // Every worker sandbox can write TMUX_TMPDIR, and tmux follows a link at a
+  // socket name there to whichever server the link names.
+  it("never reaches a server through a link planted under TMUX_TMPDIR", () => {
+    const tmuxTmp = fs.mkdtempSync("/tmp/gv-");
+    const env: NodeJS.ProcessEnv = { ...process.env, TMUX_TMPDIR: tmuxTmp };
+    delete env.TMUX;
+    try {
+      const victim = spawnSync("tmux", ["-f", "/dev/null", "new-session", "-d", "-s", "victim", "exec sleep 60"], { env });
+      expect(victim.status).toBe(0);
+      const victimDir = path.join(tmuxTmp, `tmux-${process.getuid?.() ?? 0}`);
+      fs.symlinkSync(path.join(victimDir, "default"), path.join(victimDir, `garden-probe-${process.pid}`));
+      vi.stubEnv("TMUX_TMPDIR", tmuxTmp);
+      probeThrowawayServer(defaultRunner, parent);
+      expect(spawnSync("tmux", ["has-session", "-t", "victim"], { env }).status).toBe(0);
+    } finally {
+      vi.unstubAllEnvs();
+      spawnSync("tmux", ["kill-server"], { env });
+      fs.rmSync(tmuxTmp, { recursive: true, force: true });
+    }
   });
 });
 

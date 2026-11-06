@@ -85,7 +85,7 @@ The `tmux pane creation failed; rolled back registry entry` entry carries:
 |---|---|
 | `cause` | the pty count against `kern.tty.ptmx_max`, with the top holders |
 | `freshOpenpty` | `script -q /dev/null true` from the spawning process: a separate process's `openpty()` |
-| `throwawayTmux` | `new-session` then `respawn-pane -k` on a new tmux server (`-L garden-probe-<pid>`), which is then killed |
+| `throwawayTmux` | `new-session` then `respawn-pane -k` on a new tmux server (its socket in a fresh `~/.garden/control/pty-probe-*` directory), which is then killed |
 | `retry` | the same `respawn-pane -k` against the failed pane, with the placeholder command, after the two probes above |
 | `tmuxServer`, `tmuxServerFds`, `tmuxServerNofile` | pid, uptime, version, window and pane counts; open fds and `/dev/ptmx` fds; the soft and hard NOFILE limit, read by a `run-shell` job the server forks (tmux has no rlimit code, so the job inherits the server's limit) |
 | `processes`, `openFiles` | the user's and all processes against `kern.maxprocperuid` / `kern.maxproc`; `kern.num_files` against `kern.maxfiles` |

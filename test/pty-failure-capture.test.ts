@@ -8,6 +8,7 @@ vi.mock("../src/dashboard/log.js", () => ({
 }));
 
 import { log } from "../src/dashboard/log.js";
+import { CONTROL_DIR } from "../src/paths.js";
 import type { PtyCensus } from "../src/dashboard/pty-census.js";
 import {
   describeRun, probeFreshOpenpty, probeThrowawayServer, probeAtFailure, respawnProbingForkFailure,
@@ -56,7 +57,13 @@ describe("at-failure probes", () => {
     const { run, calls } = scripted([[/new-session/, ok("%0\n")]]);
     expect(probeThrowawayServer(run)).toBe("new-session ok; respawn-pane ok");
     const lines = calls.map((c) => c.line);
-    expect(lines[0]).toMatch(/^tmux -L garden-probe-\d+ -f \/dev\/null new-session -d -s probe /);
+    // Its own socket, in a fresh control-tree directory removed afterwards.
+    const sock = lines[0].split(" ")[2];
+    expect(lines.every((l) => l.startsWith(`tmux -S ${sock} -f /dev/null `))).toBe(true);
+    expect(path.dirname(path.dirname(sock))).toBe(CONTROL_DIR);
+    expect(path.basename(path.dirname(sock))).toMatch(/^pty-probe-/);
+    expect(fs.existsSync(path.dirname(sock))).toBe(false);
+    expect(lines[0]).toMatch(/ new-session -d -s probe /);
     expect(lines[1]).toMatch(/respawn-pane -k -t %0 sh -c exec sleep 86400$/);
     expect(lines[2]).toMatch(/kill-server$/);
     expect(calls.every((c) => c.env && !("TMUX" in c.env))).toBe(true);
@@ -64,10 +71,10 @@ describe("at-failure probes", () => {
 
   it("reports a throwaway server tmux could not create even though it exited 0", () => {
     const { run, calls } = scripted([[/new-session/, {
-      status: 0, stdout: "", stderr: "error creating /private/tmp/tmux-501/garden-probe-1 (Operation not permitted)\n",
+      status: 0, stdout: "", stderr: "error creating /Users/x/.garden/control/pty-probe-AbC123/s (Operation not permitted)\n",
     }]]);
     expect(probeThrowawayServer(run)).toBe(
-      "new-session denied: error creating /private/tmp/tmux-501/garden-probe-1 (Operation not permitted)",
+      "new-session denied: error creating /Users/x/.garden/control/pty-probe-AbC123/s (Operation not permitted)",
     );
     expect(calls.at(-1)?.line).toMatch(/kill-server$/);
   });

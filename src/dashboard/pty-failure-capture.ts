@@ -11,6 +11,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { CONTROL_DIR } from "../paths.js";
 import { log } from "./log.js";
 import { describePtyFailure, takePtyCensus, type PtyCensus } from "./pty-census.js";
 import { resolveGardenRunner } from "./runner.js";
@@ -86,12 +87,18 @@ export function probeFreshOpenpty(run: Runner): string {
 }
 
 // A pane on a throwaway tmux server, created then respawned, mirroring the
-// placeholder-then-respawn sequence that fails.
-export function probeThrowawayServer(run: Runner): string {
+// placeholder-then-respawn sequence that fails. Its socket goes in a fresh
+// directory in the control tree, which no worker sandbox can write: every
+// worker can write TMUX_TMPDIR (/tmp), where a link planted at the socket's
+// name would carry these commands, kill-server included, to the server it
+// names, the dashboard's own.
+export function probeThrowawayServer(run: Runner, parentDir = CONTROL_DIR): string {
   const env = { ...process.env };
   delete env.TMUX;
-  const sock = `garden-probe-${process.pid}`;
-  const tmux = (...args: string[]) => run("tmux", ["-L", sock, "-f", "/dev/null", ...args], env);
+  fs.mkdirSync(parentDir, { recursive: true, mode: 0o700 });
+  const dir = fs.mkdtempSync(path.join(parentDir, "pty-probe-"));
+  const sock = path.join(dir, "s");
+  const tmux = (...args: string[]) => run("tmux", ["-S", sock, "-f", "/dev/null", ...args], env);
   try {
     const created = tmux("new-session", "-d", "-s", "probe", "-P", "-F", "#{pane_id}", PLACEHOLDER);
     const paneId = /%\d+/.exec(created.stdout)?.[0];
@@ -103,10 +110,9 @@ export function probeThrowawayServer(run: Runner): string {
   } finally {
     tmux("kill-server");
     // kill-server leaves the socket file behind; nothing else removes it.
-    const dir = path.join(process.env.TMUX_TMPDIR || "/tmp", `tmux-${process.getuid?.() ?? 0}`);
     try {
-      fs.rmSync(path.join(dir, sock), { force: true });
-    } catch { /* a leftover socket file is harmless */ }
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch { /* a leftover directory is harmless */ }
   }
 }
 
