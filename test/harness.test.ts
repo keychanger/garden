@@ -169,9 +169,10 @@ describe("claude-code adapter dialect", () => {
     );
   });
 
-  it("builds the ultracode launch command (max effort + Opus pin; the workflow trigger rides garden's settings file)", async () => {
+  it("builds the ultracode launch command (max effort + Opus pin; the ultracode setting rides garden's settings file)", async () => {
     // Only the last `--settings` flag takes effect (verified 2.1.286), so the
-    // keyword trigger cannot ride a second one: installRuntimeConfig writes it.
+    // session-scoped `ultracode` setting cannot ride a second one:
+    // installRuntimeConfig writes it.
     const { getHarnessCore } = await importCore();
     const cmd = getHarnessCore().buildAgentCommand({
       sessionId: "abc-123", resume: false, contextFile: "/tmp/ctx.md", settingsFile: "/tmp/s.json",
