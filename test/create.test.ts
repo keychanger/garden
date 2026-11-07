@@ -251,13 +251,17 @@ describe("claude-code adapter installRuntimeConfig", () => {
     expect(renameTargets).not.toContain("/repo/myproject/.claude/settings.json");
   });
 
-  it("enables the ultracode keyword trigger only for an ultracode launch", () => {
+  it("starts the session in ultracode mode only for an ultracode launch", () => {
+    // The keyword trigger cannot do this: garden delivers every prompt as a
+    // bracketed paste, which Claude Code does not read as the user's words.
     process.argv[1] = "/usr/local/bin/garden";
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" });
-    expect(JSON.parse(settingsJsonContent()).ultracodeKeywordTrigger).toBeUndefined();
+    expect(JSON.parse(settingsJsonContent()).ultracode).toBeUndefined();
     vi.mocked(fs.writeFileSync).mockClear();
     claudeCodeAdapter.installRuntimeConfig("/repo/myproject", { path: "/repo/myproject" }, { ultracode: true });
-    expect(JSON.parse(settingsJsonContent()).ultracodeKeywordTrigger).toBe("on");
+    const settings = JSON.parse(settingsJsonContent());
+    expect(settings.ultracode).toBe(true);
+    expect(settings.ultracodeKeywordTrigger).toBeUndefined();
   });
 
   it("denies the worker writes to other worktrees' git admin files in the settings it launches with", () => {

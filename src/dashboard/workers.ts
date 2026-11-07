@@ -126,7 +126,7 @@ export interface NewWorkerOptions {
   model?: string;
   // Ultracode preset (`garden handoff --ultracode`). When true, the worker is
   // stamped with the Opus model pin and launches in Claude Code's ultracode
-  // mode (`--effort max` + the dynamic-workflow keyword trigger). Persisted to
+  // mode (`--effort max` + the session-scoped `ultracode` setting). Persisted to
   // entry.ultracode + entry.model and threaded into every launch/resume/bounce.
   ultracode?: boolean;
   // Per-worker reasoning effort for default/grow workers. Persisted to
@@ -574,7 +574,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       // Per-worker model pin. Ultracode folds its Opus pin into
       // effectiveModel above.
       ...(effectiveModel ? { model: effectiveModel } : {}),
-      // Ultracode launch mode (max effort + dynamic-workflow trigger),
+      // Ultracode launch mode (max effort + dynamic workflows),
       // threaded into every launch/resume/bounce.
       ...(ultracode ? { ultracode: true } : {}),
       // Per-worker effort rung (default/grow), threaded like model. Never set
