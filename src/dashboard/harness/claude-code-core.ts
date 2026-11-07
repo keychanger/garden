@@ -106,11 +106,12 @@ export const claudeCodeCore: HarnessCore = {
   buildAgentCommand(opts: AgentCommandOptions): string {
     const plan = opts.launchPlan;
     const modelFlag = plan.model ? ` --model ${shellEscape(plan.model)}` : "";
-    // Ultracode preset: max effort plus the dynamic-workflow keyword trigger.
-    // `--effort max` is the session-effort flag; `ultracodeKeywordTrigger` has
-    // no dedicated flag and is written into garden's settings file by
+    // Ultracode preset: max effort plus dynamic workflows. `--effort max` is
+    // the session-effort flag; the session-scoped `ultracode` setting has no
+    // dedicated flag and is written into garden's settings file by
     // installRuntimeConfig, since only the last `--settings` flag takes effect
-    // (verified 2.1.286). The paired Opus pin arrives through `plan.model`.
+    // (verified 2.1.286; `ultracode` verified 2.1.319). The paired Opus pin
+    // arrives through `plan.model`.
     const ultracodeFlags = plan.ultracode ? " --effort max" : "";
     // General reasoning-effort rung (low/medium/high/xhigh). Ultracode already
     // fixes `--effort max`, so it wins and effort is suppressed to avoid a

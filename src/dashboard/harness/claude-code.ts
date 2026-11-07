@@ -135,9 +135,12 @@ export function buildSettingsJson(
     // tmux scrollback. Fullscreen redraws the whole screen and scrolls its own
     // history (the wheel reaches it via the WheelUpPane binding in hotkeys.ts).
     tui: "fullscreen",
-    // The non-effort half of the ultracode preset (the dynamic-workflow
-    // keyword trigger); the launch command adds `--effort max`.
-    ...(opts.ultracode ? { ultracodeKeywordTrigger: "on" } : {}),
+    // The non-effort half of the ultracode preset: the session-scoped
+    // `ultracode` setting starts the session with dynamic workflows on (the
+    // launch command adds `--effort max`). The keyword trigger cannot stand in
+    // for it, since it fires only on a typed prompt and garden delivers every
+    // prompt as a bracketed paste (verified 2.1.319).
+    ...(opts.ultracode ? { ultracode: true } : {}),
     permissions: {
       // Every subcommand of a compound bash call must match a rule, so tmux chains like `tmux ... | head` still prompt without tail-utility allowances.
       allow: [

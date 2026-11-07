@@ -500,9 +500,10 @@ export interface WorkerEntry {
   // needed (a top-level scalar rides Object.assign; consumers read `?? …`).
   crew?: string;
   // Ultracode preset flag, set via `garden handoff --ultracode`. When true,
-  // the worker launches in Claude Code's ultracode mode: `--effort max` plus
-  // `ultracodeKeywordTrigger: on` (the dynamic-workflow standing opt-in),
-  // rendered by the harness buildAgentCommand. The paired Opus pin lives on
+  // the worker launches in Claude Code's ultracode mode: `--effort max` from
+  // the harness buildAgentCommand plus the session-scoped `ultracode: true`
+  // setting in garden's settings file (the dynamic-workflow standing opt-in,
+  // on from the first turn). The paired Opus pin lives on
   // `model` above (stamped at creation). Threaded into every launch, resume,
   // and bounce so the mode survives the worker's lifetime.
   ultracode?: boolean;

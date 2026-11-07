@@ -671,7 +671,8 @@ export interface WorktreeCommandOptions {
    *  fallback via `resolveVineModel`). */
   model?: string;
   /** Ultracode preset (`WorkerEntry.ultracode`). When set, the launched
-   *  claude gets `--effort max` plus the dynamic-workflow keyword trigger.
+   *  claude gets `--effort max` plus the session-scoped `ultracode`
+   *  setting, which starts it with dynamic workflows on.
    *  Threaded from the entry through spawn/resume/bounce so the mode
    *  survives the worker's lifetime. The paired Opus pin travels via
    *  `model`. */

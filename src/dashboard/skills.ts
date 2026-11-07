@@ -359,7 +359,7 @@ garden handoff <target-project> -m "Take over the failing-tests investigation on
 
 ### Ultracode mode (\`--ultracode\`)
 
-Pass \`--ultracode\` when the operator asks to hand off to an "ultracode worker" (or otherwise wants the new worker running at full strength). The child is created directly in Claude Code's ultracode mode — pinned to Opus, \`--effort max\`, and the dynamic-workflow keyword trigger enabled — so there is no manual "escape the worker, edit settings, tell it to continue" step.
+Pass \`--ultracode\` when the operator asks to hand off to an "ultracode worker" (or otherwise wants the new worker running at full strength). The child is created directly in Claude Code's ultracode mode — pinned to Opus, \`--effort max\`, and dynamic workflows on from its first turn — so there is no manual "escape the worker, edit settings, tell it to continue" step.
 
 \`\`\`bash
 garden handoff <target-project> --ultracode <<'EOF'
@@ -367,7 +367,7 @@ garden handoff <target-project> --ultracode <<'EOF'
 EOF
 \`\`\`
 
-The flag composes with \`--expect-callback\` and \`-m\`. It configures the worker's launch only; it does not by itself force the first task to run as a multi-agent workflow. If the operator wants that, say so in the briefing (the worker will honor the ultracode keyword) — otherwise the worker simply runs at max effort with workflows available on demand.
+The flag composes with \`--expect-callback\` and \`-m\`. The worker starts with ultracode on for its whole session, so it orchestrates dynamic workflows for every substantive task by default; the briefing does not need to ask for it.
 
 ### Crew (\`--crew\`)
 

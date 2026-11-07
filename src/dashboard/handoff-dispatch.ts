@@ -109,8 +109,8 @@ export interface HandoffRequest {
   parentProject?: string;
   parentWorker?: string;
   // Set when the source worker invoked `garden handoff --ultracode`. The child
-  // is created with the ultracode preset (Opus + max effort + dynamic-workflow
-  // trigger). See `NewWorkerOptions.ultracode`.
+  // is created with the ultracode preset (Opus + max effort + dynamic
+  // workflows). See `NewWorkerOptions.ultracode`.
   ultracode?: boolean;
   // Set when the source worker invoked `garden handoff --crew <name>`, or
   // when it carried a per-worker crew of its own that the CLI forwarded. The
