@@ -78,7 +78,7 @@ garden checks          # the project's full checks command, under the machine-wi
 - **Per-workflow runtime data** goes in an optional sub-object on `WorkerEntry` (`entry.trellis`, `entry.grow`), never as flat fields.
 - **Harness-specific call sites don't follow from registration.** The composer vocabularies, `harnessTuning`, the `READERS` / `OPENING_READERS` tables, `pinnedModel`, and others all branch explicitly. Read `docs/EXTENDING.md` before touching a harness or workflow.
 - **Specs** — a doc whose opening paragraph contains "the code is wrong" is a spec (`docs/STATUS.md`, the WORKFLOWS.md trellis/grow sections, `docs/TRACKS.md`). If the code disagrees with it, fix the code. `docs/future/` is background only.
-- **Tests** — vitest. `npm test` runs unit + integration; keep integration tests out from behind flags. `test/setup-home.ts` pins `HOME` to a throwaway dir; a test needing a writable garden uses `useTmpHome()` (`test/helpers.ts`), and nothing reads the real `~/.garden`. Real-tmux tests skip inside a worker sandbox and run on CI.
+- **Tests** — vitest. `npm test` runs unit + integration; keep integration tests out from behind flags. `test/setup-home.ts` pins `HOME` to a throwaway dir; a test needing a writable garden uses `useTmpHome()` (`test/helpers.ts`), and nothing reads the real `~/.garden`. The merge gate runs unit coverage (`test:coverage`, excluding `test/integration/**`) and then the integration config once; per-file thresholds guard the lifecycle/launch/lock boundaries. Real-tmux tests skip inside a worker sandbox and run on CI.
 
 ## Keeping docs current
 
