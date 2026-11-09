@@ -78,7 +78,7 @@ describe("buildWorktreeRules", () => {
   it("instructs to commit incrementally", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
-    expect(result).toContain("Commit your work incrementally");
+    expect(result).toContain("Commit incrementally");
   });
 
   it("instructs to push branch for review", async () => {
@@ -137,14 +137,16 @@ describe("buildWorktreeRules", () => {
   });
 
   it("explicitly forbids sleep/polling loops that watch the poller", async () => {
-    // The poller advances working -> reviewing only on the Claude Code Stop
-    // hook. A worker that sleeps in a bash loop to watch state transitions
-    // keeps its turn alive and blocks the hook from firing — deadlock.
+    // The poller advances working -> reviewing only when the worker's turn
+    // ends. A worker that sleeps in a bash loop to watch state transitions
+    // keeps its turn alive and blocks that event — deadlock. The wording names
+    // the turn end, not a Claude Code hook: Codex workers get the same text.
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
     expect(result).toMatch(/sleep|loop-poll/i);
-    expect(result).toContain("Stop hook");
-    expect(result).toContain("end your turn");
+    expect(result).toContain("only after your turn ends");
+    expect(result).not.toContain("Claude Code");
+    expect(result).toContain("End your turn");
   });
 
   it("omits the checks paragraph when no checksCommand is configured", async () => {
