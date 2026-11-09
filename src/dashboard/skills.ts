@@ -33,7 +33,7 @@ Runs \`touch .garden-done\` at the root of your worktree (your CWD). On the next
 
 - Re-reading the operator's original request, every deliverable they named has landed in a merged commit and is verified working.
 - You are uncertain only about whether to do MORE than was asked — prefer this skill over guessing at extra work.
-- You have committed and pushed all your changes (\`git status\` clean, \`git log @{u}..HEAD\` empty).
+- You have committed and pushed all your changes (\`git status\` clean, \`git log origin/$GARDEN_BRANCH..HEAD\` empty).
 - No review failure is pending. (If your branch is in \`failing\` state, fix the feedback instead.)
 
 ## When NOT to use

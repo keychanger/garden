@@ -122,7 +122,11 @@ describe("buildWorktreeRules", () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
     expect(result).toContain("git status");
-    expect(result).toContain("@{u}..HEAD");
+    // The branch tracks origin/<base> (worktree add -b <branch> origin/<base>),
+    // so @{u}..HEAD lists every unmerged commit even after a push.
+    expect(result).toContain("git log origin/test-branch..HEAD");
+    expect(result).not.toContain("@{u}");
+    expect(result).toContain("git push origin HEAD");
   });
 
   it("explicitly forbids creating a side branch", async () => {
