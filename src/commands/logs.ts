@@ -965,11 +965,18 @@ async function follow(filters: Filters, opts: RenderOptions): Promise<void> {
 
   renderBacklog();
 
+  // Only a width change leaves rows that no longer fit. A height change (a
+  // plot switch resizing the status pane above) is handled by tmux itself,
+  // sliding rows into and out of scrollback, so redrawing would only blank
+  // the pane for a frame.
+  let renderedColumns = process.stdout.columns;
   let redrawTimer: NodeJS.Timeout | null = null;
   const onResize = () => {
     if (redrawTimer) clearTimeout(redrawTimer);
     redrawTimer = setTimeout(() => {
       redrawTimer = null;
+      if (process.stdout.columns === renderedColumns) return;
+      renderedColumns = process.stdout.columns;
       process.stdout.write(CLEAR_SCREEN_AND_SCROLLBACK);
       renderBacklog();
     }, RESIZE_REDRAW_DEBOUNCE_MS);
