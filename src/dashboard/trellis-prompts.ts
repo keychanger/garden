@@ -154,7 +154,7 @@ export const trellisVerdictFormatSection: PromptSection = {
     "",
     "      1. [surface] `foo()` exists but takes no `timeout` arg (trellis line 47)",
     "      2. [tests] no test for the timeout behavior (trellis line 91)",
-    "      3. [docs] CLAUDE.md unchanged; trellis line 122 requires a section update",
+    "      3. [docs] AGENTS.md unchanged; trellis line 122 requires a section update",
     "",
     "  Above the drift list, enumerate how many trellis claims are",
     "  `present` (e.g. `Aligned: 7`). This running count tracks convergence.",
