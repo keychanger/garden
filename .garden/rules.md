@@ -43,12 +43,12 @@ These extend the global rules in `<garden-repo>/rules.md`.
 
 ## Testing
 
-- Test framework: vitest (when set up).
+- Test framework: vitest.
 - Test the CLI commands and dashboard behavior.
 - Do not test trivial getters or internal helpers unless they have complex logic.
 - When you change a function's behavior, update its tests to match. Changing code without
   updating its tests is a bug, not a scope decision.
-- Run `npx vitest run` and `npx tsc --noEmit` before committing. Both must pass clean.
+- Run `garden checks` before pushing (type-check, build, unit coverage, integration). It must pass clean.
 
 ## Documentation maintenance
 
