@@ -23,6 +23,7 @@ import {
   isAncestor, localBranchExists, resolveBaseBranch, worktreeExists,
   worktreePath as defaultWorktreePath, workerCleanupMarkerPath,
 } from "./git.js";
+import { refreshDashboard } from "./header.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
 import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
@@ -205,6 +206,9 @@ export function resurrectWorker(t: Tombstone): ResurrectOutcome {
     if (!resumed) {
       notes.push("session was not resumed — check the worker harness/provider configuration");
     }
+    // A registry write alone does not repaint the status pane; without this
+    // the restored row only appears on the next plot switch.
+    refreshDashboard();
   } else {
     notes.push("dashboard not running — the session resumes on the next `garden dashboard`");
   }

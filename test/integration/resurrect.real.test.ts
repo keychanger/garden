@@ -4,7 +4,8 @@
 // store), and adoption of a worktree the kill's background cleanup never
 // removed. The dashboard is treated as not running (tmux mocked out), so the
 // session-respawn leg defers to the next attach — that leg is the shared
-// respawnWorkerWindow attach path, exercised by the dashboard itself.
+// respawnWorkerWindow attach path, exercised by the dashboard itself. One
+// test flips the dashboard on, with the respawn stubbed, to check the repaint.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
@@ -21,6 +22,27 @@ vi.mock("../../src/session.js", async () => {
     "../../src/session.js",
   );
   return { ...actual, dashboardExists: vi.fn(() => false) };
+});
+
+// The dashboard-running leg: the tmux-side calls are stubbed so the test can
+// observe what resurrect asks the dashboard to do.
+vi.mock("../../src/dashboard/create.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/dashboard/create.js")>(
+    "../../src/dashboard/create.js",
+  );
+  return { ...actual, respawnWorkerWindow: vi.fn(() => "_myproject-worker-swift-oak") };
+});
+vi.mock("../../src/dashboard/poller.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/dashboard/poller.js")>(
+    "../../src/dashboard/poller.js",
+  );
+  return { ...actual, projectPollerRunning: vi.fn(() => true), startProjectPoller: vi.fn() };
+});
+vi.mock("../../src/dashboard/header.js", async () => {
+  const actual = await vi.importActual<typeof import("../../src/dashboard/header.js")>(
+    "../../src/dashboard/header.js",
+  );
+  return { ...actual, refreshDashboard: vi.fn() };
 });
 
 function git(cwd: string, ...args: string[]): string {
@@ -155,6 +177,24 @@ describe("resurrectWorker (real fs/git)", () => {
     const t = await tombstoneFor({});
     const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
     expect(() => resurrectWorker(t)).toThrow(/cleanup.*still running/i);
+  });
+
+  it("repaints the dashboard so the resurrected worker shows in its plot immediately", async () => {
+    const session = await import("../../src/session.js");
+    vi.mocked(session.dashboardExists).mockReturnValueOnce(true);
+    const { refreshDashboard } = await import("../../src/dashboard/header.js");
+    const { findWorkerByName } = await import("../../src/dashboard/registry.js");
+    vi.mocked(refreshDashboard).mockImplementation(() => {
+      // The repaint must see the restored entry, or the row still won't draw.
+      expect(findWorkerByName(PROJECT, WORKER)).toBeTruthy();
+    });
+
+    const t = await tombstoneFor({});
+    const { resurrectWorker } = await import("../../src/dashboard/resurrect.js");
+    const outcome = resurrectWorker(t);
+
+    expect(outcome.resumed).toBe(true);
+    expect(refreshDashboard).toHaveBeenCalled();
   });
 
   it("refuses a path that exists but is not a worktree", async () => {
