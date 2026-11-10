@@ -1066,10 +1066,12 @@ if [ -n "$BOOTSTRAP_FAIL" ]; then
 fi
 
 # Create worktree. Branch explicitly off origin/$BASE so worker freshness
-# does not depend on the main checkout being clean or up to date.
+# does not depend on the main checkout being clean or up to date. --no-track:
+# a branch cut from a remote-tracking ref otherwise tracks it, which refuses
+# the worker's bare \`git push\` with a hint to push HEAD to the base branch.
 printf '  Creating worktree...\\n'
 mkdir -p "$(dirname ${wtPathLit})"
-git -C ${projectPathLit} worktree add ${wtPathLit} -b ${branchLit} "origin/$BASE"
+git -C ${projectPathLit} worktree add ${wtPathLit} --no-track -b ${branchLit} "origin/$BASE"
 
 # Neutralize .garden-done if a past reviewer accidentally committed it to the
 # base branch. Without this, the first Stop hook with no commits ahead sees

@@ -731,7 +731,7 @@ describe("buildWorktreeBootstrapScript", () => {
     // the load-bearing piece — $BASE is initialized to the requested base
     // and may be rewritten by the missing-base fallback path.
     expect(script).toContain("BASE=main");
-    expect(script).toMatch(/worktree add \/wt\/myproject\/bold-ash -b bold-ash "origin\/\$BASE"/);
+    expect(script).toMatch(/worktree add \/wt\/myproject\/bold-ash --no-track -b bold-ash "origin\/\$BASE"/);
   });
 
   it("defaults to branching off origin/main when baseBranch is omitted", () => {

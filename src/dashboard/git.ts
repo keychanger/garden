@@ -200,7 +200,7 @@ export function createWorktree(
   if (opts.useExistingBranch) {
     git(repoPath, "worktree", "add", wtPath, branchName);
   } else if (opts.startPoint) {
-    git(repoPath, "worktree", "add", wtPath, "-b", branchName, opts.startPoint);
+    git(repoPath, "worktree", "add", wtPath, "--no-track", "-b", branchName, opts.startPoint);
   } else {
     git(repoPath, "worktree", "add", wtPath, "-b", branchName);
   }

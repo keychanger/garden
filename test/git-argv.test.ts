@@ -117,6 +117,17 @@ describe("createWorktree", () => {
     );
   });
 
+  it("does not track a remote start point", () => {
+    // Tracking origin/<base> makes a bare `git push` refuse and suggest
+    // pushing HEAD to the base branch.
+    createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak", { startPoint: "origin/main" });
+    expect(mockExec).toHaveBeenCalledWith(
+      "git",
+      ["worktree", "add", "/tmp/wt/proj/worker", "--no-track", "-b", "swift-oak", "origin/main"],
+      expect.objectContaining({ cwd: "/repo" }),
+    );
+  });
+
   it("installs npm dependencies when package.json exists", () => {
     mockFs.existsSync.mockReturnValue(true);
     createWorktree("/repo", "/tmp/wt/proj/worker", "swift-oak");
