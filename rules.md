@@ -71,7 +71,9 @@ in `<project>/.garden/rules.md` can extend or override these.
 
 ## Code quality
 
-- All code is self-documenting. If code needs a comment to be understood, rewrite the code.
+- Code should say what it does on its own. If it needs a comment to explain *what* it does,
+  rewrite the code. Comments are for *why* it has its shape: a non-obvious constraint, a past
+  incident, a rejected alternative.
 - Do not add comments, docstrings, or type annotations to code you did not change.
 - Do not refactor code that is unrelated to your task.
 - Do not add, modify, or restructure code that is outside the scope of the current task.

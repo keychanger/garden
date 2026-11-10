@@ -229,8 +229,9 @@ export const codexCore: HarnessCore = {
   // Stop). toolActivity is declared true though Codex's PreToolUse/PostToolUse
   // coverage is partial (not all shell calls) — the worker-path slices tune
   // stale-detection for that. sandbox: Codex enforces its own (--sandbox
-  // modes). skills: false — garden folds its bundled skill content into the
-  // AGENTS.md rules for Codex rather than installing native skill files.
+  // modes). skills: false — Codex loads no native skills. The bootstrap still
+  // writes .claude/skills/<name>/SKILL.md into every worktree, and the rules
+  // in AGENTS.md point at those files by path.
   capabilities: {
     turnEnd: true,
     promptSubmitted: true,
