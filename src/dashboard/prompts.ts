@@ -630,14 +630,14 @@ export const holisticIntroSection: PromptSection = {
   render(ctx) {
     const mergeCount = ctx.entry.mergeCount ?? 2;
     return [
-      `You are performing a ONE-TIME holistic (whole-task) review of a multi-phase task that`,
+      `You are performing a one-time holistic (whole-task) review of a multi-phase task that`,
       `worker \`${ctx.entry.name}\` completed across ${mergeCount} merges into \`${ctx.baseBranch}\`.`,
       ``,
-      `WHY THIS REVIEW EXISTS — each phase was independently reviewed, but ONLY as a single delta`,
-      `against the then-current base. Nobody reviewed the ASSEMBLED WHOLE. Find cross-phase coherence`,
-      `defects: an abstraction an early phase introduced that a later phase made obsolete; dead code`,
-      `a later phase orphaned; a shared-registry/config collision "resolved" by keeping every entry;`,
-      `a contract an early phase set that a later phase silently broke.`,
+      `Each phase was reviewed on its own, as a single delta against the base of the time, so nobody`,
+      `has reviewed the assembled whole. Your job is to find cross-phase coherence defects: an`,
+      `abstraction an early phase introduced that a later phase made obsolete; dead code a later`,
+      `phase orphaned; a shared-registry/config collision "resolved" by keeping every entry; a`,
+      `contract an early phase set that a later phase silently broke.`,
     ].join("\n");
   },
 };
@@ -647,13 +647,13 @@ export const holisticRationaleSection: PromptSection = {
   render(ctx) {
     const rationale = ctx.entry.holisticRationale?.trim();
     const lines = [
-      `## Deliberate-decision guardrail — DO NOT UNDO INTENTIONAL CHOICES`,
+      `## Deliberate-decision guardrail: do not undo intentional choices`,
       ``,
-      `You do NOT carry the original worker's full context, so a choice that looks "wrong" may be a`,
-      `deliberate, documented decision (not ratcheting a baseline, deliberately keeping every`,
-      `registry/config entry, a stub left for a follow-up). If a change matches such a decision it is`,
-      `OUT OF SCOPE — do not revert or weaken it (un-ratcheting a baseline, deleting a deliberately-`,
-      `kept entry, loosening a contract a phase tightened).`,
+      `You do not have the original worker's full context, so a choice that looks wrong may be a`,
+      `deliberate, documented decision (not ratcheting a baseline, keeping every registry/config`,
+      `entry on purpose, a stub left for a follow-up). A change that matches such a decision is out`,
+      `of scope: do not revert or weaken it (un-ratcheting a baseline, deleting a deliberately kept`,
+      `entry, loosening a contract a phase tightened).`,
     ];
     if (rationale) {
       lines.push(
@@ -676,33 +676,32 @@ export const holisticActionSection: PromptSection = {
     const lines = [
       `## What to do`,
       ``,
-      `SCOPING — the diff below is scoped to the files this task touched. A real defect can ripple`,
-      `into a file it never edited (dead code orphaned elsewhere, a caller now broken); the scoped`,
-      `diff won't show those. Treat the file list as a starting point, not a fence — if your reading`,
-      `implies a problem outside it, investigate anyway.`,
+      `The diff below is scoped to the files this task touched, but a real defect can ripple into a`,
+      `file it never edited (dead code orphaned elsewhere, a caller now broken). Treat the file list`,
+      `as a starting point, not a fence: if your reading implies a problem outside it, investigate.`,
       ``,
-      `Only flag GENUINE cross-phase coherence defects. Do NOT re-litigate per-phase review, apply`,
-      `stylistic edits, "improve" working code, or extend scope. A finding must be a concrete defect`,
-      `in how the phases COMBINE, with a one-line note on which phases conflict and why.`,
+      `Flag only genuine cross-phase coherence defects: a concrete defect in how the phases combine,`,
+      `with a one-line note on which phases conflict and why. Per-phase review already happened, so`,
+      `do not re-litigate it, apply stylistic edits, "improve" working code, or extend scope.`,
     ];
     if (mode === "shadow") {
       lines.push(
         ``,
-        `THIS IS AN ANALYSIS-ONLY PASS — make NO code edits and NO commits. If you find defects, list`,
-        `each one above (naming which phases conflict and why). Never fix anything in this pass.`,
+        `**This is an analysis-only pass: make no code edits and no commits.** List each defect you`,
+        `find in your response, naming which phases conflict and why.`,
       );
     } else {
       lines.push(
         ``,
-        `If you find a genuine defect, fix it MINIMALLY and commit with a message prefixed "review: "`,
-        `naming the cross-phase defect. If the assembled task is coherent (the common outcome), change`,
-        `NOTHING and do not commit.`,
+        `If you find a genuine defect, make the minimal fix and commit it with a message prefixed`,
+        `"review: " naming the cross-phase defect. If the assembled task is coherent (the common`,
+        `outcome), change nothing and do not commit.`,
         ...nonBlockingNotesFor(ctx.data),
       );
       if (ctx.data.checksCommand) {
         lines.push(
           ``,
-          `If you commit a fix, run \`garden checks ${ctx.projectName}\` in the FOREGROUND and make it`,
+          `If you commit a fix, run \`garden checks ${ctx.projectName}\` in the foreground and make it`,
           `pass before you finish (it runs \`${ctx.data.checksCommand}\` under a machine-wide slot`,
           `gate). Never background it — see the output-format note. If checks cannot be made to`,
           `pass, report FAILED.`,

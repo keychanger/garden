@@ -105,7 +105,7 @@ describe("holistic final-review prompt", () => {
   it("frames a whole-task review of the assembled multi-phase result", () => {
     for (const s of [fix, shadow]) {
       expect(s).toContain("brown-blunt-flock");
-      expect(s).toContain("ASSEMBLED WHOLE");
+      expect(s).toContain("has reviewed the assembled whole");
       expect(s).toContain("3 merges");
     }
   });
@@ -117,7 +117,7 @@ describe("holistic final-review prompt", () => {
 
   it("carries the deliberate-decision guardrail with the cross-phase rationale", () => {
     for (const s of [fix, shadow]) {
-      expect(s).toContain("DO NOT UNDO INTENTIONAL CHOICES");
+      expect(s).toContain("do not undo intentional choices");
       expect(s).toContain("phase 3: replace uses");
     }
   });
@@ -129,15 +129,15 @@ describe("holistic final-review prompt", () => {
   });
 
   it("fix mode: fix + commit, CLEAN/FIXED/FAILED verdict, references garden checks", () => {
-    expect(fix).toContain('commit with a message prefixed "review: "');
+    expect(fix).toContain("make the minimal fix and commit it with a message prefixed");
     expect(fix).toContain("garden checks proj");
     expect(fix).toContain("`FIXED`");
-    expect(fix).not.toContain("ANALYSIS-ONLY");
+    expect(fix).not.toContain("analysis-only");
   });
 
   it("shadow mode: analysis-only, never FIXED, no commit", () => {
-    expect(shadow).toContain("ANALYSIS-ONLY");
-    expect(shadow).toContain("make NO code edits and NO commits");
+    expect(shadow).toContain("analysis-only");
+    expect(shadow).toContain("make no code edits and no commits");
     expect(shadow).toContain("Never emit FIXED");
     expect(shadow).not.toContain('commit with a message prefixed "review: "');
   });
