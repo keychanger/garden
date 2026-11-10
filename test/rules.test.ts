@@ -122,8 +122,9 @@ describe("buildWorktreeRules", () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
     expect(result).toContain("git status");
-    // The branch tracks origin/<base> (worktree add -b <branch> origin/<base>),
-    // so @{u}..HEAD lists every unmerged commit even after a push.
+    // Workers created before --no-track still track origin/<base>, where
+    // @{u}..HEAD lists every unmerged commit even after a push; name the
+    // worker's own remote branch so the check holds for every worker.
     expect(result).toContain("git log origin/test-branch..HEAD");
     expect(result).not.toContain("@{u}");
     expect(result).toContain("git push origin HEAD");
