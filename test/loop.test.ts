@@ -48,6 +48,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   shellEscape: vi.fn((s: string) =>
     /^[a-zA-Z0-9_./:=-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`),
   getFirstPaneId: vi.fn(() => "%20"),
+  isTmuxForkFailure: (err: unknown) => String(err).includes("fork failed"),
   paneExists: vi.fn(() => true),
   windowExists: vi.fn(() => true),
 }));
@@ -477,6 +478,59 @@ describe("loopAutoContinueAfterMerge", () => {
 
     expect(result).toBe(false);
     expect(fs.writeFileSync).not.toHaveBeenCalled();
+    expect(dispatchDelayedSeed).not.toHaveBeenCalled();
+  });
+
+  it("puts back what it wrote for the iteration when the respawn fails, keeping the worker's status", () => {
+    const entry = makeWorker({
+      sessionId: "merged-uuid",
+      agentStatus: "idle",
+      mergedAt: 1_700_000_000_000,
+      pendingContinueChangedFiles: ["src/foo.ts"],
+    });
+    vi.mocked(findWorkerByName).mockReturnValue(entry);
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(tmux).mockImplementation((cmd: string) => {
+      if (cmd === "respawn-pane") throw new Error("tmux died");
+      return undefined as unknown as ReturnType<typeof tmux>;
+    });
+
+    expect(loopAutoContinueAfterMerge("myproject", "bold-ash", makeHooks(), {})).toBe(false);
+
+    expect(vi.mocked(updateWorkerFields).mock.calls.at(-1)).toEqual(["myproject", "bold-ash", {
+      sessionId: "merged-uuid",
+      agentStatus: "idle",
+      pendingContinueChangedFiles: ["src/foo.ts"],
+      pendingContinueSyncFailed: undefined,
+      mergedAt: 1_700_000_000_000,
+    }]);
+  });
+
+  it("marks the worker exited when the respawn fails to fork, since tmux() has killed its pane", () => {
+    // A second respawn of that pane would segfault the tmux server, so the
+    // merged sweep (which skips exited workers) must not retry against it.
+    const entry = makeWorker({ sessionId: "merged-uuid", agentStatus: "idle" });
+    vi.mocked(findWorkerByName).mockReturnValue(entry);
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      activeWindowName: "_myproject-worker-bold-ash",
+      activePaneId: "%9",
+    }));
+    vi.mocked(tmux).mockImplementation((cmd: string) => {
+      if (cmd === "respawn-pane") {
+        throw new Error("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured");
+      }
+      return undefined as unknown as ReturnType<typeof tmux>;
+    });
+
+    expect(loopAutoContinueAfterMerge("myproject", "bold-ash", makeHooks(), {})).toBe(false);
+
+    expect(vi.mocked(updateWorkerFields).mock.calls.at(-1)?.[2]).toMatchObject({
+      sessionId: "merged-uuid",
+      agentStatus: "exited",
+    });
     expect(dispatchDelayedSeed).not.toHaveBeenCalled();
   });
 });

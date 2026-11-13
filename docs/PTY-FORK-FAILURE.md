@@ -28,7 +28,13 @@ doc and the code disagree, fix whichever is wrong.
   fault address 0x2e0, in `~/Library/Logs/DiagnosticReports/tmux-*.ips`. The
   probe was removed. **Never issue a second `respawn-pane` against a pane whose
   respawn failed to fork**; `kill-window`/`kill-pane` on it is safe
-  (`window_pane_destroy` checks for NULL).
+  (`window_pane_destroy` checks for NULL). Reproduced on a throwaway server
+  started under a low `ulimit -n`: any fork errno poisons the pane, not only
+  ENXIO. So `tmux()` (`tmux.ts`) kills the pane of any `respawn-pane` that
+  fails to fork before rethrowing, which covers every caller: bounce, the loop
+  respawn, and the passive panes `garden redraw` respawns. A loop worker whose
+  respawn fails is put back on its merged session and marked `exited`; the
+  next dashboard attach resumes it.
 
 ## The code path
 

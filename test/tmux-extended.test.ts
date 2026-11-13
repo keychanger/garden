@@ -71,6 +71,7 @@ import {
   cleanPaneTitle,
   stripControlSequences,
   pasteAndSubmit,
+  respawnPaneTarget,
   __setTmuxExecAllowedForTests,
 } from "../src/dashboard/tmux.js";
 
@@ -339,6 +340,72 @@ describe("tmux", () => {
       ["set-option", "-t", "garden-dashboard", "mouse", "on"],
       { stdio: ["ignore", "ignore", "pipe"] },
     );
+  });
+
+  // A respawn that fails to fork leaves tmux holding a NULL input context on
+  // the pane; a second respawn of it segfaults the whole server.
+  describe("a respawn-pane that fails to fork", () => {
+    const forkFailure = (reason: string) => Object.assign(new Error("Command failed"), {
+      status: 1, stderr: Buffer.from(`respawn pane failed: fork failed: ${reason}\n`),
+    });
+
+    it("kills the pane before rethrowing tmux's error", () => {
+      mockExecFileSync
+        .mockImplementationOnce(() => { throw forkFailure("Device not configured"); })
+        .mockReturnValueOnce(undefined);
+      expect(() => tmux("respawn-pane", "-k", "-c", "/wt", "-t", "%41", "sh", "-c", "run"))
+        .toThrow("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured");
+      expect(mockExecFileSync).toHaveBeenLastCalledWith(
+        "tmux", ["kill-pane", "-t", "%41"], { stdio: ["ignore", "ignore", "pipe"] },
+      );
+      expect(log.warn).toHaveBeenCalledWith("tmux", expect.stringContaining("killed pane"), expect.anything());
+    });
+
+    it("finds the respawn inside a hidden-environment command queue", () => {
+      mockExecFileSync
+        .mockImplementationOnce(() => { throw forkFailure("Too many open files"); })
+        .mockReturnValueOnce(undefined);
+      expect(() => tmux(
+        "set-environment", "-F", "-t", "garden-dashboard", "V", "#{V}",
+        ";", "respawn-pane", "-k", "-t", "%7", "sh", "-c", "run",
+        ";", "set-environment", "-hF", "-t", "garden-dashboard", "V", "#{V}",
+      )).toThrow(/fork failed/);
+      expect(mockExecFileSync).toHaveBeenLastCalledWith(
+        "tmux", ["kill-pane", "-t", "%7"], { stdio: ["ignore", "ignore", "pipe"] },
+      );
+    });
+
+    it("still throws tmux's error, and logs, when the kill fails too", () => {
+      mockExecFileSync
+        .mockImplementationOnce(() => { throw forkFailure("Device not configured"); })
+        .mockImplementationOnce(() => { throw new Error("no server"); });
+      expect(() => tmux("respawn-pane", "-k", "-t", "%41", "sh", "-c", "run")).toThrow(/fork failed/);
+      expect(log.error).toHaveBeenCalledWith("tmux", expect.stringContaining("could not kill"), expect.anything());
+    });
+
+    it("leaves the pane alone for any other respawn failure", () => {
+      mockExecFileSync.mockImplementationOnce(() => {
+        throw Object.assign(new Error("Command failed"), { status: 1, stderr: Buffer.from("can't find pane: %41\n") });
+      });
+      expect(() => tmux("respawn-pane", "-k", "-t", "%41", "sh", "-c", "run")).toThrow(/can't find pane/);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    });
+
+    it("leaves panes alone when the failing command is not a respawn", () => {
+      mockExecFileSync.mockImplementationOnce(() => {
+        throw Object.assign(new Error("Command failed"), { status: 1, stderr: Buffer.from("create window failed: fork failed: x\n") });
+      });
+      expect(() => tmux("new-window", "-d", "-t", "garden-dashboard", "sh")).toThrow(/fork failed/);
+      expect(mockExecFileSync).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe("respawnPaneTarget", () => {
+  it("reads the respawn's -t and ignores the -t of other commands in the queue", () => {
+    expect(respawnPaneTarget(["set-environment", "-t", "s", "V", "x", ";", "respawn-pane", "-k", "-t", "%3", "sh"])).toBe("%3");
+    expect(respawnPaneTarget(["respawn-pane", "-k", "sh", ";", "set-environment", "-t", "s"])).toBeNull();
+    expect(respawnPaneTarget(["kill-pane", "-t", "%3"])).toBeNull();
   });
 });
 

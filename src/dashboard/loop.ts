@@ -41,7 +41,7 @@ import { capturePtyFailure, respawnProbingForkFailure } from "./pty-failure-capt
 import { tmuxWorkerCommand } from "./claude-env.js";
 import { readDashState } from "./state.js";
 import {
-  tmux, shellEscape, getFirstPaneId, paneExists, windowExists,
+  tmux, shellEscape, getFirstPaneId, isTmuxForkFailure, paneExists, windowExists,
 } from "./tmux.js";
 import { workerWindowName as workerWin } from "./window-names.js";
 
@@ -268,12 +268,29 @@ export function loopAutoContinueAfterMerge(
       ),
     );
   } catch (err) {
+    // The iteration never started, so put back what was written for it. The
+    // old sessionId above all: it is the conversation that just merged, and the
+    // fresh one was never launched, so a later --resume of it would find
+    // nothing. A fork failure has also cost the worker its pane (tmux() kills
+    // it, since respawning it again would crash the tmux server); `exited` is
+    // then the truth, and it keeps the merged sweep from retrying against a
+    // pane that is gone. The next dashboard attach resumes the worker. Any
+    // other failure left the old process running, so its status stands.
+    const forkFailed = isTmuxForkFailure(err);
+    updateWorkerFields(projectName, workerName, {
+      sessionId: entry.sessionId,
+      agentStatus: forkFailed ? "exited" : entry.agentStatus,
+      pendingContinueChangedFiles: entry.pendingContinueChangedFiles,
+      pendingContinueSyncFailed: entry.pendingContinueSyncFailed,
+      mergedAt: entry.mergedAt,
+    });
     const ptyFailure = capturePtyFailure(err, { project: projectName, worker: workerName });
     log.error("workers", `${hooks.logTag} respawn-pane failed`, {
       worker: workerName,
       data: {
         project: projectName,
         error: String(err),
+        ...(forkFailed && { pane: "killed; the worker is exited until the next dashboard attach resumes it" }),
         ...(ptyFailure && { cause: ptyFailure.cause, ...ptyFailure.data }),
       },
     });
