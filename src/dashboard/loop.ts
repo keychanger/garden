@@ -261,14 +261,11 @@ export function loopAutoContinueAfterMerge(
   // the same pane. Same primitive bounceWorker uses; the difference is we
   // pass --session-id (fresh) instead of --resume.
   try {
-    // No re-attempt on a fork failure: this pane is left in place, and a
-    // placeholder respawned into it would read as a live worker.
     respawnProbingForkFailure(
       () => tmuxWorkerCommand(
         launchPlan,
         "respawn-pane", "-k", "-c", wtPath, "-t", paneId, "sh", "-c", respawnCmd,
       ),
-      null,
     );
   } catch (err) {
     const ptyFailure = capturePtyFailure(err, { project: projectName, worker: workerName });

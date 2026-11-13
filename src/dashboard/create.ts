@@ -1256,7 +1256,6 @@ export function respawnWorkerWindow(
           launchPlan,
           "respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd,
         ),
-        { paneId: workerPaneId, cwd: workerCwd },
       );
     } catch (err) {
       // One worker failing to relaunch is that worker's problem, not the

@@ -913,13 +913,12 @@ describe("newWorker", () => {
     });
   });
 
-  it("probes the bootstrap respawn with its pane as the re-attempt target", () => {
+  it("probes the bootstrap respawn without a re-attempt against its pane", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     newWorker();
-    expect(respawnProbingForkFailure).toHaveBeenCalledWith(
-      expect.any(Function),
-      expect.objectContaining({ cwd: expect.any(String) }),
-    );
+    // A second respawn of a pane whose respawn failed to fork segfaults tmux,
+    // so the probe gets the respawn and nothing that names the pane.
+    expect(respawnProbingForkFailure).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it("background handoff: bails (returns null) when target project is unknown, without touching state", () => {

@@ -18,6 +18,17 @@ doc and the code disagree, fix whichever is wrong.
   minutes after the 11-06 failure, with about 65 allocated.
 - The unified log had no kernel lines in the 30s around either 11-06 failure.
 - Closing workers in another project made spawns succeed again.
+- On 11-10 and 11-13 the failure came minutes after a reboot, during the
+  attach-time resume loop (`create.ts`), and each time the tmux server
+  segfaulted. The operator then saw `tmux new-window failed: no server running`.
+  The crash is garden's doing, not the fork failure's. A failed `respawn-pane`
+  leaves the pane's input context NULL (tmux 3.7c, `spawn_pane` returns on the
+  fork-failure branch after `input_free` and before `window_pane_set_event`),
+  and the capture's `retry` probe then respawned that same pane: `input_free(NULL)`,
+  fault address 0x2e0, in `~/Library/Logs/DiagnosticReports/tmux-*.ips`. The
+  probe was removed. **Never issue a second `respawn-pane` against a pane whose
+  respawn failed to fork**; `kill-window`/`kill-pane` on it is safe
+  (`window_pane_destroy` checks for NULL).
 
 ## The code path
 
@@ -57,7 +68,7 @@ deliberately triggered one to confirm it.
 | 3 | `ttymalloc` or slot-vector allocation failing in `ptmx_get_ioctl` | yes, the wrapper line | `kernelLog` | `kernelLog: no kernel lines` |
 | 4 | slot lookup missing in `ptcopen`, `ptsopen`, or the grant/unlock/name ioctls (slot freed between steps) | yes, the wrapper line | `kernelLog` | `kernelLog: no kernel lines` |
 | 5 | `ptyioctl` slot found with no tty | no | — | unreachable by inspection: the tty is allocated with the slot and freed only with it |
-| 6 | the replica `open()` reaching a vnode revoked after lookup (`dead_open` returns ENXIO) | no | `freshOpenpty: ok`, `throwawayTmux: …ok`, `retry: ok`, with `ttysWithTwoSessions` non-empty | `retry` or `freshOpenpty` failing with ENXIO (a persistent state, not a per-open race) |
+| 6 | the replica `open()` reaching a vnode revoked after lookup (`dead_open` returns ENXIO) | no | `freshOpenpty: ok`, `throwawayTmux: …ok`, with `ttysWithTwoSessions` non-empty | `freshOpenpty` failing with ENXIO (a persistent state, not a per-open race) |
 | 7 | `spec_open` on a `nodev` mount or an out-of-range major | no | — | static conditions; a failure that clears without a reboot rules them out |
 | 8 | sandbox or other MAC policy denying the open | Sandbox logs a `deny` kernel line | `kernelLog`; `freshOpenpty` from the same caller | errno: Sandbox returns EPERM |
 | 9 | devfs clone failure, or two opens racing for one minor | — | — | errno: clone failure is ENOMEM; the race returns `EREDRIVEOPEN`, which `vn_open` retries |
@@ -86,23 +97,21 @@ The `tmux pane creation failed; rolled back registry entry` entry carries:
 | `cause` | the pty count against `kern.tty.ptmx_max`, with the top holders |
 | `freshOpenpty` | `script -q /dev/null true` from the spawning process: a separate process's `openpty()` |
 | `throwawayTmux` | `new-session` then `respawn-pane -k` on a new tmux server (`-L garden-probe-<pid>`), which is then killed |
-| `retry` | the same `respawn-pane -k` against the failed pane, with the placeholder command, after the two probes above |
 | `tmuxServer`, `tmuxServerFds`, `tmuxServerNofile` | pid, uptime, version, window and pane counts; open fds and `/dev/ptmx` fds; the soft and hard NOFILE limit, read by a `run-shell` job the server forks (tmux has no rlimit code, so the job inherits the server's limit) |
 | `processes`, `openFiles` | the user's and all processes against `kern.maxprocperuid` / `kern.maxproc`; `kern.num_files` against `kern.maxfiles` |
 | `ptmxHolders` | `/dev/ptmx` holders totalled by command |
 | `cttyWithoutNode`, `ttysWithTwoSessions` | controlling ttys with no `/dev` node; ttys with more than one session leader |
 
-`newWorker` and the resume path in `create.ts` run the re-attempt; the loop
-respawn in `loop.ts` does not, because it leaves its pane in place and a
-placeholder there would read as a live worker. A sibling entry, `kernel log
+There is no re-attempt against the failed pane: that crashes the tmux server
+(see "What is known"). A sibling entry, `kernel log
 around pane fork failure`, follows about 6s later with the kernel lines from
 30s before to 5s after the failure.
 
-| `freshOpenpty` | `throwawayTmux` | `retry` | Reading |
-|---|---|---|---|
-| ENXIO | fails | fails | machine-wide kernel state: candidates 1–4 (check `kernelLog`) |
-| ok | ok | fails | state of the garden tmux server process: compare its `tmuxServer*` fields with the throwaway server |
-| ok | ok | ok | a per-attempt race: candidate 6 (check `ttysWithTwoSessions`) |
+| `freshOpenpty` | `throwawayTmux` | Reading |
+|---|---|---|
+| ENXIO | fails | machine-wide kernel state: candidates 1–4 (check `kernelLog`) |
+| ok | fails | something a fresh tmux server's fork trips on but a bare `openpty()` does not; compare `tmuxServer*` |
+| ok | ok | the garden server's state or a per-attempt race: candidate 6 (check `ttysWithTwoSessions` and the `tmuxServer*` fields) |
 
 A probe that reads `denied: … Operation not permitted` ran inside an agent
 sandbox, which denies ptys and tmux sockets. It gives no answer either way.

@@ -81,15 +81,19 @@ describe("at-failure probes", () => {
       .toBe("new-session ok; respawn-pane failed (exit 1): respawn pane failed: fork failed: Device not configured");
   });
 
-  it("probes locality before re-attempting the same respawn against the failed pane", () => {
+  it("probes locality first and never sends a command to the live tmux server", () => {
     const { run, calls } = scripted([[/new-session/, ok("%0\n")]]);
-    expect(probeAtFailure({ paneId: "%41", cwd: "/repo" }, run)).toEqual({
+    expect(probeAtFailure(run)).toEqual({
       freshOpenpty: "ok",
       throwawayTmux: "new-session ok; respawn-pane ok",
-      retry: "ok",
     });
-    expect(calls.at(-1)?.line).toBe("tmux respawn-pane -k -c /repo -t %41 sh -c exec sleep 86400");
     expect(calls[0].line).toMatch(/^\/usr\/bin\/script /);
+    // A respawn against the pane that just failed to fork segfaults tmux
+    // (input_free on the NULL input context the failed respawn left behind).
+    // Every tmux call must address the throwaway server.
+    const tmuxCalls = calls.filter((c) => c.line.startsWith("tmux "));
+    expect(tmuxCalls.length).toBeGreaterThan(0);
+    expect(tmuxCalls.every((c) => / -L garden-probe-\d+ /.test(c.line))).toBe(true);
   });
 
   it("records each probe that throws without losing the others", () => {
@@ -97,24 +101,23 @@ describe("at-failure probes", () => {
       if (cmd === "/usr/bin/script") throw new Error("spawn EPERM");
       return ok("%0\n");
     };
-    const probes = probeAtFailure(null, run);
+    const probes = probeAtFailure(run);
     expect(probes.freshOpenpty).toBe("unavailable: Error: spawn EPERM");
     expect(probes.throwawayTmux).toBe("new-session ok; respawn-pane ok");
-    expect(probes.retry).toBe("not attempted at this call site");
   });
 });
 
 describe("respawnProbingForkFailure", () => {
   it("runs no probe when the respawn succeeds", () => {
     const run = vi.fn<Runner>(() => ok());
-    respawnProbingForkFailure(() => {}, { paneId: "%1", cwd: "/" }, run);
+    respawnProbingForkFailure(() => {}, run);
     expect(run).not.toHaveBeenCalled();
   });
 
   it("rethrows any other failure unchanged and unprobed", () => {
     const run = vi.fn<Runner>(() => ok());
     const err = new Error("tmux swap-pane failed: can't find pane: %36");
-    expect(() => respawnProbingForkFailure(() => { throw err; }, null, run)).toThrow(err);
+    expect(() => respawnProbingForkFailure(() => { throw err; }, run)).toThrow(err);
     expect(run).not.toHaveBeenCalled();
   });
 
@@ -122,13 +125,13 @@ describe("respawnProbingForkFailure", () => {
     const { run } = scripted([[/new-session/, ok("%0\n")]]);
     let caught: unknown;
     try {
-      respawnProbingForkFailure(() => { throw new Error(FORK); }, { paneId: "%1", cwd: "/" }, run);
+      respawnProbingForkFailure(() => { throw new Error(FORK); }, run);
     } catch (err) {
       caught = err;
     }
     expect(caught).toBeInstanceOf(PaneForkFailure);
     expect(String(caught)).toBe(`Error: ${FORK}`);
-    expect((caught as PaneForkFailure).probes.retry).toBe("ok");
+    expect((caught as PaneForkFailure).probes).toEqual({ freshOpenpty: "ok", throwawayTmux: "new-session ok; respawn-pane ok" });
   });
 });
 
@@ -232,12 +235,11 @@ describe("capturePtyFailure", () => {
 
   it("merges the at-failure probes with server and machine state, and dispatches the kernel log read", () => {
     const dispatchKernelLog = vi.fn();
-    const err = new PaneForkFailure(new Error(FORK), { freshOpenpty: "ok", throwawayTmux: "x", retry: "ok" });
+    const err = new PaneForkFailure(new Error(FORK), { freshOpenpty: "ok", throwawayTmux: "x" });
     const result = capturePtyFailure(err, ctx, { run: () => fail("nope"), census, dispatchKernelLog })!;
     expect(result.cause).toMatch(/^tmux could not open a pseudo-terminal for the pane, below the machine limit \(62\/511 in use/);
     expect(result.data).toMatchObject({
       freshOpenpty: "ok",
-      retry: "ok",
       tmuxServer: "unavailable: display-message failed (exit 1): nope",
       cttyWithoutNode: "failed (exit 1): nope",
       ptmxHolders: "none visible",
@@ -248,7 +250,7 @@ describe("capturePtyFailure", () => {
 
   it("says which probes did not run for a fork failure that bypassed them", () => {
     const result = capturePtyFailure(new Error(FORK), ctx, { run: () => ok(), census, dispatchKernelLog: () => {} })!;
-    expect(result.data).toMatchObject({ freshOpenpty: "not probed", throwawayTmux: "not probed", retry: "not probed" });
+    expect(result.data).toMatchObject({ freshOpenpty: "not probed", throwawayTmux: "not probed" });
   });
 
   it("still reports what tmux said when the census and the dispatch both fail", () => {
