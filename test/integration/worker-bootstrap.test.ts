@@ -298,13 +298,15 @@ describe("bootstrap main-checkout refresh (real git)", () => {
   // The step runs after the bootstrap has already fetched origin/$BASE. It
   // prints BOOTSTRAP_FAIL so the test sees exactly what would be alerted.
   // set -e and the ERR trap mirror the real bootstrap, where any failing
-  // command outside a condition aborts the spawn into a bare shell.
+  // command outside a condition aborts the spawn into a bare shell. Run under
+  // bash (macOS /bin/sh, which the bootstrap gets): dash, /bin/sh on the
+  // Linux CI runner, rejects `trap ... ERR` and exits 1 before the step runs.
   async function refresh(base: string): Promise<string> {
     git(projectPath, "fetch", "origin");
     const { mainCheckoutRefreshStep } = await import("../../src/dashboard/create.js");
     const { shellEscape } = await import("../../src/dashboard/tmux.js");
     const script = `set -e\ntrap 'exit 99' ERR\nBASE=${shellEscape(base)}\nBOOTSTRAP_FAIL=""\n${mainCheckoutRefreshStep(shellEscape(projectPath))}\nprintf '\\n<<FAIL>>%s' "$BOOTSTRAP_FAIL"`;
-    const r = spawnSync("sh", ["-c", script], { encoding: "utf8" });
+    const r = spawnSync("bash", ["-c", script], { encoding: "utf8" });
     expect(r.status).toBe(0);
     return r.stdout.split("<<FAIL>>")[1];
   }
