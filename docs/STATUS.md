@@ -877,7 +877,11 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   for a grant), writes nothing to the transcript until the tool finishes,
   and tmux has no cursor-change hook, so the pane is the only witness.
   It is a reliable one: the dialog hides the caret, and answering it
-  puts the caret back in the composer box (verified on 2.1.292). This is
+  puts the caret back in the composer box (verified on 2.1.292). The
+  composer is the `❯` row directly under a full-width rule; some modes
+  label that rule (`──── ultracode ─`, 2.1.323), and a check that took
+  only bare dashes as a rule read every such pane as a dialog, so its
+  `asking` never cleared. This is
   the one sanctioned pane read that drives a transition, and it is
   bounded on both sides (`permission-prompt.ts`):
   - the `PermissionRequest` hook that raised `asking` spawns one detached
