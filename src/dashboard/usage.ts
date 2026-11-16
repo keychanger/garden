@@ -850,9 +850,12 @@ function weeklyBarMoved(baseline: number | undefined, live: number | undefined):
 // scoped model itself. Reading the pin alone reported "no scoped worker" for a
 // fleet that was entirely Fable, pinning the bar to the 12h keepalive forever
 // (diagnosed 2026-07-25: three live claude-fable-5 workers, every one unpinned).
-// `observedModel` resolves what the worker is really running; the pin is kept
-// as the cheap first answer, and an unresolvable model counts as not-scoped —
-// the safe direction for the throttled endpoint's budget.
+// Nor does a pin settle it: a worker pinned opus ran claude-fable-5-2 for days
+// (model-drift flagged it), and trusting the pin held the bar at 0% while the
+// real figure reached 96% (2026-11-15). So `observedModel` — what the session
+// actually runs — wins; the pin answers only when nothing can be observed, and
+// an unresolvable model counts as not-scoped, the safe direction for the
+// throttled endpoint's budget.
 export function scopedModelInUse(
   scopedLabels: string[],
   nowMs: number,
@@ -865,8 +868,7 @@ export function scopedModelInUse(
     // a worker that has been quiet past the window cannot open the gate however
     // it is configured.
     if (nowMs - (w.lastEventAt ?? 0) > SCOPED_ACTIVE_MS) continue;
-    const pinned = w.model ?? w.trellis?.workerModel;
-    const model = (pinned ?? observedModel?.(w) ?? "").toLowerCase();
+    const model = (observedModel?.(w) ?? w.model ?? w.trellis?.workerModel ?? "").toLowerCase();
     if (!model) continue;
     if (labels.some((l) => model.includes(l))) return true;
   }
@@ -915,7 +917,10 @@ export function mergeUsageData(
   prior: UsageData | undefined,
 ): UsageData {
   const out: UsageData = {};
-  const fiveHour = primary?.fiveHour ?? prior?.fiveHour;
+  // A header fetch that carried the weekly bar but no 5h bar is the server saying
+  // the account has no 5-hour limit (Anthropic retired it ~2026-10-31), not a
+  // miss — carrying the old reading forward would pin a dead bar forever.
+  const fiveHour = primary?.fiveHour ?? (primary?.weekly ? undefined : prior?.fiveHour);
   if (fiveHour) out.fiveHour = fiveHour;
   const weekly = primary?.weekly ?? prior?.weekly;
   if (weekly) out.weekly = weekly;
@@ -1406,7 +1411,7 @@ function buildClaudeLines(
   const d = snap.data;
   const fit = sharedFit ?? computeMeterFit(paneWidth);
   const lines: string[] = [];
-  lines.push(renderMeterLine("5h",   d.fiveHour, nowMs, FIVE_HOUR_MS, fit));
+  if (d.fiveHour) lines.push(renderMeterLine("5h", d.fiveHour, nowMs, FIVE_HOUR_MS, fit));
   lines.push(renderMeterLine("week", d.weekly,   nowMs, SEVEN_DAY_MS, fit));
   // One bar per model-scoped weekly meter (Fable, etc.), labeled by the model.
   // No scoped meters → no extra row; a rolled-over window renders "—" per entry.

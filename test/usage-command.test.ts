@@ -54,7 +54,7 @@ describe("garden usage", () => {
     writeClaude();
     writeCodex([{ windowMinutes: 10080, usedPercent: 91, resetsAt: Math.floor((Date.now() + 2 * DAY_MS) / 1000) + 60 }]);
     const text = await run(true);
-    expect(text).toMatch(/^claude\n5h\s+—\nweek\s+27%\s+resets in 3d 0h\n\nfetched just now\n/);
+    expect(text).toMatch(/^claude\nweek\s+27%\s+resets in 3d 0h\n\nfetched just now\n/);
     expect(text).toMatch(/\n\ncodex\nweek\s+91%\s+resets in 2d 0h\n\nfetched 5m ago$/);
   });
 
@@ -85,7 +85,7 @@ describe("garden usage", () => {
     writeClaude();
     const text = await run(true);
     expect(text).not.toContain("codex");
-    expect(text).toMatch(/^5h\s+—\nweek\s+27%/);
+    expect(text).toMatch(/^week\s+27%/);
   });
 
   it("still shows the Codex meter on a provider-only fleet with no Claude meter", async () => {

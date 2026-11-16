@@ -85,7 +85,7 @@ function renderPretty(data: unknown): string {
 
   const d = snap.data ?? {};
   const rows = [
-    `5h      ${meterRow(d.fiveHour)}`,
+    ...(d.fiveHour ? [`5h      ${meterRow(d.fiveHour)}`] : []),
     `week    ${meterRow(d.weekly)}`,
   ];
   for (const s of d.scoped ?? []) {
