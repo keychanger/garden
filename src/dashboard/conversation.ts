@@ -211,7 +211,13 @@ export function readLatestTranscriptModel(transcriptPath: string): string | unde
     }
     if (!obj || typeof obj !== "object" || obj.type !== "assistant") continue;
     const message = obj.message as { model?: string } | undefined;
-    if (typeof message?.model === "string" && message.model) return message.model;
+    // Claude Code records its own API-error and interrupt notices as assistant
+    // messages with model `<synthetic>`. That names no model, and now that the
+    // observed model outranks a pin in the scoped-meter gate, returning it would
+    // read a Fable worker that just hit an API error as not running Fable.
+    if (typeof message?.model === "string" && message.model && message.model !== "<synthetic>") {
+      return message.model;
+    }
   }
   return undefined;
 }
