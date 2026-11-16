@@ -119,16 +119,16 @@ export function probeThrowawayServer(run: Runner, parentDir = CONTROL_DIR): stri
   }
 }
 
-export interface RetryTarget {
-  paneId: string;
-  cwd: string;
-}
-
-// Run while the failed pane still exists. Locality goes first, while whatever
-// failed the fork is most likely still in effect. The re-attempt is the same
-// respawn-pane against the same pane, with the placeholder command: the fork
-// is what is being tested, and the caller's rollback still kills the window.
-export function probeAtFailure(target: RetryTarget | null, run: Runner = defaultRunner): Record<string, string> {
+// Run at once, while whatever failed the fork is most likely still in effect.
+//
+// Never re-attempt a respawn against the pane that just failed. When tmux
+// (3.7c and earlier) fails to fork a respawn, it has already freed the pane's
+// input context and leaves the pointer NULL; the next respawn-pane on that pane
+// calls input_free(NULL) and the whole server segfaults (spawn_pane ->
+// input_free, fault address 0x2e0). The rollback's kill-window is NULL-safe.
+// The re-attempt this probe used to run is what turned five post-reboot fork
+// failures (2026-11-10, 2026-11-13) into a dead dashboard.
+export function probeAtFailure(run: Runner = defaultRunner): Record<string, string> {
   const probe = (fn: () => string) => {
     try {
       return fn();
@@ -139,26 +139,17 @@ export function probeAtFailure(target: RetryTarget | null, run: Runner = default
   return {
     freshOpenpty: probe(() => probeFreshOpenpty(run)),
     throwawayTmux: probe(() => probeThrowawayServer(run)),
-    retry: target
-      ? probe(() => describeRun(run("tmux", [
-        "respawn-pane", "-k", "-c", target.cwd, "-t", target.paneId, "sh", "-c", PLACEHOLDER,
-      ])))
-      : "not attempted at this call site",
   };
 }
 
 // Runs a pane respawn; a pty fork failure comes back as a PaneForkFailure with
 // the at-failure probes attached. No work is added when the respawn succeeds.
-export function respawnProbingForkFailure(
-  respawn: () => void,
-  target: RetryTarget | null,
-  run: Runner = defaultRunner,
-): void {
+export function respawnProbingForkFailure(respawn: () => void, run: Runner = defaultRunner): void {
   try {
     respawn();
   } catch (err) {
     if (!isPaneForkFailure(err)) throw err;
-    throw new PaneForkFailure(err, probeAtFailure(target, run));
+    throw new PaneForkFailure(err, probeAtFailure(run));
   }
 }
 
@@ -311,7 +302,7 @@ export function capturePtyFailure(
 
   const data: Record<string, string> = err instanceof PaneForkFailure
     ? { ...err.probes }
-    : { freshOpenpty: "not probed", throwawayTmux: "not probed", retry: "not probed" };
+    : { freshOpenpty: "not probed", throwawayTmux: "not probed" };
   const section = (fn: () => Record<string, string>, key: string) => {
     try {
       Object.assign(data, fn());

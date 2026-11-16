@@ -43,17 +43,21 @@ These extend the global rules in `<garden-repo>/rules.md`.
 
 ## Testing
 
-- Test framework: vitest (when set up).
+- Test framework: vitest.
 - Test the CLI commands and dashboard behavior.
 - Do not test trivial getters or internal helpers unless they have complex logic.
 - When you change a function's behavior, update its tests to match. Changing code without
   updating its tests is a bug, not a scope decision.
-- Run `npx vitest run` and `npx tsc --noEmit` before committing. Both must pass clean.
+- Run `garden checks` before pushing (type-check, build, unit coverage, integration). It must pass clean.
 
 ## Documentation maintenance
 
 - Updating tests and documentation for code you changed is part of the task, not adjacent
   work. Do not skip it for scope reasons.
-- If your changes affect commands, flags, file layout, or architecture, update DESIGN.md. Update AGENTS.md only when the module map, a command group, a convention, or an "Adding X" checklist changes: one line per module, no rationale or incident history (test/agents-md-size.test.ts holds it under 40,000 characters).
+- If your changes affect commands, flags, file layout, or architecture, update DESIGN.md.
 - If your changes affect agent behavior or workflow, update rules.md.
-- DESIGN.md is the spec. AGENTS.md (CLAUDE.md is its `@AGENTS.md` import) is the map every agent session loads. Keep them in sync but not redundant: depth lives in DESIGN.md, AGENTS.md points at it.
+- DESIGN.md is the spec. AGENTS.md is the short quick-start loaded into every session
+  (CLAUDE.md only imports it). Do not copy DESIGN.md detail into AGENTS.md: add a line
+  there only for a new top-level module, command group, or contributor-wide invariant,
+  and keep the file under ~15KB. The "Adding X" checklists live in
+  docs/EXTENDING.md.

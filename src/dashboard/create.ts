@@ -1116,18 +1116,13 @@ fi
 # Create worktree. Branch explicitly off the base commit origin reported, so
 # worker freshness does not depend on the main checkout being clean or up to
 # date, and so a rewritten refs/remotes/origin/$BASE cannot choose the code
-# whose package scripts the install below runs as the operator.
+# whose package scripts the install below runs as the operator. A SHA start
+# point gives the branch no upstream, which is what a worker needs: tracking
+# origin/$BASE would refuse its bare \`git push\` with git's hint to push HEAD
+# to the base branch.
 printf '  Creating worktree...\\n'
 mkdir -p "$(dirname ${wtPathLit})"
 git -C ${projectPathLit} worktree add -b ${branchLit} --end-of-options ${wtPathLit} "$BASE_SHA"
-# A SHA start point leaves the branch with no upstream, and the worker rules
-# have every worker check \`git log @{u}..HEAD\` before ending a turn. Never
-# fatal — tracking is a convenience and the worktree is already correct — but
-# said out loud, because a worker whose \`@{u}\` errors reads that as pending
-# work. It needs refs/remotes/origin/$BASE to exist and to be reverse-mappable
-# through remote.origin.fetch, which a single-branch clone may not satisfy.
-git -C ${projectPathLit} branch --set-upstream-to="refs/remotes/origin/$BASE" ${branchLit} >/dev/null 2>&1 \\
-  || printf '  WARNING: could not set %s to track origin/%s; git log @{u}..HEAD will not work in this worktree.\\n' ${branchLit} "$BASE" >&2
 
 # Neutralize .garden-done if a past reviewer accidentally committed it to the
 # base branch. Without this, the first Stop hook with no commits ahead sees
@@ -1315,7 +1310,6 @@ export function respawnWorkerWindow(
           launchPlan,
           "respawn-pane", "-k", "-c", workerCwd, "-t", workerPaneId, "sh", "-c", resumeCmd,
         ),
-        { paneId: workerPaneId, cwd: workerCwd },
       );
     } catch (err) {
       // One worker failing to relaunch is that worker's problem, not the

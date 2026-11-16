@@ -33,6 +33,7 @@ and the original may be deleted or kept as historical record. When a
 
 | Doc | Kind | Subject |
 |---|---|---|
+| [EXTENDING.md](EXTENDING.md) | reference | Checklists for adding a command, tmux hook, config key, garden-level setting, workflow, or harness — including the call sites that do not follow from registration |
 | [STATUS.md](STATUS.md) | spec | Worker status state machine — display states, detection machinery, transition invariants |
 | [SANDBOX-THREAT-MODEL.md](SANDBOX-THREAT-MODEL.md) | reference | Worker-sandbox security posture — trust boundaries, what the sandbox enforces (write confinement, egress allowlist, git-hook isolation, opt-in credential read-deny, registry guard), and the residual risks (Codex confinement, credential-deny verification, registry writability) |
 | [PTY-FORK-FAILURE.md](PTY-FORK-FAILURE.md) | reference | The intermittent `fork failed: Device not configured` spawn failure — every ENXIO source in the pty path, and which failure-time capture field confirms or rules out each |

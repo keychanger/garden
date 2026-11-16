@@ -738,6 +738,14 @@ describe("readLatestTranscriptModel — the model a worker is actually running",
     expect(readLatestTranscriptModel(p)).toBe("claude-fable-5");
   });
 
+  it("skips Claude Code's <synthetic> error/interrupt records to the real model", () => {
+    const p = write("s.jsonl", jsonl([
+      asstWithModel("claude-fable-5", "2026-07-25T11:00:00Z"),
+      asstWithModel("<synthetic>", "2026-07-25T11:01:00Z"),
+    ]));
+    expect(readLatestTranscriptModel(p)).toBe("claude-fable-5");
+  });
+
   it("returns undefined when no assistant message carries a model", () => {
     const p = write("d.jsonl", jsonl([user("hello"), user("still no assistant")]));
     expect(readLatestTranscriptModel(p)).toBeUndefined();

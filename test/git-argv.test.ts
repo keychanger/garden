@@ -194,7 +194,9 @@ describe("createWorktree", () => {
     expect(mockExec.mock.calls.filter(c => c[0] === "git").map(c => c[1])).toEqual([
       // A full ref here would check out a detached HEAD instead of the branch.
       ["worktree", "add", "--end-of-options", "/tmp/wt/proj/worker", "swift-oak"],
-      ["worktree", "add", "-b", "swift-oak", "--end-of-options", "/tmp/wt/proj/worker", "refs/remotes/origin/main"],
+      // No upstream: tracking origin/<base> makes a bare `git push` refuse and
+      // suggest pushing HEAD to the base branch.
+      ["worktree", "add", "--no-track", "-b", "swift-oak", "--end-of-options", "/tmp/wt/proj/worker", "refs/remotes/origin/main"],
     ]);
     // resurrect's start point is a tombstone SHA, which a worker can forge.
     mockExec.mockClear();

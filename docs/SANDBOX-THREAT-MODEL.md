@@ -300,9 +300,9 @@ reads or runs.
   fixed, which holds only where `.git/config` is write-denied: a **Codex** worker's git
   grant includes that file (see the Codex residual below), so there the whole mechanism
   is bypassable by repointing origin, and asking origin is asking whoever the worker
-  chose. Both restore the branch's upstream explicitly, since a SHA
-  start point carries none and garden's own worker rules have every worker check
-  `git log @{u}..HEAD`.
+  chose. Neither gives the branch an upstream: tracking the base made a worker's bare
+  `git push` suggest pushing to the base itself, and the worker rules check
+  `git log origin/<branch>..HEAD` instead.
   Still open, and not lower-stakes: what review *sees* comes from the same ref. The review
   prompt's diff and the reviewer's own rebase (`git rebase refs/remotes/origin/<base>`, per
   its prompt) read it after the review launch's fetch, and the resolver's rebase and the

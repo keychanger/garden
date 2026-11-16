@@ -6457,8 +6457,8 @@ describe("poll — reviewer prompt", () => {
       String(c[0]).includes("review-prompt"),
     );
     const content = String(promptCall![1]);
-    expect(content).toContain("only* to descriptive documents");
-    expect(content).toContain("Specs drive the code; do not edit them to match code");
+    expect(content).toContain("descriptive documents, not to specification files");
+    expect(content).toContain("specs drive the code; do not edit them to match it");
   });
 
   // launchReview resolves the reviewer before building its prompt: Claude Code

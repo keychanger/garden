@@ -78,7 +78,7 @@ describe("buildWorktreeRules", () => {
   it("instructs to commit incrementally", async () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
-    expect(result).toContain("Commit your work incrementally");
+    expect(result).toContain("Commit incrementally");
   });
 
   it("instructs to push branch for review", async () => {
@@ -122,7 +122,12 @@ describe("buildWorktreeRules", () => {
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
     expect(result).toContain("git status");
-    expect(result).toContain("@{u}..HEAD");
+    // Workers created before --no-track still track origin/<base>, where
+    // @{u}..HEAD lists every unmerged commit even after a push; name the
+    // worker's own remote branch so the check holds for every worker.
+    expect(result).toContain("git log origin/test-branch..HEAD");
+    expect(result).not.toContain("@{u}");
+    expect(result).toContain("git push origin HEAD");
   });
 
   it("explicitly forbids creating a side branch", async () => {
@@ -137,14 +142,16 @@ describe("buildWorktreeRules", () => {
   });
 
   it("explicitly forbids sleep/polling loops that watch the poller", async () => {
-    // The poller advances working -> reviewing only on the Claude Code Stop
-    // hook. A worker that sleeps in a bash loop to watch state transitions
-    // keeps its turn alive and blocks the hook from firing — deadlock.
+    // The poller advances working -> reviewing only when the worker's turn
+    // ends. A worker that sleeps in a bash loop to watch state transitions
+    // keeps its turn alive and blocks that event — deadlock. The wording names
+    // the turn end, not a Claude Code hook: Codex workers get the same text.
     const { buildWorktreeRules } = await importRules();
     const result = buildWorktreeRules("test-branch");
     expect(result).toMatch(/sleep|loop-poll/i);
-    expect(result).toContain("Stop hook");
-    expect(result).toContain("end your turn");
+    expect(result).toContain("only after your turn ends");
+    expect(result).not.toContain("Claude Code");
+    expect(result).toContain("End your turn");
   });
 
   it("omits the checks paragraph when no checksCommand is configured", async () => {

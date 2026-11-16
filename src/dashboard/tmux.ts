@@ -54,7 +54,53 @@ export function tmux(...args: string[]): void {
   try {
     execFileSync("tmux", args, { stdio: ["ignore", "ignore", "pipe"] });
   } catch (err) {
+    discardForkFailedRespawnPane(args, err);
     rethrowWithStderr(err, `tmux ${args[0] ?? ""} failed`);
+  }
+}
+
+// tmux's error for a pane whose process could not be forked, whatever the errno.
+export function isTmuxForkFailure(err: unknown): boolean {
+  return String(err).includes("fork failed");
+}
+
+// The -t target of the respawn-pane in a command queue (args joined by `;`
+// tokens, as tmuxWithHiddenEnvironment builds them), or null if there is none.
+export function respawnPaneTarget(args: readonly string[]): string | null {
+  let inRespawn = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === ";") inRespawn = false;
+    else if (args[i] === "respawn-pane") inRespawn = true;
+    else if (inRespawn && args[i] === "-t") return args[i + 1] ?? null;
+  }
+  return null;
+}
+
+// A respawn-pane that fails to fork leaves its pane poisoned. tmux (through
+// 3.7c) has already freed the pane's input context, and the fork-failure branch
+// returns before re-creating it, so the pointer stays NULL. The next
+// respawn-pane on that pane calls input_free(NULL) and the server segfaults,
+// taking every pane with it. Reproduced 2026-11-13 on a throwaway server
+// started under a low `ulimit -n`: the first respawn failed and the server
+// lived; the second killed it. kill-pane is NULL-safe. So the pane is removed
+// here, where every respawn passes, before any caller can respawn it again.
+// The callers already survive a vanished pane: the spawn and resume rollbacks
+// kill the window tolerantly, and validate re-creates the passive panes and the
+// right slot.
+function discardForkFailedRespawnPane(args: readonly string[], err: unknown): void {
+  const stderr = (err as { stderr?: Buffer | string }).stderr?.toString() ?? "";
+  if (!isTmuxForkFailure(stderr)) return;
+  const target = respawnPaneTarget(args);
+  if (!target) return;
+  try {
+    execFileSync("tmux", ["kill-pane", "-t", target], { stdio: ["ignore", "ignore", "pipe"] });
+    log.warn("tmux", "killed pane whose respawn failed to fork", {
+      data: { pane: target, error: stderr.trim(), why: "a second respawn of it crashes the tmux server" },
+    });
+  } catch (killErr) {
+    log.error("tmux", "could not kill pane whose respawn failed to fork", {
+      data: { pane: target, error: stderr.trim(), killError: String(killErr), why: "a second respawn of it crashes the tmux server" },
+    });
   }
 }
 

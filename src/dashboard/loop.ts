@@ -37,7 +37,7 @@ import {
 import { resolveGardenRunner } from "./runner.js";
 import { capturePtyFailure, respawnProbingForkFailure } from "./pty-failure-capture.js";
 import { tmuxWorkerCommand } from "./claude-env.js";
-import { tmux, shellEscape } from "./tmux.js";
+import { tmux, shellEscape, isTmuxForkFailure } from "./tmux.js";
 import { resolveWorkerPaneId } from "./worker-pane.js";
 
 export interface LoopHooks {
@@ -256,22 +256,37 @@ export function loopAutoContinueAfterMerge(
   // the same pane. Same primitive bounceWorker uses; the difference is we
   // pass --session-id (fresh) instead of --resume.
   try {
-    // No re-attempt on a fork failure: this pane is left in place, and a
-    // placeholder respawned into it would read as a live worker.
     respawnProbingForkFailure(
       () => tmuxWorkerCommand(
         launchPlan,
         "respawn-pane", "-k", "-c", wtPath, "-t", paneId, "sh", "-c", respawnCmd,
       ),
-      null,
     );
   } catch (err) {
+    // The iteration never started, so put back what was written for it. The
+    // old sessionId above all: it is the conversation that just merged, and the
+    // fresh one was never launched, so a later --resume of it would find
+    // nothing. A fork failure has also cost the worker its pane (tmux() kills
+    // it, since respawning it again would crash the tmux server); `exited` is
+    // then the truth, and it keeps the merged sweep from retrying against a
+    // pane that is gone. The worker is resumed the next time the dashboard is
+    // created (attaching to a running one does not). Any other failure left
+    // the old process running, so its status stands.
+    const forkFailed = isTmuxForkFailure(err);
+    updateWorkerFields(projectName, workerName, {
+      sessionId: entry.sessionId,
+      agentStatus: forkFailed ? "exited" : entry.agentStatus,
+      pendingContinueChangedFiles: entry.pendingContinueChangedFiles,
+      pendingContinueSyncFailed: entry.pendingContinueSyncFailed,
+      mergedAt: entry.mergedAt,
+    });
     const ptyFailure = capturePtyFailure(err, { project: projectName, worker: workerName });
     log.error("workers", `${hooks.logTag} respawn-pane failed`, {
       worker: workerName,
       data: {
         project: projectName,
         error: String(err),
+        ...(forkFailed && { pane: "killed; the worker is exited until the dashboard is next created, which resumes it" }),
         ...(ptyFailure && { cause: ptyFailure.cause, ...ptyFailure.data }),
       },
     });

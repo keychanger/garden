@@ -24,6 +24,7 @@ import {
   worktreePath as defaultWorktreePath, workerCleanupMarkerPath,
 } from "./git.js";
 import { branchRef, remoteBranchRef } from "./git-refs.js";
+import { refreshDashboard } from "./header.js";
 import { startProjectPoller, projectPollerRunning } from "./poller.js";
 import { resolveGardenRunner } from "./runner.js";
 import { readDashState } from "./state.js";
@@ -212,6 +213,9 @@ export function resurrectWorker(t: Tombstone): ResurrectOutcome {
     if (!resumed) {
       notes.push("session was not resumed — check the worker harness/provider configuration");
     }
+    // A registry write alone does not repaint the status pane; without this
+    // the restored row only appears on the next plot switch.
+    refreshDashboard();
   } else {
     notes.push("dashboard not running — the session resumes on the next `garden dashboard`");
   }
@@ -300,8 +304,8 @@ function rebuildWorktree(
     notes.push(`origin's ${base} (${originTip.slice(0, 9)}) is not in the local object store; rebuilding from the local ref`);
     originTip = null;
   }
-  const baseRef = originTip ? { ref: originTip, label: `origin/${base}`, reviewed: base === configuredBase, track: base }
-    : localBranchExists(repoPath, base) ? { ref: branchRef(base), label: base, reviewed: false, track: undefined }
+  const baseRef = originTip ? { ref: originTip, label: `origin/${base}`, reviewed: base === configuredBase }
+    : localBranchExists(repoPath, base) ? { ref: branchRef(base), label: base, reviewed: false }
     : null;
   const tip = entry.lastSeenSha;
   if (tip && commitExists(repoPath, tip) && (!baseRef || !isAncestor(repoPath, tip, baseRef.ref))) {
@@ -316,7 +320,7 @@ function rebuildWorktree(
     );
   }
   createWorktree(repoPath, wtPath, branch, {
-    startPoint: baseRef.ref, allowScripts: baseRef.reviewed, track: baseRef.track,
+    startPoint: baseRef.ref, allowScripts: baseRef.reviewed,
   });
   if (!baseRef.reviewed) notes.push(skippedInstallNote);
   return baseRef.label;

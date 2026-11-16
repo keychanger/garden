@@ -894,8 +894,9 @@ describe("buildWorktreeBootstrapScript", () => {
     expect(script).toContain("BASE=main");
     expect(script).toMatch(/worktree add -b bold-ash --end-of-options \/wt\/myproject\/bold-ash "\$BASE_SHA"/);
     expect(script).not.toMatch(/worktree add .*"refs\/remotes\/origin/);
-    // A SHA start point carries no upstream, which the worker rules rely on.
-    expect(script).toContain('branch --set-upstream-to="refs/remotes/origin/$BASE" bold-ash');
+    // No upstream: tracking origin/<base> refuses a worker's bare `git push`
+    // with git's hint to push HEAD to the base branch.
+    expect(script).not.toContain("--set-upstream-to");
   });
 
   // A replace ref a worker writes for origin's tip would otherwise have the

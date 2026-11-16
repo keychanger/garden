@@ -647,7 +647,6 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       launchPlan,
       "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
     ),
-    { paneId: workerPaneId, cwd: project.path },
   );
   try {
     // Both branches below spawn the bootstrap shell only after the window is

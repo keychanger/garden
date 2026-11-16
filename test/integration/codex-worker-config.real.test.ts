@@ -430,10 +430,9 @@ describe("codex rules file vs the worktree's git (real fs + git + origin)", () =
     run(proj, "commit", "-qm", "init");
     run(proj, "remote", "add", "origin", origin);
     run(proj, "push", "-q", "origin", "main");
-    // Branched the way the bootstrap does: off the base commit, tracking origin's base.
+    // Branched the way the bootstrap does: off the base commit, with no upstream.
     wt = path.join(tmp, "wt");
     run(proj, "worktree", "add", "-q", "-b", "wbranch", wt, run(proj, "rev-parse", "HEAD").trim());
-    run(proj, "branch", "-q", "--set-upstream-to=refs/remotes/origin/main", "wbranch");
   });
 
   afterEach(() => {

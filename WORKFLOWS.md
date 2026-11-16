@@ -9,7 +9,7 @@ each have their own section. **For the grow workflow, if the code disagrees
 with this document, the code is wrong.** The architecture section is
 descriptive of completed work; the grow section is authoritative.
 
-For the operator-facing how-to on adding a new workflow, see `AGENTS.md`
+For the operator-facing how-to on adding a new workflow, see `docs/EXTENDING.md`
 § "Adding a new workflow". This document is the architectural reference and
 the grow spec.
 

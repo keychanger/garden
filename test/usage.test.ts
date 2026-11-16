@@ -353,11 +353,16 @@ describe("scopedModelInUse — gate the Fable fetch on an active Fable worker", 
     const workers = [{ name: "b", ...fresh }] as never;
     expect(scopedModelInUse(["Fable"], now, workers, () => "claude-opus-5")).toBe(false);
   });
-  it("prefers the pin over the observed model — no read when the pin answers", () => {
+  // A pin is what garden asked for, not what the session runs: a worker pinned
+  // opus was observed on claude-fable-5-2 for days, and trusting the pin held the
+  // Fable bar at 0% on the 12h keepalive while the real figure reached 96%.
+  it("trusts the observed model over a pin that disagrees", () => {
+    const workers = [{ name: "w", model: "opus", ...fresh }] as never;
+    expect(scopedModelInUse(["Fable"], now, workers, () => "claude-fable-5-2")).toBe(true);
+  });
+  it("falls back to the pin when nothing can observe the worker's model", () => {
     const workers = [{ name: "w", model: "claude-fable-5", ...fresh }] as never;
-    const observed = vi.fn(() => "claude-opus-5");
-    expect(scopedModelInUse(["Fable"], now, workers, observed)).toBe(true);
-    expect(observed).not.toHaveBeenCalled();
+    expect(scopedModelInUse(["Fable"], now, workers, () => undefined)).toBe(true);
   });
   it("never observes a worker that is quiet past the active window", () => {
     const workers = [{ name: "w", ...stale }] as never;
@@ -449,6 +454,15 @@ describe("mergeUsageData — layering the two sources over prior data", () => {
     expect(out.fiveHour).toEqual(fh);
     expect(out.weekly).toEqual(wk);
     expect(out.scoped).toEqual(scopedFable);
+  });
+
+  // Anthropic retired the 5-hour limit: the headers stopped carrying it while the
+  // weekly bar kept arriving, and carrying the last 5h reading forward pinned a
+  // dead bar (reset date long past) on the pane.
+  it("drops a 5h bar the server stopped reporting while the weekly bar still arrives", () => {
+    const out = mergeUsageData({ weekly: wk }, undefined, { fiveHour: fh, weekly: wk });
+    expect(out.fiveHour).toBeUndefined();
+    expect(out.weekly).toEqual(wk);
   });
 
   it("a fetched-but-empty scoped source is authoritative and drops a since-removed bar", () => {
@@ -1060,6 +1074,22 @@ describe("renderUsagePane", () => {
     expect(lines).toHaveLength(4); // leading blank + 5h + week + trailing blank
     expect(lines[1]).toContain("5h");
     expect(lines[2]).toContain("week");
+  });
+
+  it("omits the 5h row when the account has no 5-hour limit", async () => {
+    writeSnapshot({
+      fetchedAt: new Date(now).toISOString(),
+      dataAt: new Date(now).toISOString(),
+      data: {
+        weekly: { pct: 51, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() },
+        scoped: [{ label: "Fable", pct: 96, resetsAt: new Date(now + 24 * 60 * 60_000).toISOString() }],
+      },
+    });
+    const render = await importRender();
+    const out = render(now);
+    expect(out).not.toContain("5h");
+    expect(out).toContain("51%");
+    expect(out).toContain("96%");
   });
 
   it("renders em-dash for a bucket whose resetsAt has already passed", async () => {

@@ -210,12 +210,6 @@ export function createWorktree(
     startPoint?: string;
     useExistingBranch?: boolean;
     allowScripts?: boolean;
-    // The origin branch the new branch should track. Git infers this when the
-    // start point is a remote-tracking ref, but not from a SHA — and a SHA is
-    // what a caller passes when it resolved the tip from origin itself. The
-    // worker rules have every worker check `git log @{u}..HEAD` before ending
-    // a turn, so the tracking has to survive that switch.
-    track?: string;
   } = {},
 ): void {
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
@@ -223,25 +217,9 @@ export function createWorktree(
   if (opts.useExistingBranch) {
     operatorGit(repoPath, "worktree", "add", "--end-of-options", wtPath, branchName);
   } else if (opts.startPoint) {
-    operatorGit(repoPath, "worktree", "add", "-b", branchName, "--end-of-options", wtPath, assertRevision(opts.startPoint));
+    operatorGit(repoPath, "worktree", "add", "--no-track", "-b", branchName, "--end-of-options", wtPath, assertRevision(opts.startPoint));
   } else {
     operatorGit(repoPath, "worktree", "add", "-b", branchName, "--end-of-options", wtPath);
-  }
-  if (opts.track) {
-    // Never fatal: tracking is a convenience, and the worktree is already
-    // correct without it.
-    try {
-      operatorGit(
-        repoPath, "branch", "--set-upstream-to",
-        remoteBranchRef(assertBranchName(opts.track)), branchName,
-      );
-    } catch (err) {
-      // Not fatal — the worktree is already correct — but a worker whose
-      // `@{u}` errors reads that as pending work, so it is not silent either.
-      log.warn("git", "could not set the new branch to track its base", {
-        data: { branchName, track: opts.track, error: String(err) },
-      });
-    }
   }
   log.info("git", "created worktree", { data: { branchName } });
   installDeps(wtPath, opts.allowScripts ?? true);

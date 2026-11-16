@@ -65,19 +65,24 @@ function seedHome(): string {
 
 const CLEAR_SCREEN_AND_SCROLLBACK = "\x1b[H\x1b[2J\x1b[3J";
 
-// Runs the follow loop with the resize raised inside the process: the width
-// starts at 100, drops to 50 once the backlog has printed, and the process
-// then ends itself. Returns everything it wrote.
-function followThroughResize(home: string, mode: "--pretty" | "--raw"): string {
+// Runs the follow loop with the resize raised inside the process: the pane
+// starts at 100x40, changes to `to` once the backlog has printed, and the
+// process then ends itself. Returns everything it wrote.
+function followThroughResize(
+  home: string,
+  mode: "--pretty" | "--raw",
+  to: { columns: number; rows: number } = { columns: 50, rows: 40 },
+): string {
   const preload = path.join(home, "resize.mjs");
   fs.writeFileSync(preload, [
     "const write = process.stdout.write.bind(process.stdout);",
     "let armed = false;",
     "process.stdout.columns = 100;",
+    "process.stdout.rows = 40;",
     "process.stdout.write = (...args) => {",
     "  if (!armed) {",
     "    armed = true;",
-    "    setTimeout(() => { process.stdout.columns = 50; process.stdout.emit('resize'); }, 100);",
+    `    setTimeout(() => { process.stdout.columns = ${to.columns}; process.stdout.rows = ${to.rows}; process.stdout.emit('resize'); }, 100);`,
     "    setTimeout(() => process.kill(process.pid, 'SIGTERM'), 1000);",
     "  }",
     "  return write(...args);",
@@ -106,6 +111,20 @@ describe("garden logs --follow on resize (output stream)", () => {
       expect(rest).toEqual([]);
       expect(ruleWidths(before)).toEqual([100, 100]);
       expect(ruleWidths(after)).toEqual([50, 50]);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // A plot switch changes the status pane's height, and the logs pane below it
+  // absorbs the difference. Every row still fits, and tmux slides them into or
+  // out of scrollback itself, so a redraw would only blank the pane.
+  it("leaves the pretty backlog alone when only the height changes", () => {
+    const home = seedHome();
+    try {
+      const output = followThroughResize(home, "--pretty", { columns: 100, rows: 25 });
+      expect(output).not.toContain(CLEAR_SCREEN_AND_SCROLLBACK);
+      expect(output.split("first day")).toHaveLength(2);
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
