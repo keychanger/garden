@@ -31,7 +31,10 @@ const WATCH_MS = 10 * 60_000;
 const SWEEP_MIN_AGE_MS = 10_000;
 
 const COMPOSER_MARKER = "❯";
-const RULE = /^─+$/;
+// Some modes label the composer's top rule (`──── ultracode ─`); a rule that
+// only matched bare dashes left every such pane reading as a dialog, so its
+// `asking` never cleared.
+const RULE = /^─+(?: [^─]+ ─+)?$/;
 
 // True when the visible caret sits inside Claude Code's composer: the box whose
 // first row starts with "❯" at column 0 directly under a full-width rule. A

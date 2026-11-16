@@ -1121,7 +1121,11 @@ run garden's hook dispatcher, `dist/hook.js <event>`
   for a grant), writes nothing to the transcript until the tool finishes,
   and tmux has no cursor-change hook, so the pane is the only witness.
   It is a reliable one: the dialog hides the caret, and answering it
-  puts the caret back in the composer box (verified on 2.1.292). This is
+  puts the caret back in the composer box (verified on 2.1.292). The
+  composer is the `❯` row directly under a full-width rule; some modes
+  label that rule (`──── ultracode ─`, 2.1.323), and a check that took
+  only bare dashes as a rule read every such pane as a dialog, so its
+  `asking` never cleared. This is
   the one sanctioned pane read that drives a transition, and it is
   bounded on both sides (`permission-prompt.ts`):
   - the `PermissionRequest` hook that raised `asking` spawns one detached
@@ -1178,7 +1182,11 @@ run garden's hook dispatcher, `dist/hook.js <event>`
   see `PermissionRequest` above): its next `PostToolUse` shows it running
   again with its answer, so it restores the status before the raise
   (`idle` or `working`) and drops the record. Another subagent's
-  activity leaves `asking` standing.
+  activity leaves `asking` standing. No hook reports a denied or expired
+  request, so without the record a background agent's rm safety prompt
+  denied after two minutes left the worker reading `asking` until its
+  next prompt: 41 minutes on 2026-10-24, and again on 2026-11-15, where
+  it also held back the re-armed review.
   A subagent event does write one field of its own: it stamps
   `subagentActivityAt` (throttled to the 10s heartbeat, except for the
   write that flips the derived display), the input to the `working bg`
@@ -1194,7 +1202,9 @@ run garden's hook dispatcher, `dist/hook.js <event>`
   worktree both as written and through symlinks: an edit to a subagent's
   scratch copy, the memory directory or a temp file does not count, and
   one through a link outside the tree that points into it does. A call
-  that names no path, or a path that cannot be resolved, counts.
+  that names no path, or a path that cannot be resolved, counts. Before
+  this rule a background workflow agent's edits to its own scratch copy
+  cancelled its worker's review (twice in twenty minutes on 2026-10-24).
   Main-thread `Bash` counts because the review launches on `Stop`, so
   main-thread activity during it means a prompt landed mid-review, and a
   prompted worker edits through the shell as readily as through `Edit`.

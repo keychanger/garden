@@ -110,6 +110,13 @@ describe("composerHasCursor", () => {
     expect(composerHasCursor(QUESTION, { x: 2, y: 3, visible: true })).toBe(false);
   });
 
+  // Captured from Claude Code 2.1.323 in an ultracode session: the mode rides
+  // the composer's top rule as a label.
+  it("is true when the composer's top rule carries a mode label", () => {
+    const labelled = RUNNING.replace(`${RULE}\n❯ `, `${"─".repeat(48)} ultracode ─\n❯ `);
+    expect(composerHasCursor(labelled, { x: 2, y: 6, visible: true })).toBe(true);
+  });
+
   it("is false when the cursor is unknown", () => {
     expect(composerHasCursor(RUNNING, null)).toBe(false);
   });
