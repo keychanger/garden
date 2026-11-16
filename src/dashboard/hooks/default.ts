@@ -29,7 +29,7 @@ import { log } from "../log.js";
 import { triggerProjectPoll } from "../poller-fifo.js";
 import {
   findWorkerByName, isDelegating, setReviewBlockedReason, updateWorkerFields,
-  updateWorkerFieldsIf, type WorkerEntry,
+  updateWorkerFieldsIf, type SubagentAsk, type WorkerEntry,
 } from "../registry.js";
 import { getPaneTitle, shellEscape } from "../tmux.js";
 import { DEFAULT_HARNESS, resolveWorkerActivity } from "../harness/core.js";
@@ -239,7 +239,7 @@ function routeStopHookEnd(projectName: string, workerName: string): void {
 // ---------------------------------------------------------------------------
 
 type FieldsDelta = Partial<Pick<WorkerEntry,
-  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt" | "blockedQuestion" | "blockedAt" | "blockedTurnEndedAt" | "backgroundTasks">>;
+  "agentStatus" | "lastEventAt" | "lastStateChangeAt" | "prState" | "task" | "transcriptPath" | "sessionId" | "continueSentAt" | "subagentActivityAt" | "blockedQuestion" | "blockedAt" | "blockedTurnEndedAt" | "backgroundTasks" | "subagentAsk">>;
 
 // pretooluse/posttooluse fire on every Claude tool call and dominate hook
 // traffic — a busy agent completes many tools per second, and with N agents in
@@ -285,7 +285,9 @@ function applyAndLog(
   // must land even inside the heartbeat window: a bounce mid-turn arrives within
   // seconds of the last tool event, and a dropped reset lets the next Stop scan
   // revive launches the dead process made — with no freshness window to decay.
-  const backgroundReset = "backgroundTasks" in fields;
+  // So must a raise from a second thread disowning a subagent's asking record
+  // (onBlockedOnOperator): dropped, it lets one agent clear both dialogs.
+  const backgroundReset = "backgroundTasks" in fields || "subagentAsk" in fields;
   if (!stateChanged && !blockCleared && !activityUnset && !delegatingChanged && !backgroundReset
       && now - (ctx.workerInfo.entry.lastEventAt ?? 0) < HOOK_HEARTBEAT_MS) {
     return;
@@ -294,7 +296,8 @@ function applyAndLog(
   // Row ordering keys on the last real transition, not the heartbeat — so a
   // working agent's silent 10s lastEventAt bumps don't reshuffle the status
   // pane (which only repaints on stateChanged below). See workerSortFreshness.
-  if (stateChanged) fields.lastStateChangeAt = now;
+  // A caller that records the stamp elsewhere sets it first (onBlockedOnOperator).
+  if (stateChanged) fields.lastStateChangeAt ??= now;
 
   // Capture the transcript path the harness reports on the hook input. It
   // rarely changes (once per session), so only write it when it differs —
@@ -499,10 +502,25 @@ function claudeTranscriptPath(ctx: HookContext): string | undefined {
 // ExitPlanMode) — the two wire events signal the same condition.
 const onBlockedOnOperator: HookMethod = (ctx) => {
   if (!ctx.workerInfo) return;
+  const { entry } = ctx.workerInfo;
+  const agent = agentId(ctx);
+  const ask = currentSubagentAsk(entry);
   const fields = midTurnAskingFields(ctx);
+  if (fields.agentStatus && agent) {
+    // The main thread may be idle, and an idle one fires nothing until it is
+    // next prompted, so record what that agent's next tool event restores.
+    // midTurnAskingFields raises only from working or idle.
+    fields.lastStateChangeAt = Date.now();
+    fields.subagentAsk = { agent, at: fields.lastStateChangeAt, resume: entry.agentStatus as SubagentAsk["resume"] };
+  } else if (ask?.agent && ask.agent !== agent) {
+    // Another thread's dialog opened in the same episode, and one agent's
+    // activity cannot show that both have closed.
+    fields.subagentAsk = { ...ask, agent: "" };
+  }
   applyAndLog(ctx, fields);
-  // applyAndLog stamps lastStateChangeAt onto `fields` when it raised asking;
-  // that stamp names this episode for the watcher's guarded clear.
+  // lastStateChangeAt is on `fields` when this raised asking (set above for a
+  // subagent, by applyAndLog otherwise); that stamp names this episode for
+  // the watcher's guarded clear.
   if (ctx.input.hook_event_name === "PermissionRequest" && fields.lastStateChangeAt !== undefined
       && (ctx.workerInfo.entry.harness ?? DEFAULT_HARNESS) === DEFAULT_HARNESS) {
     watchPermissionPrompt(ctx.workerInfo.project, ctx.workerInfo.name, fields.lastStateChangeAt);
@@ -535,7 +553,8 @@ const onToolActivity: HookMethod = (ctx) => {
   // false `working` after Stop (which defers the merge gate via
   // isWorkerClaudeWorking). Only agent_id separates the two: session_id and
   // transcript_path are byte-identical on both, so the transcript-ownership
-  // guard in applyAndLog cannot see this.
+  // guard in applyAndLog cannot see this. The one exception is a subagent
+  // ending the `asking` episode its own dialog raised (below).
   const fields: FieldsDelta = {};
   const cs = ctx.workerInfo.entry.agentStatus;
   if (!isSubagentEvent(ctx)) {
@@ -552,30 +571,52 @@ const onToolActivity: HookMethod = (ctx) => {
   } else {
     // A subagent completing a tool is proof the worker's background work
     // (Task agents, Workflow runs) is still executing even when the main
-    // thread has parked after Stop. It still never moves agentStatus; the
-    // renderer derives the `working bg` display from this stamp instead
-    // (isDelegating), so a worker waiting on its workflows doesn't read as
-    // finished. Rides the heartbeat throttle in applyAndLog except when the
-    // stamp flips that display.
+    // thread has parked after Stop. The renderer derives the `working bg`
+    // display from this stamp (isDelegating), so a worker waiting on its
+    // workflows doesn't read as finished. Rides the heartbeat throttle in
+    // applyAndLog except when the stamp flips that display.
     fields.subagentActivityAt = Date.now();
+    // An agent running again after its own dialog raised `asking` has its
+    // answer, which no hook reports: a denied or expired request fires none.
+    // Restore what the main thread was doing (onBlockedOnOperator).
+    const ask = currentSubagentAsk(ctx.workerInfo.entry);
+    if (ask?.agent && ask.agent === agentId(ctx)) {
+      fields.agentStatus = ask.resume;
+      fields.subagentAsk = undefined;
+    }
   }
   applyAndLog(ctx, fields);
-  // Deliberately outside the guard: a subagent's Edit rewrites the same
-  // worktree the reviewer is certifying, so the cancel is owed either way.
+  // Deliberately outside the guard: a subagent's Edit to a file in the
+  // worktree rewrites the tree the reviewer is certifying, so the cancel is
+  // owed either way.
   markReviewInterrupted(ctx);
 };
 
-// True when this tool event came from a subagent rather than the worker's main
-// conversation thread. `agent_id` is documented as present only on subagent
-// tool events; the raising side (onBlockedOnOperator) deliberately does not
-// consult it, since a subagent's permission request blocks the operator just
-// as a main-thread one does — raising the flag on either is right, clearing it
-// on unrelated activity is not.
+// True when this event came from a subagent rather than the worker's main
+// conversation thread. `agent_id` is present on every hook fired from within a
+// subagent and absent on the main thread; Notification is built without it.
+// The raising side (onBlockedOnOperator) raises for either thread, since a
+// subagent's permission request blocks the operator just as a main-thread one
+// does, and records a subagent's raise so that agent's own next tool event can
+// end it; unrelated activity never does.
 function isSubagentEvent(ctx: HookContext): boolean {
-  return typeof ctx.input.agent_id === "string" && ctx.input.agent_id.length > 0;
+  return !!agentId(ctx);
 }
 
-// Tools that rewrite the worktree, from any thread.
+function agentId(ctx: HookContext): string {
+  const id = ctx.input.agent_id;
+  return typeof id === "string" ? id : "";
+}
+
+// The record of the subagent that raised the current `asking` episode, or
+// undefined once any write has moved the episode on.
+function currentSubagentAsk(entry: WorkerEntry): SubagentAsk | undefined {
+  const ask = entry.subagentAsk;
+  return entry.agentStatus === "asking" && ask?.at === entry.lastStateChangeAt ? ask : undefined;
+}
+
+// Edit tools count from any thread, unless the file they name lies outside the
+// worktree (editsOutsideWorktree).
 const MUTATING_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 
 // Bash counts on the main thread only. The review launches on Stop, so
@@ -587,8 +628,47 @@ const MUTATING_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 // read-only answer leaves the review running. Subagents outlive Stop and
 // mostly read, so their Bash calls are left alone.
 function mutatesWorktree(ctx: HookContext, toolName: string): boolean {
-  if (MUTATING_TOOLS.has(toolName)) return true;
+  if (MUTATING_TOOLS.has(toolName)) return !editsOutsideWorktree(ctx, toolName);
   return toolName === "Bash" && !isSubagentEvent(ctx) && !bashLeftTreeUnchanged(ctx);
+}
+
+// True only when the file an edit tool names resolves outside the worktree: a
+// subagent's scratch copy, the memory directory or a temp file cannot change
+// what the reviewer certifies. Compared as written and through symlinks, so a
+// link outside the tree that points into it still counts. A call with no
+// path, an entry with no worktree, or a path that cannot be resolved counts.
+function editsOutsideWorktree(ctx: HookContext, toolName: string): boolean {
+  const root = ctx.workerInfo!.entry.worktreePath;
+  const toolInput = ctx.input.tool_input as Record<string, unknown> | undefined;
+  const named = toolInput?.[toolName === "NotebookEdit" ? "notebook_path" : "file_path"];
+  const cwd = typeof ctx.input.cwd === "string" ? ctx.input.cwd : "";
+  if (!root || typeof named !== "string" || !named) return false;
+  if (!path.isAbsolute(named) && !path.isAbsolute(cwd)) return false;
+  const target = path.resolve(cwd, named);
+  try {
+    return outside(root, target) && outside(fs.realpathSync.native(root), nearestRealpath(target));
+  } catch {
+    return false;
+  }
+}
+
+function outside(dir: string, p: string): boolean {
+  const rel = path.relative(dir, p);
+  return rel === ".." || rel.startsWith(`..${path.sep}`);
+}
+
+// The real path of p's nearest existing ancestor with the rest appended, since
+// a Write can create the file and its directories. The native call returns the
+// case stored on disk, so a variant spelling of the worktree on a
+// case-insensitive volume does not read as outside it.
+function nearestRealpath(p: string): string {
+  try {
+    return fs.realpathSync.native(p);
+  } catch (error) {
+    const parent = path.dirname(p);
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT" || parent === p) throw error;
+    return path.join(nearestRealpath(parent), path.basename(p));
+  }
 }
 
 // HEAD, every changed path's index state, and the mtime and size of each
@@ -684,10 +764,11 @@ function markReviewInterrupted(ctx: HookContext): void {
   });
 }
 
-// Shared logic for notification / pretooluse: both indicate Claude is
-// blocked waiting for user input mid-turn. Accept "working" (normal path)
-// or "idle" (self-heal: a user-input tool firing is proof of active turn,
-// so idle status is stale).
+// Shared logic for notification / pretooluse: both indicate a dialog is
+// waiting on the operator. Accept "working" (normal path) or "idle". On the
+// main thread idle is stale, since a user-input tool firing is proof of an
+// active turn; a subagent's dialog can open while the main thread really is
+// idle, and onBlockedOnOperator records that status for the restore.
 function midTurnAskingFields(ctx: HookContext): FieldsDelta {
   if (!ctx.workerInfo) return {};
   const cs = ctx.workerInfo.entry.agentStatus;

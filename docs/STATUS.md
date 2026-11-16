@@ -324,9 +324,11 @@ a terminal state — it returns to `working` when the operator responds
 | idle          | working       | Worker `UserPromptSubmit`                            |
 | idle          | working       | Worker `PostToolUse` (self-heal; stale idle) — main thread only, not a subagent's |
 | idle          | asking        | Worker `PreToolUse` (self-heal; stale idle)          |
+| idle          | asking        | A subagent's `PermissionRequest` / `PreToolUse` while the main thread is really idle; the prior `idle` is recorded in `subagentAsk` |
 | asking        | working       | Worker `UserPromptSubmit`                            |
 | asking        | working       | Worker `PostToolUse` (mid-turn resume) — main thread only, not a subagent's |
-| asking        | working       | claude-code pane shows the composer holding the caret again: the permission dialog was answered (watcher spawned by `PermissionRequest`, watchdog backstop) |
+| asking        | idle / working | The `PostToolUse` of the subagent whose own dialog raised this episode: restores the status recorded in `subagentAsk` |
+| asking        | working       | claude-code pane shows the composer holding the caret again: the permission dialog was answered (watcher spawned by `PermissionRequest`, watchdog backstop). A subagent-raised episode restores its recorded status instead, which may be `idle` |
 | working       | paused        | Operator `hold` action (`garden hold` / `⌥e`)        |
 | asking        | paused        | Operator `hold` action                               |
 | idle          | paused        | Operator `hold` action                               |
@@ -336,7 +338,7 @@ a terminal state — it returns to `working` when the operator responds
 | reviewing     | done          | Holistic final review `Stop`: CLEAN / shadow / no-commit (interposed whole-task pass) |
 | reviewing     | failing       | Reviewer `Stop` with verdict FAILED                  |
 | reviewing     | working       | Worker push event (commits during review, aborted)   |
-| reviewing     | working       | Worker ran a mutating tool (Edit/Write from any thread, or a main-thread Bash command that changed the worktree) mid-review — the reviewer shares the worktree, so the pass is cancelled and re-armed for the worker's next quiescence. Applies to the holistic pass too (its markers clear; the gate re-evaluates at the next terminal state). Read-only tools (Read/Grep/Glob), a main-thread Bash command that left the tree unchanged, and a subagent's Bash leave the review running. |
+| reviewing     | working       | Worker ran a mutating tool (an Edit/Write naming a file inside the worktree, from any thread, or a main-thread Bash command that changed the worktree) mid-review — the reviewer shares the worktree, so the pass is cancelled and re-armed for the worker's next quiescence. Applies to the holistic pass too (its markers clear; the gate re-evaluates at the next terminal state). Read-only tools (Read/Grep/Glob), a main-thread Bash command that left the tree unchanged, and a subagent's Bash leave the review running. |
 | merge-pending | merged        | Merge queue: ff merge succeeds (no sentinel)         |
 | merge-pending | done          | Merge queue: ff merge succeeds AND `.garden-done` present at merge time |
 | merge-pending | resolving     | Merge queue: rebase conflict (resolver launched)     |
@@ -397,9 +399,10 @@ signals the status pane. They drive:
 - `working → idle`, `working → reviewing` (worker's `Stop`)
 - `working → asking` (worker's `PreToolUse` for user-input tools, `PermissionRequest`)
 - `asking → working` (worker's `PostToolUse` for user-input tools; a
-  subagent's tool events carry `agent_id` and never move `agentStatus`.
-  An approved permission dialog is the exception: see "Answered permission
-  dialogs")
+  subagent's tool events carry `agent_id` and never move `agentStatus`,
+  except to end the episode its own dialog raised — see `PostToolUse`
+  below. An approved permission dialog is the other exception: see
+  "Answered permission dialogs")
 - `reviewing → merge-pending`, `reviewing → failing` (reviewer's `Stop`)
 - `reviewing → working` (worker's `PostToolUse` for a mutating tool — a main-thread `Bash` command that changed the tree included — while the
   review is in flight: the hook stamps `reviewInterruptedAt` and pokes the
@@ -853,7 +856,7 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   mid-review mutation marker under `PostToolUse` below). Outside review
   it reads the registry and exits.
 - `PermissionRequest` (no matcher — all tools) →
-  `agentStatus = "asking"` (only if currently `working`). Fires when
+  `agentStatus = "asking"` (only if currently `working` or `idle`). Fires when
   auto-mode's classifier escalates a tool call for operator approval —
   it is the only event that reports "a permission dialog is actually
   being shown" (unlike `PreToolUse`, which fires for every tool call
@@ -886,8 +889,8 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   bounded on both sides (`permission-prompt.ts`):
   - the `PermissionRequest` hook that raised `asking` spawns one detached
     watcher for that episode, which reads the pane every second, flips
-    `asking → working` after two consecutive readings of the caret in the
-    composer (one could land before the dialog's first frame), and exits
+    `asking → working` (or to the status a subagent's record names) after
+    two consecutive readings of the caret in the composer (one could land before the dialog's first frame), and exits
     on the flip, on any other writer moving the episode (status or
     `lastStateChangeAt` changed), or after 10 minutes;
   - the liveness watchdog's tick re-reads the pane of any claude-code
@@ -926,17 +929,34 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   brief flicker it appears: a subagent outlives many tool rounds, so
   there is no next `Stop` to re-idle it. The exclusion is deliberately
   one-sided — the raising side (`PreToolUse` / `PermissionRequest`)
-  does not consult `agent_id`, since a subagent's permission request
+  raises for either thread, since a subagent's permission request
   blocks the operator exactly as a main-thread one does. It also does
   not reach the mid-review mutation marker below: a subagent's `Edit`
-  rewrites the same worktree the reviewer is certifying.
+  to a file in the worktree rewrites the tree the reviewer is certifying.
+
+  The one exception is the subagent's own dialog. Claude Code puts
+  `agent_id` on every hook a subagent fires, `PermissionRequest`
+  included, and that request raises `asking` even while the main thread
+  is idle and firing nothing; no hook reports a denied or expired
+  request. The raise therefore records the agent, the episode's
+  `lastStateChangeAt` stamp and the prior `idle` or `working` in
+  `entry.subagentAsk`, and the same agent's next tool event restores
+  that status, as does the answered-dialog watcher. The record is read
+  only while that `asking` episode stands, so it needs no clearing, and
+  a request from a second thread within the episode disowns it, since
+  one agent's activity cannot show that both dialogs closed. Without it,
+  a background agent's rm safety prompt that was denied after two
+  minutes left the worker reading `asking` until its next prompt — 41
+  minutes on 2026-10-24, and again on 2026-11-15, where it also held
+  back the re-armed review.
   A subagent event does write one field of its own: it stamps
   `subagentActivityAt` (throttled to the 10s heartbeat, except for the
   write that flips the derived display), the input to the `working bg`
   display derivation — see "Delegated background work" above.
   This hook also writes `reviewInterruptedAt` when the tool was a
   *mutating* one (`Edit` / `MultiEdit` / `Write` / `NotebookEdit` from
-  any thread, or `Bash` from the main thread) and the worker's `prState`
+  any thread naming a file inside the worktree, or `Bash` from the main
+  thread) and the worker's `prState`
   is `reviewing`, it stamps `reviewInterruptedAt` and pokes the poller.
   Main-thread `Bash` counts because the review launches on `Stop`, so
   main-thread activity during it means a prompt landed mid-review, and a
@@ -951,7 +971,16 @@ Claude process and call `garden dashboard _claude-hook <event>`:
   relays as `posttooluse`, a failed git read) counts as a change. The
   fingerprint cannot say which agent wrote, so a reviewer edit landing
   while the command runs also cancels. A subagent's `Bash` (background
-  agents outlive `Stop` and mostly read) never counts. It
+  agents outlive `Stop` and mostly read) never counts. An edit tool's
+  file (`file_path`, or `notebook_path` for NotebookEdit; a relative one
+  resolved against the hook input's `cwd`) that lies outside the
+  worktree both as written and through symlinks — the real path of its
+  nearest existing ancestor is compared too, since a Write can create
+  directories — does not count either: a subagent's scratch copy, the
+  memory directory or a temp file cannot change what the reviewer
+  certifies. A missing or unresolvable path counts. Before this rule a
+  background workflow agent's edits to its own scratch copy cancelled
+  its worker's review (twice in twenty minutes on 2026-10-24). It
   still does not write `prState`: the cancel is the poller's, in
   `handleReviewing`. The marker is stamped once per pass and cleared,
   with `reviewBashBaselines`, by the cancel and by every review launch.
