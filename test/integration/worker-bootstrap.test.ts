@@ -293,3 +293,110 @@ describe("bootstrap dependency install (real git + stub npm)", () => {
     expect(git(projectPath, "status", "--porcelain")).toBe("M package-lock.json");
   });
 });
+
+describe("bootstrap main-checkout refresh (real git)", () => {
+  // The step runs after the bootstrap has already fetched origin/$BASE. It
+  // prints BOOTSTRAP_FAIL so the test sees exactly what would be alerted.
+  async function refresh(base: string): Promise<string> {
+    git(projectPath, "fetch", "origin");
+    const { mainCheckoutRefreshStep } = await import("../../src/dashboard/create.js");
+    const { shellEscape } = await import("../../src/dashboard/tmux.js");
+    const script = `BASE=${shellEscape(base)}\nBOOTSTRAP_FAIL=""\n${mainCheckoutRefreshStep(shellEscape(projectPath))}\nprintf '\\n<<FAIL>>%s' "$BOOTSTRAP_FAIL"`;
+    const r = spawnSync("sh", ["-c", script], { encoding: "utf8" });
+    expect(r.status).toBe(0);
+    return r.stdout.split("<<FAIL>>")[1];
+  }
+
+  // Lands a commit on origin/<branch> from a scratch clone, leaving the
+  // project checkout's local refs where they were.
+  function pushToOrigin(branch: string, file: string): string {
+    const clone = path.join(env.home, `clone-${file}`);
+    spawnSync("git", ["clone", "-q", originPath, clone], { stdio: "ignore" });
+    git(clone, "config", "user.email", "test@garden.local");
+    git(clone, "config", "user.name", "garden-test");
+    git(clone, "checkout", "-q", "-B", branch, `origin/${branch}`);
+    fs.writeFileSync(path.join(clone, file), `${file}\n`);
+    git(clone, "add", ".");
+    git(clone, "commit", "-q", "-m", file);
+    git(clone, "push", "-q", "origin", branch);
+    return git(clone, "rev-parse", "HEAD");
+  }
+
+  function sha(ref: string): string {
+    return git(projectPath, "rev-parse", ref);
+  }
+
+  beforeEach(() => {
+    // `josh` is the operator's parked branch; `core` is a sibling base whose
+    // origin tip is a descendant of josh, so a merge --ff-only of
+    // origin/core into josh would succeed and silently move it.
+    git(projectPath, "branch", "josh");
+    git(projectPath, "branch", "core");
+    git(projectPath, "push", "-q", "origin", "core", "josh");
+    git(projectPath, "checkout", "-q", "josh");
+  });
+
+  it("advances the base ref only, never the checked-out branch, when another branch is checked out", async () => {
+    const before = sha("josh");
+    const tip = pushToOrigin("core", "core.txt");
+    expect(await refresh("core")).toBe("");
+    expect(git(projectPath, "symbolic-ref", "--short", "HEAD")).toBe("josh");
+    expect(sha("josh")).toBe(before);
+    expect(fs.existsSync(path.join(projectPath, "core.txt"))).toBe(false);
+    expect(sha("core")).toBe(tip);
+  });
+
+  it("fast-forwards the working tree when the base is the checked-out branch", async () => {
+    const tip = pushToOrigin("josh", "josh.txt");
+    expect(await refresh("josh")).toBe("");
+    expect(sha("josh")).toBe(tip);
+    expect(fs.existsSync(path.join(projectPath, "josh.txt"))).toBe(true);
+  });
+
+  it("still reports a checked-out base that cannot fast-forward", async () => {
+    pushToOrigin("josh", "remote.txt");
+    fs.writeFileSync(path.join(projectPath, "local.txt"), "local\n");
+    git(projectPath, "add", ".");
+    git(projectPath, "commit", "-q", "-m", "local");
+    expect(await refresh("josh")).toMatch(/^ff-merge failed: /);
+  });
+
+  it("leaves a detached HEAD alone", async () => {
+    git(projectPath, "checkout", "-q", "--detach");
+    const head = sha("HEAD");
+    const before = sha("core");
+    pushToOrigin("core", "core.txt");
+    expect(await refresh("core")).toBe("");
+    expect(sha("HEAD")).toBe(head);
+    expect(sha("core")).toBe(before);
+  });
+
+  it("does not move or alert on an off-base ref that diverged from origin", async () => {
+    pushToOrigin("core", "remote.txt");
+    git(projectPath, "checkout", "-q", "core");
+    fs.writeFileSync(path.join(projectPath, "local.txt"), "local\n");
+    git(projectPath, "add", ".");
+    git(projectPath, "commit", "-q", "-m", "local");
+    git(projectPath, "checkout", "-q", "josh");
+    const before = sha("core");
+    expect(await refresh("core")).toBe("");
+    expect(sha("core")).toBe(before);
+  });
+
+  it("does not move or alert on a base checked out in another worktree", async () => {
+    const other = path.join(env.home, "other-wt");
+    git(projectPath, "worktree", "add", "-q", other, "core");
+    const before = sha("core");
+    pushToOrigin("core", "core.txt");
+    expect(await refresh("core")).toBe("");
+    expect(sha("core")).toBe(before);
+    expect(fs.existsSync(path.join(other, "core.txt"))).toBe(false);
+  });
+
+  it("does not create a local base branch the checkout never had", async () => {
+    git(projectPath, "branch", "-q", "-D", "core");
+    pushToOrigin("core", "core.txt");
+    expect(await refresh("core")).toBe("");
+    expect(spawnSync("git", ["show-ref", "--verify", "--quiet", "refs/heads/core"], { cwd: projectPath }).status).not.toBe(0);
+  });
+});

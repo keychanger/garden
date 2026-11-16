@@ -837,6 +837,37 @@ export function npmInstallStep(wtPathLit: string): string {
 fi`;
 }
 
+// Refresh the operator's main checkout toward origin/$BASE, mirroring the
+// poller's post-merge rule (fastForwardBase in git.ts). `merge --ff-only`
+// moves whatever branch is checked out, so it runs only when that branch IS
+// $BASE; a worker spawned with --base off the checkout's branch once tried to
+// fast-forward the operator's parked branch to a sibling base's tip. Off-base,
+// only the local $BASE ref advances, via a local fetch from origin/$BASE
+// (already fetched above, so no second network round trip): the refspec is
+// fast-forward-enforced and refuses a branch checked out in another worktree.
+// A refused off-base advance is the operator's deliberate state, not trouble,
+// so it is reported in the pane but not alerted. A local $BASE the checkout
+// never had is not created, and a detached HEAD is left alone.
+export function mainCheckoutRefreshStep(projectPathLit: string): string {
+  return `CUR_BRANCH=$(git -C ${projectPathLit} symbolic-ref --short -q HEAD 2>/dev/null) || CUR_BRANCH=""
+if [ "$CUR_BRANCH" = "$BASE" ]; then
+  printf '  Fast-forwarding main checkout...\\n'
+  MERGE_RC=0
+  MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only "origin/$BASE" 2>&1) || MERGE_RC=$?
+  [ -n "$MERGE_OUT" ] && printf '%s\\n' "$MERGE_OUT"
+  if [ "$MERGE_RC" -ne 0 ]; then
+    BOOTSTRAP_FAIL="\${BOOTSTRAP_FAIL:+$BOOTSTRAP_FAIL; }ff-merge failed: $MERGE_OUT"
+  fi
+elif [ -z "$CUR_BRANCH" ]; then
+  printf '  Main checkout is on a detached HEAD; leaving it alone.\\n'
+elif git -C ${projectPathLit} show-ref --verify --quiet "refs/heads/$BASE"; then
+  printf '  Main checkout is on %s; advancing local %s ref only...\\n' "$CUR_BRANCH" "$BASE"
+  if ! REF_OUT=$(git -C ${projectPathLit} fetch -q . "refs/remotes/origin/$BASE:refs/heads/$BASE" 2>&1); then
+    printf '  Local %s not advanced (diverged from origin or checked out in another worktree):\\n%s\\n' "$BASE" "$REF_OUT"
+  fi
+fi`;
+}
+
 /**
  * Write a shell script that sets up the worktree and launches claude.
  * The slow work (git fetch, worktree add, npm install) runs inside the
@@ -1052,13 +1083,7 @@ if [ "$FETCH_RC" -ne 0 ]; then
   fi
 fi
 
-printf '  Fast-forwarding main checkout...\\n'
-MERGE_RC=0
-MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only "origin/$BASE" 2>&1) || MERGE_RC=$?
-[ -n "$MERGE_OUT" ] && printf '%s\\n' "$MERGE_OUT"
-if [ "$MERGE_RC" -ne 0 ]; then
-  BOOTSTRAP_FAIL="\${BOOTSTRAP_FAIL:+$BOOTSTRAP_FAIL; }ff-merge failed: $MERGE_OUT"
-fi
+${mainCheckoutRefreshStep(projectPathLit)}
 
 if [ -n "$BOOTSTRAP_FAIL" ]; then
   printf '  WARNING: main checkout did not update cleanly — raising alert.\\n' >&2
