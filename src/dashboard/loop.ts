@@ -274,8 +274,9 @@ export function loopAutoContinueAfterMerge(
     // nothing. A fork failure has also cost the worker its pane (tmux() kills
     // it, since respawning it again would crash the tmux server); `exited` is
     // then the truth, and it keeps the merged sweep from retrying against a
-    // pane that is gone. The next dashboard attach resumes the worker. Any
-    // other failure left the old process running, so its status stands.
+    // pane that is gone. The worker is resumed the next time the dashboard is
+    // created (attaching to a running one does not). Any other failure left
+    // the old process running, so its status stands.
     const forkFailed = isTmuxForkFailure(err);
     updateWorkerFields(projectName, workerName, {
       sessionId: entry.sessionId,
@@ -290,7 +291,7 @@ export function loopAutoContinueAfterMerge(
       data: {
         project: projectName,
         error: String(err),
-        ...(forkFailed && { pane: "killed; the worker is exited until the next dashboard attach resumes it" }),
+        ...(forkFailed && { pane: "killed; the worker is exited until the dashboard is next created, which resumes it" }),
         ...(ptyFailure && { cause: ptyFailure.cause, ...ptyFailure.data }),
       },
     });

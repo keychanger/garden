@@ -33,8 +33,9 @@ doc and the code disagree, fix whichever is wrong.
   ENXIO. So `tmux()` (`tmux.ts`) kills the pane of any `respawn-pane` that
   fails to fork before rethrowing, which covers every caller: bounce, the loop
   respawn, and the passive panes `garden redraw` respawns. A loop worker whose
-  respawn fails is put back on its merged session and marked `exited`; the
-  next dashboard attach resumes it.
+  respawn fails is put back on its merged session and marked `exited`; it
+  is resumed the next time the dashboard is created (attaching to a running
+  dashboard does not resume it).
 
 ## The code path
 
