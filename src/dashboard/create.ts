@@ -22,7 +22,7 @@ import {
   killWindowSafe, isTmuxForkFailure,
 } from "./tmux.js";
 import {
-  readRegistry, updateWorkerFields, resolveResumeAgentStatus,
+  readRegistry, updateWorkerFields, updateWorkerFieldsIf, resolveResumeAgentStatus,
   type ResumeAgentStatus, type ResumeRetry, type WorkerEntry,
 } from "./registry.js";
 import { addAlert } from "./alerts.js";
@@ -1418,8 +1418,34 @@ export function resumeWorker(
   gardenRunner: string,
   nowMs = Date.now(),
 ): WorkerWindowLaunch {
-  updateWorkerFields(projectName, entry.name, { agentStatus: status });
-  const launch = launchWorkerWindow(projectName, projectConfig, entry, size);
+  // Claimed against the status the caller decided on: `garden bounce` and the
+  // watchdog's retry can both find the same worker exited and paneless, and
+  // two launches would run two agents on one session in one worktree.
+  const claimed = updateWorkerFieldsIf(projectName, entry.name, current =>
+    current.agentStatus === entry.agentStatus
+      ? { fields: { agentStatus: status }, result: true }
+      : { fields: null, result: false });
+  if (!claimed) {
+    log.info("workers", "worker not resumed: its status changed since it was read", {
+      worker: entry.name,
+      data: { project: projectName, expected: entry.agentStatus ?? null },
+    });
+    return { window: null, forkFailed: false };
+  }
+  let launch: WorkerWindowLaunch;
+  try {
+    launch = launchWorkerWindow(projectName, projectConfig, entry, size);
+  } catch (err) {
+    // A throw before the respawn (new-window can fail to fork as well) would
+    // otherwise leave the worker at `status` with no pane, out of reach of the
+    // watchdog's retry, which acts only on an exited worker.
+    killWindowSafe(workerWin(projectName, entry.name));
+    log.error("workers", "worker resume failed; leaving the worker unresumed", {
+      worker: entry.name,
+      data: { project: projectName, error: String(err) },
+    });
+    launch = { window: null, forkFailed: isTmuxForkFailure(err) };
+  }
   if (launch.window === null) {
     updateWorkerFields(projectName, entry.name, {
       agentStatus: "exited",

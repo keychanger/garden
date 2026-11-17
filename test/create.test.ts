@@ -163,10 +163,21 @@ vi.mock("../src/dashboard/continue.js", () => ({
   dispatchDelayedContinue: vi.fn(),
 }));
 
-vi.mock("../src/dashboard/registry.js", () => ({
-  readRegistry: vi.fn(() => ({ workers: {} })),
-  updateWorkerFields: vi.fn(),
-}));
+vi.mock("../src/dashboard/registry.js", () => {
+  const readRegistry = vi.fn((): { workers: Record<string, Array<{ name: string }>> } => ({ workers: {} }));
+  const updateWorkerFields = vi.fn();
+  // Decides against the mocked registry's entry (an empty one when absent) and
+  // records an applied update through updateWorkerFields, so the tests see
+  // every registry write in one place.
+  const updateWorkerFieldsIf = vi.fn((project: string, name: string,
+    decide: (entry: object) => { fields: object | null; result: unknown }) => {
+    const current = readRegistry().workers[project]?.find(e => e.name === name) ?? {};
+    const { fields, result } = decide(current);
+    if (fields) updateWorkerFields(project, name, fields);
+    return result;
+  });
+  return { readRegistry, updateWorkerFields, updateWorkerFieldsIf };
+});
 
 vi.mock("../src/dashboard/log.js", () => ({
   log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -707,6 +718,31 @@ describe("resuming a worker after a pane fork failure", () => {
       agentStatus: "exited",
       resumeRetry: { status: "asking", since: 1_000, attempts: 1, nextAt: 61_000 },
     });
+  });
+
+  it("leaves a worker exited with a retry when its window itself fails to fork", () => {
+    vi.mocked(newDashboardWindow).mockImplementationOnce(() => {
+      throw new Error("tmux new-window failed: create window failed: fork failed: Device not configured");
+    });
+    const launch = resumeWorker("myproject", project, entry, null, "idle", "garden", 1_000);
+
+    expect(launch).toEqual({ window: null, forkFailed: true });
+    expect(killWindowSafe).toHaveBeenCalledWith("_myproject-worker-bold-ash");
+    expect(updateWorkerFields).toHaveBeenLastCalledWith("myproject", "bold-ash", {
+      agentStatus: "exited",
+      resumeRetry: { status: "idle", since: 1_000, attempts: 1, nextAt: 61_000 },
+    });
+  });
+
+  it("does not launch a worker whose status moved since the caller read it", () => {
+    // A bounce and the watchdog's retry can both read the same exited worker;
+    // the one that loses must not start a second agent on its session.
+    registryWith({ ...entry, agentStatus: "idle" });
+    const launch = resumeWorker("myproject", project, { ...entry, agentStatus: "exited" }, null, "idle", "garden");
+
+    expect(launch).toEqual({ window: null, forkFailed: false });
+    expect(newDashboardWindow).not.toHaveBeenCalled();
+    expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 
   it("does not retry a failure that waiting will not fix", async () => {
