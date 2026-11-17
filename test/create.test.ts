@@ -962,8 +962,13 @@ describe("buildWorktreeBootstrapScript", () => {
       c => typeof c[0] === "string" && c[0].includes("bootstrap-myproject"),
     )![1] as string;
     const fetches = script.split("\n").filter(line => /git -C \S+ fetch /.test(line));
-    expect(fetches).toHaveLength(3); // the two base fetches, plus the catch-up for a tip origin named
-    for (const line of fetches) expect(line).toContain('fetch --end-of-options origin "refs/heads/$BASE"');
+    const fromOrigin = fetches.filter(line => line.includes(" origin "));
+    expect(fromOrigin).toHaveLength(3); // the two base fetches, plus the catch-up for a tip origin named
+    for (const line of fromOrigin) expect(line).toContain('fetch --end-of-options origin "refs/heads/$BASE"');
+    // The off-base refresh fetches locally, and only the SHA origin reported.
+    expect(fetches.filter(line => !line.includes(" origin "))).toEqual([
+      expect.stringContaining('fetch -q --end-of-options . "$BASE_SHA:refs/heads/$BASE"'),
+    ]);
     expect(script).toContain('ls-remote --exit-code --heads --end-of-options origin "refs/heads/$BASE"');
     expect(script).toContain('ls-remote --exit-code --heads --end-of-options origin "refs/heads/$DEFAULT_BRANCH"');
     expect(script).toContain('ls-remote --end-of-options origin "refs/heads/$BASE"');

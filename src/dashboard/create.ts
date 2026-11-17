@@ -853,6 +853,39 @@ export function npmInstallStep(wtPathLit: string): string {
 fi`;
 }
 
+// Refresh the operator's main checkout toward $BASE_SHA (baseShaStep: the tip
+// origin reports), mirroring the poller's post-merge rule (fastForwardBase in
+// git.ts). `merge --ff-only` moves whatever branch is checked out, so it runs
+// only when that branch IS $BASE; a worker spawned with --base off the
+// checkout's branch once tried to fast-forward the operator's parked branch to
+// a sibling base's tip. Off-base, only the local $BASE ref advances, via a
+// local fetch of $BASE_SHA (already in the object store, so no second network
+// round trip, and never read from the worker-writable refs/remotes/origin/$BASE):
+// the refspec is fast-forward-enforced and refuses a branch checked out in
+// another worktree.
+// A refused off-base advance is the operator's deliberate state, not trouble,
+// so it is reported in the pane but not alerted. A local $BASE the checkout
+// never had is not created, and a detached HEAD is left alone.
+export function mainCheckoutRefreshStep(projectPathLit: string): string {
+  return `CUR_BRANCH=$(git -C ${projectPathLit} symbolic-ref --short -q HEAD 2>/dev/null) || CUR_BRANCH=""
+if [ "$CUR_BRANCH" = "$BASE" ]; then
+  printf '  Fast-forwarding main checkout...\\n'
+  MERGE_RC=0
+  MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only --end-of-options "$BASE_SHA" 2>&1) || MERGE_RC=$?
+  [ -n "$MERGE_OUT" ] && printf '%s\\n' "$MERGE_OUT"
+  if [ "$MERGE_RC" -ne 0 ]; then
+    BOOTSTRAP_FAIL="\${BOOTSTRAP_FAIL:+$BOOTSTRAP_FAIL; }ff-merge failed: $MERGE_OUT"
+  fi
+elif [ -z "$CUR_BRANCH" ]; then
+  printf '  Main checkout is on a detached HEAD; leaving it alone.\\n'
+elif git -C ${projectPathLit} show-ref --verify --quiet "refs/heads/$BASE"; then
+  printf '  Main checkout is on %s; advancing local %s ref only...\\n' "$CUR_BRANCH" "$BASE"
+  if ! REF_OUT=$(git -C ${projectPathLit} fetch -q --end-of-options . "$BASE_SHA:refs/heads/$BASE" 2>&1); then
+    printf '  Local %s not advanced (diverged from origin or checked out in another worktree):\\n%s\\n' "$BASE" "$REF_OUT"
+  fi
+fi`;
+}
+
 /**
  * Write a shell script that sets up the worktree and launches claude.
  * The slow work (git fetch, worktree add, npm install) runs inside the
@@ -1100,13 +1133,7 @@ if ! git -C ${projectPathLit} cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
   abort_base "origin reports $BASE_SHA for refs/heads/$BASE, but that commit is not in $(basename ${projectPathLit})'s object store after fetching. Retry the spawn once origin is reachable"
 fi
 
-printf '  Fast-forwarding main checkout...\\n'
-MERGE_RC=0
-MERGE_OUT=$(git -C ${projectPathLit} merge --ff-only --end-of-options "$BASE_SHA" 2>&1) || MERGE_RC=$?
-[ -n "$MERGE_OUT" ] && printf '%s\\n' "$MERGE_OUT"
-if [ "$MERGE_RC" -ne 0 ]; then
-  BOOTSTRAP_FAIL="\${BOOTSTRAP_FAIL:+$BOOTSTRAP_FAIL; }ff-merge failed: $MERGE_OUT"
-fi
+${mainCheckoutRefreshStep(projectPathLit)}
 
 if [ -n "$BOOTSTRAP_FAIL" ]; then
   printf '  WARNING: main checkout did not update cleanly — raising alert.\\n' >&2
