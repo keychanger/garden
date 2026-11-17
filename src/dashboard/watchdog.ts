@@ -802,6 +802,8 @@ export async function runWatchdogLoop(): Promise<void> {
   const { healActivePane } = await import("./validate.js");
   // Dynamic for the same reason as header.ts above, which it imports.
   const { sweepAnsweredPermissionPrompts } = await import("./permission-prompt.js");
+  // Dynamic for the cycle: create.ts statically imports this module.
+  const { retryFailedResumes } = await import("./create.js");
   startCodexInputWatcher(refreshDashboard);
   const gardenRunner = resolveGardenRunner();
   // Damping state lives in the loop closure: it persists across ticks and
@@ -911,6 +913,14 @@ export async function runWatchdogLoop(): Promise<void> {
         sweepWorkerCleanups(Date.now(), gardenRunner);
       } catch (err) {
         log.warn("watchdog", "worker cleanup sweep failed", { data: { error: String(err) } });
+      }
+      // Relaunch workers whose resume failed to fork. Without this they stay
+      // paneless until the next dashboard creation, which after a reboot means
+      // a fleet that comes back with whole projects missing.
+      try {
+        retryFailedResumes(Date.now(), gardenRunner);
+      } catch (err) {
+        log.warn("watchdog", "failed-resume retry failed", { data: { error: String(err) } });
       }
       // Release `garden awake` once the machine is unplugged or its timer ends.
       // On the fast tick: a closed laptop that just left AC power should be

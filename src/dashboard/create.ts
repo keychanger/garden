@@ -12,16 +12,20 @@ import { buildRulesContext, buildWorktreeRules } from "../rules.js";
 import { type DashboardState, readDashState, writeDashState, withStateLock, STATE_FILE } from "./state.js";
 import { restoreFromHidden } from "./layout.js";
 import { setupKeybindings } from "./hotkeys.js";
-import { setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, buildAlertsCommand, updateHeaderVar, installInputGuard, setPaneProjectColor, statusRenderedHeight, usageRenderedHeight } from "./header.js";
+import { refreshDashboard, setupStatusBar, buildStatusCommand, buildUsageCommand, buildHistoryCommand, buildAlertsCommand, updateHeaderVar, installInputGuard, setPaneProjectColor, statusRenderedHeight, usageRenderedHeight } from "./header.js";
 import { renderQuickStatus } from "../commands/status.js";
 import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape, tmuxDoubleQuote, newDashboardWindow,
   getPaneSize, resizeWindow, listSessionPanes, disablePaneInput, lockPaneMouse,
-  killWindowSafe,
+  killWindowSafe, isTmuxForkFailure,
 } from "./tmux.js";
-import { readRegistry, updateWorkerFields, resolveResumeAgentStatus, type WorkerEntry } from "./registry.js";
+import {
+  readRegistry, updateWorkerFields, resolveResumeAgentStatus,
+  type ResumeAgentStatus, type ResumeRetry, type WorkerEntry,
+} from "./registry.js";
+import { addAlert } from "./alerts.js";
 import { log, truncateLog } from "./log.js";
 import { validateAndHeal } from "./validate.js";
 import { startProjectPoller, restartLongLivedPollers } from "./poller-window.js";
@@ -380,21 +384,16 @@ export function ensureDashboard(): void {
       // operator hold / pending question across the rebuild, and returns
       // everything else to "idle" at the prompt (never the one-time "ready").
       // prState is preserved as-is from the previous session.
-      const resumeStatus = resolveResumeAgentStatus(entry);
-      const wasInterrupted = resumeStatus === "ready";
-      updateWorkerFields(projectName, entry.name, { agentStatus: resumeStatus });
-      const workerWindowName = respawnWorkerWindow(projectName, projectConfig, entry, rightSize);
-      if (!workerWindowName) {
-        updateWorkerFields(projectName, entry.name, { agentStatus: "exited" });
-        continue;
-      }
+      // A worker whose last relaunch failed to fork is already `exited`, so its
+      // resumeRetry carries the status that relaunch was resuming into.
+      const resumeStatus = entry.resumeRetry?.status ?? resolveResumeAgentStatus(entry);
+      const { window: workerWindowName } = resumeWorker(
+        projectName, projectConfig, entry, rightSize, resumeStatus, gardenRunner,
+      );
+      if (!workerWindowName) continue;
 
       if (projectName === state.activeProject && !firstResumedWindow) {
         firstResumedWindow = workerWindowName;
-      }
-
-      if (wasInterrupted) {
-        dispatchDelayedContinue(gardenRunner, projectName, entry.name);
       }
     }
   }
@@ -1254,7 +1253,19 @@ export function respawnWorkerWindow(
   entry: WorkerEntry,
   size: { width: number; height: number } | null,
 ): string | null {
-  if (!entry.sessionId) return null;
+  return launchWorkerWindow(projectName, projectConfig, entry, size).window;
+}
+
+export type WorkerWindowLaunch = { window: string } | { window: null; forkFailed: boolean };
+
+function launchWorkerWindow(
+  projectName: string,
+  projectConfig: ProjectConfig,
+  entry: WorkerEntry,
+  size: { width: number; height: number } | null,
+): WorkerWindowLaunch {
+  const notLaunched = { window: null, forkFailed: false };
+  if (!entry.sessionId) return notLaunched;
   let launchPlan: WorkerLaunchPlan;
   try {
     launchPlan = resolveWorkerLaunchPlan({
@@ -1272,7 +1283,7 @@ export function respawnWorkerWindow(
       worker: entry.name,
       data: { project: projectName, error: String(err) },
     });
-    return null;
+    return notLaunched;
   }
   // A worker resumes in its own worktree. Without a path to it (validate.ts
   // clears the field once the directory is gone) this resumed the agent in the
@@ -1282,7 +1293,7 @@ export function respawnWorkerWindow(
       worker: entry.name,
       data: { project: projectName },
     });
-    return null;
+    return notLaunched;
   }
   // Per-worker base: honors entry.baseBranch pinned at creation, falls
   // back to current-checkout resolution for legacy entries.
@@ -1361,7 +1372,7 @@ export function respawnWorkerWindow(
           ...(ptyFailure && { cause: ptyFailure.cause, ...ptyFailure.data }),
         },
       });
-      return null;
+      return { window: null, forkFailed: isTmuxForkFailure(err) };
     }
     setPaneLabel(workerPaneId, entry.name);
     setPaneVar(workerPaneId, "garden_clock", "1");
@@ -1371,7 +1382,110 @@ export function respawnWorkerWindow(
       setPaneTitle(workerPaneId, entry.task);
     }
   }
-  return workerWindowName;
+  return { window: workerWindowName };
+}
+
+// Every recorded fork-failure cluster cleared within minutes of boot, so an
+// hour of retrying covers it with room to spare; past that, the operator is
+// told rather than the watchdog probing forever.
+export const RESUME_RETRY_WINDOW_MS = 60 * 60_000;
+const RESUME_RETRY_FIRST_DELAY_MS = 60_000;
+const RESUME_RETRY_MAX_DELAY_MS = 10 * 60_000;
+
+export function nextResumeRetry(
+  previous: ResumeRetry | undefined,
+  status: ResumeAgentStatus,
+  nowMs: number,
+): ResumeRetry {
+  const attempts = (previous?.attempts ?? 0) + 1;
+  const delay = Math.min(RESUME_RETRY_FIRST_DELAY_MS * 2 ** (attempts - 1), RESUME_RETRY_MAX_DELAY_MS);
+  return { status, since: previous?.since ?? nowMs, attempts, nextAt: nowMs + delay };
+}
+
+// Relaunch a registered worker's session in a fresh hidden window, resuming it
+// at `status`, and leave the registry saying what happened. A worker resumed
+// mid-turn (`ready`) is sent its continue prompt. A pty fork failure leaves it
+// exited with a resumeRetry for the watchdog: the failure is machine-wide and
+// clears by itself (see WorkerEntry.resumeRetry). Any other failure leaves it
+// exited with no retry, since waiting will not fix a bad launch plan or a
+// missing provider token.
+export function resumeWorker(
+  projectName: string,
+  projectConfig: ProjectConfig,
+  entry: WorkerEntry,
+  size: { width: number; height: number } | null,
+  status: ResumeAgentStatus,
+  gardenRunner: string,
+  nowMs = Date.now(),
+): WorkerWindowLaunch {
+  updateWorkerFields(projectName, entry.name, { agentStatus: status });
+  const launch = launchWorkerWindow(projectName, projectConfig, entry, size);
+  if (launch.window === null) {
+    updateWorkerFields(projectName, entry.name, {
+      agentStatus: "exited",
+      resumeRetry: launch.forkFailed ? nextResumeRetry(entry.resumeRetry, status, nowMs) : undefined,
+    });
+    return launch;
+  }
+  updateWorkerFields(projectName, entry.name, { resumeRetry: undefined });
+  if (status === "ready") dispatchDelayedContinue(gardenRunner, projectName, entry.name);
+  return launch;
+}
+
+// The watchdog's retry of resumes that failed to fork. Stops at the first
+// failure in a pass: the condition is machine-wide, so the rest would fail the
+// same way, and each failure costs a full at-failure probe.
+export function retryFailedResumes(nowMs: number, gardenRunner: string): number {
+  const due: Array<[string, WorkerEntry & { resumeRetry: ResumeRetry }]> = [];
+  for (const [project, entries] of Object.entries(readRegistry().workers)) {
+    for (const entry of entries) {
+      if (entry.resumeRetry && entry.resumeRetry.nextAt <= nowMs) {
+        due.push([project, entry as WorkerEntry & { resumeRetry: ResumeRetry }]);
+      }
+    }
+  }
+  // No dashboard means nowhere to put a window; the next attach resumes them.
+  if (due.length === 0 || !dashboardExists()) return 0;
+  const state = readDashState();
+  const size = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+  let resumed = 0;
+  for (const [project, entry] of due) {
+    const retry = entry.resumeRetry;
+    const projectConfig = tryGetProject(project);
+    // Revived some other way (bounce, a fresh attach) or no longer resumable.
+    if (!projectConfig || entry.agentStatus !== "exited") {
+      updateWorkerFields(project, entry.name, { resumeRetry: undefined });
+      continue;
+    }
+    if (nowMs - retry.since >= RESUME_RETRY_WINDOW_MS) {
+      updateWorkerFields(project, entry.name, { resumeRetry: undefined });
+      log.error("workers", "gave up retrying worker resume", {
+        worker: entry.name,
+        data: { project, attempts: retry.attempts, sinceMs: nowMs - retry.since },
+      });
+      addAlert({
+        level: "error",
+        source: "workers",
+        project,
+        worker: entry.name,
+        message: `${entry.name} is not running: tmux failed to fork its pane on ${retry.attempts} attempts over the last hour. Run \`garden bounce ${entry.name}\` to try again.`,
+        dedupKey: `resume-retry-gave-up:${project}:${entry.name}`,
+      });
+      continue;
+    }
+    const launch = resumeWorker(project, projectConfig, entry, size, retry.status, gardenRunner, nowMs);
+    if (launch.window === null) {
+      if (launch.forkFailed) break;
+      continue;
+    }
+    resumed++;
+    log.info("workers", "resumed worker after failed resume", {
+      worker: entry.name,
+      data: { project, attempts: retry.attempts, sinceMs: nowMs - retry.since },
+    });
+  }
+  if (resumed > 0) refreshDashboard();
+  return resumed;
 }
 
 export function buildWorktreeResumeCommand(

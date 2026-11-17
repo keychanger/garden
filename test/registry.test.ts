@@ -92,6 +92,13 @@ describe("readRegistry", () => {
       { name: "w", subagentAsk: null },
       { name: "w", subagentAsk: { agent: "a1", at: 1 } },
       { name: "w", subagentAsk: { agent: "a1", at: 1, resume: 0 } },
+      // Its `status` is written into agentStatus by the watchdog's resume retry,
+      // so it is typed like agentStatus: any string passes, a non-string fails.
+      { name: "w", resumeRetry: "forged" },
+      { name: "w", resumeRetry: null },
+      { name: "w", resumeRetry: { status: 0, since: 0, attempts: 1, nextAt: 0 } },
+      { name: "w", resumeRetry: { status: "idle", since: "0", attempts: 1, nextAt: 0 } },
+      { name: "w", resumeRetry: { status: "idle", since: 0, attempts: 1 } },
     ]) {
       fs.writeFileSync(REGISTRY_FILE, JSON.stringify({ workers: { proj: [bad] } }));
       expect(readRegistry()).toEqual({ workers: {} });
@@ -114,6 +121,7 @@ describe("readRegistry", () => {
         pendingHandoffCallbacks: ["child settled"],
         backgroundTasks: { transcriptPath: "/t.jsonl", offset: 42, pending: ["b13krek0m"] },
         subagentAsk: { agent: "a1", at: 1001, resume: "idle" },
+        resumeRetry: { status: "asking", since: 1, attempts: 2, nextAt: 3 },
       }] },
     }));
     expect(readRegistry().workers.proj[0]).toMatchObject({

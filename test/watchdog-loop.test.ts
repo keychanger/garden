@@ -81,6 +81,7 @@ vi.mock("../src/dashboard/validate.js", () => ({
 vi.mock("../src/dashboard/permission-prompt.js", () => ({
   sweepAnsweredPermissionPrompts: vi.fn(() => false),
 }));
+vi.mock("../src/dashboard/create.js", () => ({ retryFailedResumes: vi.fn(() => 0) }));
 
 import { runWatchdogLoop } from "../src/dashboard/watchdog.js";
 import { ensureUsagePoller } from "../src/dashboard/usage-poller.js";

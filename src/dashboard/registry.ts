@@ -385,6 +385,14 @@ export interface WorkerEntry {
   // worker is brought back via `claude --resume`. Cleared by _continue-worker
   // once the prompt is dispatched.
   interruptedWhileWorking?: boolean;
+  // Set when relaunching this worker's session failed because tmux could not
+  // fork its pane, which leaves it exited with no pane. That failure is
+  // machine-wide and transient: on 2026-11-17 every resume from four minutes
+  // after boot failed, and six minutes later all of them launched cleanly. The
+  // watchdog retries at `nextAt` (retryFailedResumes, create.ts) and resumes
+  // into `status`, the status the failed relaunch was resuming into, since
+  // `exited` has overwritten it. Cleared by any successful relaunch.
+  resumeRetry?: ResumeRetry;
   // Set by finalizeMerge after dispatching the post-merge auto-continue prompt.
   // Idempotency guard: if a merge event somehow replays within a short window,
   // we don't double-fire the continue. See dashboard/continue.ts and STATUS.md.
@@ -730,6 +738,15 @@ export function isDelegating(
   return now - entry.subagentActivityAt < SUBAGENT_ACTIVE_WINDOW_MS;
 }
 
+export type ResumeAgentStatus = "paused" | "asking" | "ready" | "idle";
+
+export interface ResumeRetry {
+  status: ResumeAgentStatus;
+  since: number;
+  attempts: number;
+  nextAt: number;
+}
+
 // The authoritative agentStatus for a worker being restored via `claude
 // --resume` (dashboard rebuild or bounce). SessionStart fires on --resume with
 // source="resume", but the hook now PRESERVES whatever the resume dispatcher
@@ -752,7 +769,7 @@ export function isDelegating(
 // operator's explicit, most-recent signal wins over the stale interrupt flag.
 export function resolveResumeAgentStatus(
   entry: Pick<WorkerEntry, "agentStatus" | "interruptedWhileWorking">,
-): AgentStatus {
+): ResumeAgentStatus {
   if (entry.agentStatus === "paused" || entry.agentStatus === "asking") {
     return entry.agentStatus;
   }
@@ -844,6 +861,14 @@ function invalidEntryField(e: unknown): string | null {
   // the record's other fields are only compared for equality.
   if (entry.subagentAsk !== undefined
       && typeof (entry.subagentAsk as { resume?: unknown } | null)?.resume !== "string") return "subagentAsk";
+  // `status` is written into agentStatus by the watchdog's retry, so it is
+  // typed like agentStatus: a string, not one this build knows.
+  if (entry.resumeRetry !== undefined) {
+    const retry = entry.resumeRetry as Record<string, unknown> | null;
+    if (!retry || typeof retry !== "object" || typeof retry.status !== "string"
+        || typeof retry.since !== "number" || typeof retry.attempts !== "number"
+        || typeof retry.nextAt !== "number") return "resumeRetry";
+  }
   return null;
 }
 

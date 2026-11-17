@@ -36,6 +36,15 @@ doc and the code disagree, fix whichever is wrong.
   respawn fails is put back on its merged session and marked `exited`; it
   is resumed the next time the dashboard is created (attaching to a running
   dashboard does not resume it).
+- On 11-17, four minutes after a reboot, the attach-time resume loop resumed
+  nine workers and then failed all eleven remaining respawns (15/511
+  allocated; the throwaway-server probe failed too). The kill-pane guard held
+  and the server survived. Six minutes later a throwaway probe passed and all
+  eleven relaunched cleanly. Because the condition is machine-wide and clears
+  on its own, a resume that fails to fork now leaves the worker `exited` with
+  a `resumeRetry`. The watchdog relaunches it in a fresh window (never the
+  poisoned pane) with backoff from one minute to ten, and alerts after an
+  hour. `garden bounce` relaunches a paneless worker on demand.
 
 ## The code path
 

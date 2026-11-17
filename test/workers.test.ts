@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // --- Mocks ---
 
@@ -155,6 +155,7 @@ vi.mock("../src/dashboard/create.js", () => ({
   buildResumeCommand: vi.fn(() => "claude --resume FAKE-ID-NW"),
   buildWorktreeContextText: vi.fn(() => "rules"),
   createShellWindow: vi.fn(),
+  resumeWorker: vi.fn(() => ({ window: "_myproject-worker-swift-oak" })),
   // Pure helper — use the real semantics so the provider view bounce installs
   // its runtime config under is genuinely exercised ("" clears, absent inherits).
   workerProject: (project: { provider?: string }, provider: string | undefined) =>
@@ -272,7 +273,7 @@ import {
   updateWorkerFields,
 } from "../src/dashboard/registry.js";
 import {
-  buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
+  buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand, resumeWorker,
   createShellWindow,
 } from "../src/dashboard/create.js";
 import { getHarness } from "../src/dashboard/harness/index.js";
@@ -2985,13 +2986,69 @@ describe("bounceWorker", () => {
     expect(() => bounceWorker("myproject", "ghost")).toThrow(/No worker 'ghost'/);
   });
 
-  it("throws when the pane can't be located", () => {
+  it("throws when the pane can't be located and there is no dashboard to revive it in", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({
       activeWindowName: "_myproject-worker-other",
     }));
     vi.mocked(windowExists).mockReturnValue(false);
 
     expect(() => bounceWorker("myproject", "swift-oak")).toThrow(/no live pane/);
+    expect(resumeWorker).not.toHaveBeenCalled();
+  });
+
+  // A worker whose relaunch failed to fork has no pane to respawn in. Before,
+  // only a full dashboard rebuild brought it back.
+  describe("a worker with no pane", () => {
+    beforeEach(() => {
+      vi.mocked(readDashState).mockReturnValue(makeState({
+        activeWindowName: "_myproject-worker-other",
+      }));
+      vi.mocked(windowExists).mockReturnValue(false);
+      vi.mocked(dashboardExists).mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      vi.mocked(dashboardExists).mockReturnValue(false);
+      vi.mocked(resumeWorker).mockReturnValue({ window: "_myproject-worker-swift-oak" });
+    });
+
+    it("is relaunched in a fresh window into the status its failed relaunch was resuming", () => {
+      vi.mocked(findWorkerByName).mockReturnValue({
+        name: "swift-oak", sessionId: "sess-abc", task: "",
+        branchName: "swift-oak", worktreePath: "/wt/swift-oak", agentStatus: "exited",
+        resumeRetry: { status: "asking", since: 0, attempts: 2, nextAt: 0 },
+      });
+
+      bounceWorker("myproject", "swift-oak");
+
+      expect(resumeWorker).toHaveBeenCalledWith(
+        "myproject", expect.objectContaining({ path: "/repo/myproject" }),
+        expect.objectContaining({ name: "swift-oak" }), expect.anything(), "asking", expect.any(String),
+      );
+      expect(vi.mocked(tmux).mock.calls.find(c => c[0] === "respawn-pane")).toBeUndefined();
+    });
+
+    it("is not relaunched while its registry says it is still running", () => {
+      // Its pane may be misfiled under another window name; a second --resume
+      // of the same session would put two agents in one worktree.
+      vi.mocked(findWorkerByName).mockReturnValue({
+        name: "swift-oak", sessionId: "sess-abc", task: "",
+        branchName: "swift-oak", worktreePath: "/wt/swift-oak", agentStatus: "idle",
+      });
+
+      expect(() => bounceWorker("myproject", "swift-oak")).toThrow(/no live pane/);
+      expect(resumeWorker).not.toHaveBeenCalled();
+    });
+
+    it("says the watchdog will keep trying when the relaunch fails to fork again", () => {
+      vi.mocked(findWorkerByName).mockReturnValue({
+        name: "swift-oak", sessionId: "sess-abc", task: "",
+        branchName: "swift-oak", worktreePath: "/wt/swift-oak", agentStatus: "exited",
+      });
+      vi.mocked(resumeWorker).mockReturnValue({ window: null, forkFailed: true });
+
+      expect(() => bounceWorker("myproject", "swift-oak")).toThrow(/failed to fork.*watchdog retries/);
+    });
   });
 
   it("dispatches a delayed continue prompt when the worker was mid-turn at bounce", () => {

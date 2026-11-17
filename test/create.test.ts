@@ -117,6 +117,7 @@ vi.mock("../src/dashboard/header.js", () => ({
   usageRenderedHeight: vi.fn(() => 8),
   updateHeaderVar: vi.fn(),
   setPaneProjectColor: vi.fn(),
+  refreshDashboard: vi.fn(),
 }));
 
 vi.mock("../src/commands/status.js", () => ({
@@ -146,6 +147,20 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   disablePaneInput: vi.fn(),
   lockPaneMouse: vi.fn(),
   killWindowSafe: vi.fn(),
+  isTmuxForkFailure: vi.fn((err: unknown) => String(err).includes("fork failed")),
+}));
+
+vi.mock("../src/dashboard/pty-failure-capture.js", () => ({
+  respawnProbingForkFailure: vi.fn((respawn: () => void) => respawn()),
+  capturePtyFailure: vi.fn(() => null),
+}));
+
+vi.mock("../src/dashboard/alerts.js", () => ({
+  addAlert: vi.fn(),
+}));
+
+vi.mock("../src/dashboard/continue.js", () => ({
+  dispatchDelayedContinue: vi.fn(),
 }));
 
 vi.mock("../src/dashboard/registry.js", () => ({
@@ -222,7 +237,17 @@ import {
   respawnHistoryPane,
   respawnAlertsPane,
   installTitleChangedHook,
+  resumeWorker,
+  retryFailedResumes,
+  nextResumeRetry,
+  RESUME_RETRY_WINDOW_MS,
 } from "../src/dashboard/create.js";
+import { readRegistry, updateWorkerFields } from "../src/dashboard/registry.js";
+import { respawnProbingForkFailure } from "../src/dashboard/pty-failure-capture.js";
+import { addAlert } from "../src/dashboard/alerts.js";
+import { dispatchDelayedContinue } from "../src/dashboard/continue.js";
+import { refreshDashboard } from "../src/dashboard/header.js";
+import { dashboardExists } from "../src/session.js";
 import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput, killWindowSafe } from "../src/dashboard/tmux.js";
 import { tryGetProject, tryResolveProvider } from "../src/config.js";
 
@@ -644,6 +669,158 @@ describe("respawnWorkerWindow capability gate", () => {
     } finally {
       vi.mocked(tmux).mockReset();
     }
+  });
+});
+
+// A resume whose tmux respawn fails to fork leaves the worker paneless. That
+// failure is machine-wide and transient (2026-11-17: every resume from four
+// minutes after boot failed; six minutes later all of them launched), so the
+// worker gets a resumeRetry the watchdog acts on instead of staying missing
+// until the next dashboard rebuild.
+describe("resuming a worker after a pane fork failure", () => {
+  const project = { name: "myproject", path: "/repo/myproject" };
+  const entry = {
+    name: "bold-ash", sessionId: "session-1", task: "", workflow: "default" as const,
+    worktreePath: "/wt/myproject/bold-ash",
+  };
+  const forkFailure = () => {
+    vi.mocked(respawnProbingForkFailure).mockImplementationOnce(() => {
+      throw new Error("tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured");
+    });
+  };
+  const launches = () => vi.mocked(respawnProbingForkFailure).mockImplementation(() => {});
+  const registryWith = (...entries: Array<Record<string, unknown>>) =>
+    vi.mocked(readRegistry).mockReturnValue({ workers: { myproject: entries } } as ReturnType<typeof readRegistry>);
+
+  afterEach(() => {
+    vi.mocked(respawnProbingForkFailure).mockImplementation((respawn: () => void) => respawn());
+    vi.mocked(readRegistry).mockReturnValue({ workers: {} });
+    vi.mocked(dashboardExists).mockReturnValue(false);
+  });
+
+  it("leaves a fork-failed worker exited with a retry that remembers the status it was resuming into", () => {
+    forkFailure();
+    const launch = resumeWorker("myproject", project, entry, null, "asking", "garden", 1_000);
+
+    expect(launch).toEqual({ window: null, forkFailed: true });
+    expect(updateWorkerFields).toHaveBeenLastCalledWith("myproject", "bold-ash", {
+      agentStatus: "exited",
+      resumeRetry: { status: "asking", since: 1_000, attempts: 1, nextAt: 61_000 },
+    });
+  });
+
+  it("does not retry a failure that waiting will not fix", async () => {
+    const { tryResolveProvider } = await import("../src/config.js");
+    vi.mocked(tryResolveProvider).mockReturnValue({
+      name: "deepseek", label: "deepseek",
+      baseUrl: "https://api.deepseek.com/anthropic",
+      authTokenEnv: "DEEPSEEK_API_KEY_ABSENT",
+    });
+    const launch = resumeWorker("myproject", { ...project, provider: "deepseek" }, entry, null, "idle", "garden");
+
+    expect(launch).toEqual({ window: null, forkFailed: false });
+    expect(updateWorkerFields).toHaveBeenLastCalledWith("myproject", "bold-ash", {
+      agentStatus: "exited", resumeRetry: undefined,
+    });
+  });
+
+  it("clears the retry on success and sends a mid-turn worker its continue prompt", () => {
+    launches();
+    const launch = resumeWorker("myproject", project, entry, null, "ready", "garden");
+
+    expect(launch).toEqual({ window: "_myproject-worker-bold-ash" });
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", { agentStatus: "ready" });
+    expect(updateWorkerFields).toHaveBeenLastCalledWith("myproject", "bold-ash", { resumeRetry: undefined });
+    expect(dispatchDelayedContinue).toHaveBeenCalledWith("garden", "myproject", "bold-ash");
+  });
+
+  it("backs off between retries, capped at ten minutes, keeping the first failure time", () => {
+    let retry = nextResumeRetry(undefined, "idle", 0);
+    const delays = [retry.nextAt];
+    for (let i = 0; i < 5; i++) {
+      retry = nextResumeRetry(retry, "idle", 0);
+      delays.push(retry.nextAt);
+    }
+    expect(delays).toEqual([60_000, 120_000, 240_000, 480_000, 600_000, 600_000]);
+    expect(retry.since).toBe(0);
+    expect(retry.attempts).toBe(6);
+  });
+
+  it("the watchdog relaunches a due worker into its remembered status", () => {
+    launches();
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    registryWith({
+      ...entry, agentStatus: "exited",
+      resumeRetry: { status: "paused", since: 0, attempts: 1, nextAt: 60_000 },
+    });
+
+    expect(retryFailedResumes(60_000, "garden")).toBe(1);
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", { agentStatus: "paused" });
+    expect(updateWorkerFields).toHaveBeenLastCalledWith("myproject", "bold-ash", { resumeRetry: undefined });
+    expect(refreshDashboard).toHaveBeenCalled();
+  });
+
+  it("the watchdog leaves a worker alone until its retry is due", () => {
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    registryWith({
+      ...entry, agentStatus: "exited",
+      resumeRetry: { status: "idle", since: 0, attempts: 1, nextAt: 60_000 },
+    });
+
+    expect(retryFailedResumes(59_999, "garden")).toBe(0);
+    expect(newDashboardWindow).not.toHaveBeenCalled();
+  });
+
+  it("the watchdog stops at the first fork failure in a pass, since the rest would fail the same way", () => {
+    forkFailure();
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    const due = { agentStatus: "exited", resumeRetry: { status: "idle", since: 0, attempts: 1, nextAt: 0 } };
+    registryWith({ ...entry, ...due }, { ...entry, name: "calm-elm", ...due });
+
+    expect(retryFailedResumes(60_000, "garden")).toBe(0);
+    expect(newDashboardWindow).toHaveBeenCalledTimes(1);
+    expect(updateWorkerFields).toHaveBeenLastCalledWith("myproject", "bold-ash", {
+      agentStatus: "exited",
+      resumeRetry: { status: "idle", since: 0, attempts: 2, nextAt: 180_000 },
+    });
+  });
+
+  it("the watchdog gives up after an hour and tells the operator how to retry", () => {
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    registryWith({
+      ...entry, agentStatus: "exited",
+      resumeRetry: { status: "idle", since: 0, attempts: 9, nextAt: 0 },
+    });
+
+    expect(retryFailedResumes(RESUME_RETRY_WINDOW_MS, "garden")).toBe(0);
+    expect(newDashboardWindow).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", { resumeRetry: undefined });
+    expect(addAlert).toHaveBeenCalledWith(expect.objectContaining({
+      level: "error", project: "myproject", worker: "bold-ash",
+      message: expect.stringContaining("garden bounce bold-ash"),
+    }));
+  });
+
+  it("the watchdog drops the retry of a worker something else already revived", () => {
+    vi.mocked(dashboardExists).mockReturnValue(true);
+    registryWith({
+      ...entry, agentStatus: "idle",
+      resumeRetry: { status: "idle", since: 0, attempts: 1, nextAt: 0 },
+    });
+
+    expect(retryFailedResumes(60_000, "garden")).toBe(0);
+    expect(newDashboardWindow).not.toHaveBeenCalled();
+    expect(updateWorkerFields).toHaveBeenCalledWith("myproject", "bold-ash", { resumeRetry: undefined });
+  });
+
+  it("the watchdog does nothing without a dashboard to put the window in", () => {
+    registryWith({
+      ...entry, agentStatus: "exited",
+      resumeRetry: { status: "idle", since: 0, attempts: 1, nextAt: 0 },
+    });
+
+    expect(retryFailedResumes(60_000, "garden")).toBe(0);
+    expect(updateWorkerFields).not.toHaveBeenCalled();
   });
 });
 
