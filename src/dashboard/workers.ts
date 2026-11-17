@@ -1357,10 +1357,14 @@ export function bounceWorker(projectName: string, workerName: string): void {
 
 // A worker with no pane at all (its relaunch failed to fork, or its window was
 // lost) has nothing to respawn in, so bounce gives it a fresh window the way
-// the attach-time resume loop does.
+// the attach-time resume loop does. Only an `exited` worker qualifies: a live
+// one whose pane is merely misfiled under another window name (a `_stray-`
+// window, the `_<project>-active` parking name) is not found by name either,
+// and launching a second `--resume` of its session would run two agents in
+// one worktree.
 function reviveWorker(projectName: string, entry: WorkerEntry): void {
   const projectConfig = tryGetProject(projectName);
-  if (!dashboardExists() || !projectConfig) {
+  if (!dashboardExists() || !projectConfig || entry.agentStatus !== "exited") {
     throw new Error(
       `Worker ${projectName}/${entry.name} has no live pane. Reattach the dashboard first.`,
     );

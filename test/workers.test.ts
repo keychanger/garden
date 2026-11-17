@@ -2678,7 +2678,23 @@ describe("bounceWorker", () => {
       expect(vi.mocked(tmux).mock.calls.find(c => c[0] === "respawn-pane")).toBeUndefined();
     });
 
+    it("is not relaunched while its registry says it is still running", () => {
+      // Its pane may be misfiled under another window name; a second --resume
+      // of the same session would put two agents in one worktree.
+      vi.mocked(findWorkerByName).mockReturnValue({
+        name: "swift-oak", sessionId: "sess-abc", task: "",
+        branchName: "swift-oak", worktreePath: "/wt/swift-oak", agentStatus: "idle",
+      });
+
+      expect(() => bounceWorker("myproject", "swift-oak")).toThrow(/no live pane/);
+      expect(resumeWorker).not.toHaveBeenCalled();
+    });
+
     it("says the watchdog will keep trying when the relaunch fails to fork again", () => {
+      vi.mocked(findWorkerByName).mockReturnValue({
+        name: "swift-oak", sessionId: "sess-abc", task: "",
+        branchName: "swift-oak", worktreePath: "/wt/swift-oak", agentStatus: "exited",
+      });
       vi.mocked(resumeWorker).mockReturnValue({ window: null, forkFailed: true });
 
       expect(() => bounceWorker("myproject", "swift-oak")).toThrow(/failed to fork.*watchdog retries/);
