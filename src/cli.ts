@@ -184,7 +184,7 @@ Dashboard:
   doctor                         Environment preflight (git / tmux / claude / gh / node / config / Option-key)
   kick <worker> [--retry-review]  Re-arm review; explicitly retry a failed default review after fixing its environment
   poke [project]                 Wake the project's poller now (runs bead intake immediately; board's dispatch gate uses this)
-  bounce <worker>                Restart a worker's Claude process (preserves session history)
+  bounce <worker>                Restart a worker's Claude process (preserves session history); relaunches a worker left with no pane
   hold <worker>                  Interrupt a working worker and mark it 'paused' (sends Escape; ⌥e in the dashboard toggles this on the focused worker; the next prompt resumes it)
   pause <worker>                 Suppress post-merge auto-continue (writes the .garden-done sentinel; a worker UserPromptSubmit also clears it, so prompting an explicitly-paused worker is itself an unpause)
   resume <worker>                Re-arm post-merge auto-continue (clears done/blocked sentinels and any blocked question)

@@ -1,7 +1,7 @@
 // Worker lifecycle: creation and destruction of Claude worker sessions.
 import path from "node:path";
 import fs from "node:fs";
-import { DASHBOARD_SESSION } from "../session.js";
+import { DASHBOARD_SESSION, dashboardExists } from "../session.js";
 import { getProject, tryGetProject, loadConfig, plotsMap, type ProjectConfig } from "../config.js";
 import {
   syncProviderTokenToVault, providerTokenPresence, tmuxWorkerCommand,
@@ -33,7 +33,7 @@ import { resolveAndApplyVineModel } from "./trellis-model.js";
 import { getWorkflow } from "./workflows/index.js";
 import {
   buildWorktreeBootstrapScript, buildWorktreeResumeCommand, buildResumeCommand,
-  buildWorktreeContextText, createShellWindow, trellisRelativePathForEntry,
+  buildWorktreeContextText, createShellWindow, trellisRelativePathForEntry, resumeWorker,
   type WorktreeCommandOptions,
 } from "./create.js";
 import { getHarness } from "./harness/index.js";
@@ -1251,9 +1251,8 @@ export function bounceWorker(projectName: string, workerName: string): void {
 
   const paneId = resolveWorkerPaneId(projectName, workerName);
   if (!paneId) {
-    throw new Error(
-      `Worker ${projectName}/${workerName} has no live pane. Reattach the dashboard first.`,
-    );
+    reviveWorker(projectName, entry);
+    return;
   }
 
   const projectInfo = tryGetProject(projectName);
@@ -1353,6 +1352,33 @@ export function bounceWorker(projectName: string, workerName: string): void {
     data: { project: projectName, sessionId: entry.sessionId, wasWorking },
   });
 
+  refreshDashboard();
+}
+
+// A worker with no pane at all (its relaunch failed to fork, or its window was
+// lost) has nothing to respawn in, so bounce gives it a fresh window the way
+// the attach-time resume loop does.
+function reviveWorker(projectName: string, entry: WorkerEntry): void {
+  const projectConfig = tryGetProject(projectName);
+  if (!dashboardExists() || !projectConfig) {
+    throw new Error(
+      `Worker ${projectName}/${entry.name} has no live pane. Reattach the dashboard first.`,
+    );
+  }
+  const state = readDashState();
+  const size = state.activePaneId ? getPaneSize(state.activePaneId) : null;
+  const status = entry.resumeRetry?.status ?? resolveResumeAgentStatus(entry);
+  const launch = resumeWorker(projectName, projectConfig, entry, size, status, resolveGardenRunner());
+  if (launch.window === null) {
+    throw new Error(launch.forkFailed
+      ? `Could not relaunch ${projectName}/${entry.name}: tmux failed to fork its pane. The watchdog retries it every few minutes.`
+      : `Could not relaunch ${projectName}/${entry.name}. See \`garden logs -w ${entry.name}\`.`);
+  }
+  recordOperatorAction(projectName, entry.name, entry.createdAt, entry.workflow ?? "default", "bounce");
+  log.info("workers", "revived paneless worker", {
+    worker: entry.name,
+    data: { project: projectName, sessionId: entry.sessionId, status },
+  });
   refreshDashboard();
 }
 
