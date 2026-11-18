@@ -780,35 +780,6 @@ export function refreshDashboardPlotCycle(opts?: RefreshOptions): void {
   writeHistoryRendered(shared); // follow focus when cycling plots in ⌥h mode
 }
 
-// Floor lines for the status pane: the tallest rendered height among all plots
-// (first 5 projects only). Each project renders as a header + one line per
-// worker (or "(no workers)"); adjacent projects are separated by a blank line;
-// the pane has a top/bottom blank. Using rendered height — not just project
-// count — means switching from a bigger-by-workers plot doesn't cause a shrink.
-function statusPaneFloorLines(
-  cachedConfig?: ReturnType<typeof loadConfig>,
-  cachedRegistry?: WorkerRegistry,
-): number {
-  try {
-    const plots = plotsMap(cachedConfig ?? loadConfig());
-    const reg = cachedRegistry ?? readRegistry();
-    let max = 0;
-    for (const plot of Object.values(plots)) {
-      const projects = plot.projects.slice(0, 5);
-      if (projects.length === 0) continue;
-      let bodySum = 0;
-      for (const name of projects) {
-        const workers = reg.workers[name] ?? [];
-        bodySum += Math.max(1, workers.length);
-      }
-      const N = projects.length;
-      const lines = 2 * N + 1 + bodySum; // top(1)+headers(N)+bodies+seps(N-1)+bottom(1)
-      if (lines > max) max = lines;
-    }
-    return max;
-  } catch { return 0; }
-}
-
 // Short-circuit for the baked pane files. When the renderer produces exactly
 // what the file already holds, both the atomicWriteFile (write+rename
 // syscalls) and the SIGUSR1 (signalPane forks tmux for the pane pid) are
@@ -863,7 +834,7 @@ function writeQuickStatus(opts?: RefreshOptions): void {
       // +1 for the pane-border-status top row, which is included in pane_height
       // but not in the rendered line count. Height is read fresh here (past the
       // dedup) so no-op refreshes still fork nothing.
-      const h = Math.max(statusPaneFloorLines(opts?.config, opts?.registry), rendered.split("\n").length) + 1;
+      const h = rendered.split("\n").length + 1;
       const cur = getPaneSize(state.statusPaneId);
       const pin = opts?.copyModeSafe ? resizeAndSignalNoRefresh : resizeAndSignal;
       pin(state.statusPaneId, h, cur?.height ?? null);
@@ -1021,7 +992,7 @@ export function repinStatusPaneHeight(state: DashboardState): void {
 export function statusRenderedHeight(): number | null {
   try {
     const rendered = fs.readFileSync(STATUS_RENDERED_FILE, "utf-8");
-    return Math.max(statusPaneFloorLines(), rendered.split("\n").length) + 1;
+    return rendered.split("\n").length + 1;
   } catch {
     return null;
   }
