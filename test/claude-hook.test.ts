@@ -31,8 +31,6 @@ vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/garden" })),
   loadConfig: vi.fn(() => ({
     projects: { garden: { path: "/repo/garden" } },
-    // 5+ projects in a plot so the derived floor hits the 5-project cap
-    // (largestPlotSize → Math.min(5, ...) → floorLines = 3*5 + 1 = 16).
     plots: { all: { projects: ["garden", "p2", "p3", "p4", "p5"] } },
   })),
   SESSIONS_DIR: "/tmp/fake-sessions",
@@ -1394,9 +1392,8 @@ describe("writeQuickStatus — status pane resize", () => {
     handleClaudeHook("stop");
 
     // renderQuickStatus is mocked to return ""; "".split("\n").length === 1,
-    // Math.max(16, 1) + 1 === 17 (the +1 accounts for pane-border-status top;
-    // the 16 is the 5-project floor: 2 pad + 5*(header+body) + 4 separators)
-    expect(vi.mocked(tmux)).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
+    // + 1 for the pane-border-status top row === 2
+    expect(vi.mocked(tmux)).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "2");
   });
 
   it("skips resize when statusPaneId is null", () => {

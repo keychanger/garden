@@ -31,9 +31,6 @@ vi.mock("../src/config.js", () => ({
   tryGetProject: vi.fn(() => ({ path: "/repo/garden" })),
   loadConfig: vi.fn(() => ({
     projects: { garden: { path: "/repo/garden" }, other: { path: "/repo/other" } },
-    // 5+ projects in the largest plot so the derived floor hits the 5-project
-    // cap (slice(0, 5)). With an empty registry, bodySum = 5 and N = 5,
-    // so floorLines = 2*5 + 5 + 1 = 16.
     plots: {
       all: { projects: ["garden", "other", "p3", "p4", "p5"] },
       imp: { projects: ["garden"] },
@@ -1108,8 +1105,8 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
 
     refreshDashboard();
 
-    // 4 lines -> Math.max(16, 4) + 1 = 17
-    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
+    // 4 lines + 1 for the pane border = 5
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "5");
   });
 
   // refreshStatusElapsed is the watchdog's 60s re-bake hook: it re-renders the
@@ -1163,57 +1160,38 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
   it("skips resize when current height already matches", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
     vi.mocked(renderQuickStatus).mockReturnValue("line1\nline2\nline3\nline4");
-    // height 17 = Math.max(16, 4) + 1
-    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 17 });
+    // height 5 = 4 lines + 1
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
 
     refreshDashboard();
 
-    expect(tmux).not.toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
+    expect(tmux).not.toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "5");
   });
 
-  it("uses minimum height of 16 lines + 1 for pane border (5-project floor)", () => {
+  it("sizes to the active plot's content, not the tallest plot", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
-    vi.mocked(renderQuickStatus).mockReturnValue("x"); // 1 line
-    vi.mocked(getPaneSize).mockReturnValue(null); // unknown size triggers resize
-
-    refreshDashboard();
-
-    // Math.max(16, 1) + 1 = 17
-    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "17");
-  });
-
-  it("floor grows with worker counts so a busy project doesn't cause a shrink on plot switch", () => {
-    vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
-    vi.mocked(renderQuickStatus).mockReturnValue("x"); // 1 line — well under the floor
-    vi.mocked(getPaneSize).mockReturnValue(null);
-    // Plot "all" has 5 projects; "garden" has 4 workers, others 0.
-    // bodySum = 4 + 1 + 1 + 1 + 1 = 8; N = 5; floor = 2*5 + 8 + 1 = 19.
+    vi.mocked(renderQuickStatus).mockReturnValue("l1\nl2\nl3\nl4");
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 30 });
+    // Another plot ("all") holds a busy project; it must not inflate this pane.
     vi.mocked(readRegistry).mockReturnValue({
       workers: {
-        garden: [
-          { name: "w1", sessionId: "s", task: "" },
-          { name: "w2", sessionId: "s", task: "" },
-          { name: "w3", sessionId: "s", task: "" },
-          { name: "w4", sessionId: "s", task: "" },
-        ],
+        garden: Array.from({ length: 13 }, (_, i) => ({ name: `w${i}`, sessionId: "s", task: "" })),
       },
     } as never);
 
     refreshDashboard();
 
-    // Math.max(19, 1) + 1 = 20
-    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "20");
+    expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "5");
   });
 
-  it("grows past the floor when the rendered content is taller than 16 lines", () => {
+  it("grows with the rendered content", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
-    // 20 rendered lines — exceeds the 16-line floor
     vi.mocked(renderQuickStatus).mockReturnValue(Array.from({ length: 20 }, (_, i) => `l${i}`).join("\n"));
     vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
 
     refreshDashboard();
 
-    // Math.max(16, 20) + 1 = 21
+    // 20 lines + 1 = 21
     expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "21");
   });
 
@@ -1236,8 +1214,8 @@ describe("writeQuickStatus (via refreshDashboard)", () => {
   it("does not flush refresh-client from writeQuickStatus when the height is unchanged", () => {
     vi.mocked(readDashState).mockReturnValue(makeState({ statusPaneId: "%0" }));
     vi.mocked(renderQuickStatus).mockReturnValue("l1\nl2\nl3\nl4");
-    // height already matches Math.max(16,4)+1 = 17, so no resize
-    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 17 });
+    // height already matches 4 lines + 1 = 5, so no resize
+    vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
 
     refreshDashboard();
 
@@ -1308,14 +1286,14 @@ describe("repinStatusPaneHeight", () => {
     );
 
   it("resizes the status pane to its content-derived height and repaints via SIGUSR1 (never refresh-client)", () => {
-    mockStatusFile(twentyLines); // 20 content lines exceed the 16-line floor
+    mockStatusFile(twentyLines);
     vi.mocked(getPaneSize).mockReturnValue({ width: 120, height: 5 });
     vi.mocked(getPanePid).mockReturnValue("999");
     const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     repinStatusPaneHeight(makeState({ statusPaneId: "%0" }));
 
-    // Math.max(16, 20) + 1 = 21.
+    // 20 lines + 1 for the pane border = 21.
     expect(tmux).toHaveBeenCalledWith("resize-pane", "-t", "%0", "-y", "21");
     expect(killSpy).toHaveBeenCalledWith(999, "SIGUSR1");
     // Copy-mode safety: the resize path must never fork a full client refresh.
