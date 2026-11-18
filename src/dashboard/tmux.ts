@@ -355,7 +355,7 @@ export function tmuxNewWindow(...args: string[]): string {
 // two set-options for every window on every full refresh (every hook fire runs
 // one). The trailing shell-command of new-window terminates at the standalone
 // `;` argv, so a window that runs a command still gets suppressed.
-function windowNameSuppressionArgs(windowName: string): string[] {
+export function windowNameSuppressionArgs(windowName: string): string[] {
   const target = `${DASHBOARD_SESSION}:${windowName}`;
   return [
     ";", "set-option", "-t", target, "window-status-format", "",

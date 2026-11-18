@@ -14,7 +14,7 @@ import {
   tmux, tmuxDisplay, newDashboardWindowPaned, setPaneLabel, setPaneVar, shellEscape,
   getFirstPaneId, paneExists, windowExists,
   listHiddenWorkerWindows, killWindowSafe,
-  getPaneSize, resizeWindow, stripControlSequences,
+  getPaneSize, resizeWindow, stripControlSequences, isTmuxForkFailure, windowNameSuppressionArgs,
 } from "./tmux.js";
 import { generateWorkerName } from "./names.js";
 import {
@@ -697,6 +697,57 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       "respawn-pane", "-k", "-c", project.path, "-t", workerPaneId, "sh", "-c", bootstrapCmd,
     ),
   );
+  // A respawn that fails to fork has already lost its pane: tmux() kills it,
+  // because a second respawn of that pane crashes the server. Every capture
+  // since 2026-11-10 shows a fresh tmux session forking fine at the moment the
+  // respawn failed, so the bootstrap gets one launch straight into a new
+  // window instead. That window starts at tmux's default size and is resized
+  // at once; the bootstrap's fetch and worktree setup run long before the
+  // agent's TUI paints, so the first paint still lands in the right grid.
+  const launchBootstrapDirectly = (
+    respawnErr: unknown,
+    size: { width: number; height: number } | null,
+  ): string => {
+    killWindowSafe(workerWindowName);
+    try {
+      tmuxWorkerCommand(
+        launchPlan,
+        "new-window", "-d", "-t", DASHBOARD_SESSION, "-n", workerWindowName, "-c", project.path,
+        "sh", "-c", bootstrapCmd, ...windowNameSuppressionArgs(workerWindowName),
+      );
+    } catch (directErr) {
+      log.warn("workers", "fallback new-window launch also failed", {
+        worker: workerName,
+        data: { project: targetProject, respawnError: String(respawnErr), directError: String(directErr) },
+      });
+      throw respawnErr;
+    }
+    if (size) resizeWindow(workerWindowName, size.width, size.height);
+    const paneId = getFirstPaneId(`${DASHBOARD_SESSION}:${workerWindowName}`);
+    if (!paneId) throw new Error(`launched ${workerWindowName} directly but tmux lists no pane for it`);
+    const ptyFailure = capturePtyFailure(respawnErr, { project: targetProject, worker: workerName });
+    log.warn("workers", "respawn failed to fork; launched worker in a new window", {
+      worker: workerName,
+      data: {
+        project: targetProject,
+        respawnError: String(respawnErr),
+        ...(ptyFailure && { cause: ptyFailure.cause, ...ptyFailure.data }),
+      },
+    });
+    return paneId;
+  };
+  const launchBootstrapWindow = (size: { width: number; height: number } | null): string => {
+    const placeholderPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
+      "sh", "-c", "exec sleep 86400");
+    if (size) resizeWindow(workerWindowName, size.width, size.height);
+    try {
+      respawnBootstrap(placeholderPaneId);
+    } catch (err) {
+      if (!isTmuxForkFailure(err)) throw err;
+      return launchBootstrapDirectly(err, size);
+    }
+    return placeholderPaneId;
+  };
   try {
     // Both branches below spawn the bootstrap shell only after the window is
     // sized to the right slot. Otherwise the new window comes up at tmux's
@@ -715,10 +766,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
       const rightSize = initialState.activePaneId
         ? getPaneSize(initialState.activePaneId)
         : null;
-      const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
-        "sh", "-c", "exec sleep 86400");
-      if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-      respawnBootstrap(workerPaneId);
+      const workerPaneId = launchBootstrapWindow(rightSize);
       if (workerPaneId) {
         setPaneLabel(workerPaneId, workerName);
         setPaneVar(workerPaneId, "garden_clock", "1");
@@ -779,10 +827,7 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
             else delete state.lastActiveWorker[targetProject];
           };
 
-          const workerPaneId = newDashboardWindowPaned(workerWindowName, "-c", project.path,
-            "sh", "-c", "exec sleep 86400");
-          if (rightSize) resizeWindow(workerWindowName, rightSize.width, rightSize.height);
-          respawnBootstrap(workerPaneId);
+          const workerPaneId = launchBootstrapWindow(rightSize);
           if (workerPaneId) setPaneLabel(workerPaneId, workerName);
           restoreFromHidden(workerWindowName, state);
           if (state.activePaneId !== workerPaneId) {
