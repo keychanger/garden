@@ -508,7 +508,7 @@ interface HarnessCore {
   buildHeadlessCommand(opts: { launchPlan: HeadlessLaunchPlan; /* prompt/result */ }): string;
   deliverPrompt(paneId: string, text: string): void;
   resolveTranscriptPath(entry: WorkerEntry): string | null;
-  readTurns(path: string | null, max?: number): Turn[];
+  readTurns(path: string | null): Turn[];
   isTransientError(outputTail: string): boolean;
   capabilities: {
     turnEnd: true;              // required; non-negotiable (see tiers)
