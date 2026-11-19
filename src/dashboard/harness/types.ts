@@ -162,8 +162,8 @@ export interface HarnessCore {
   quotaLimitResetHint(outputTail: string): string | null;
   /** Locate the on-disk transcript for the history view. */
   resolveTranscriptPath(entry: WorkerEntry): string | null;
-  /** Parse the transcript into the neutral Turn[] model. */
-  readTurns(transcriptPath: string | null, maxTurns?: number): Turn[];
+  /** Parse the whole transcript into the neutral Turn[] model, oldest first. */
+  readTurns(transcriptPath: string | null): Turn[];
   /** The worker's "what am I doing" summary for the status pane's detail
    *  column, for a harness that does NOT paint one into its terminal title.
    *  Claude Code does (it rewrites the title as it works), so it omits this

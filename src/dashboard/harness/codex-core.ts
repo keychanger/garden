@@ -18,8 +18,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveBeadsDir } from "../../config.js";
-import { promptTurn, readTurnsFromTail, summarizeTurn } from "../conversation.js";
-import type { ToolUse, Turn } from "../conversation.js";
+import { addTools, openExchange, promptTurn, readAllTurns } from "../conversation.js";
+import type { ParseState, ToolUse, Turn } from "../conversation.js";
 import type { WorkerEntry } from "../registry.js";
 import { shellEscape, pasteAndSubmit } from "../tmux.js";
 import { resolveHookRunner } from "../runner.js";
@@ -357,9 +357,9 @@ export const codexCore: HarnessCore = {
   //     model's prose. Codex's tool vocabulary is mapped onto the neutral names
   //     that summarizer reasons about (see codexToolUses), so a Codex turn
   //     reads in the same words as a Claude one ("edited calc.py · ran tests").
-  readTurns(transcriptPath: string | null, maxTurns = DEFAULT_MAX_TURNS): Turn[] {
+  readTurns(transcriptPath: string | null): Turn[] {
     if (!transcriptPath || !isReadable(transcriptPath)) return [];
-    return readTurnsFromTail(transcriptPath, parseCodexTurns).slice(-maxTurns);
+    return readAllTurns(transcriptPath, parseCodexTurns);
   },
 
   // The status pane's "what is this worker doing" summary. Codex has a
@@ -422,20 +422,8 @@ export const codexCore: HarnessCore = {
   },
 };
 
-// The parse half of readTurns, run once per tail window by readTurnsFromTail.
-function parseCodexTurns(lines: Iterable<string>): Turn[] {
-  const turns: Turn[] = [];
-  let pending: { tools: ToolUse[]; firstText: string; ts: string } | null = null;
-  let seenUser = false;
-
-  const flush = (): void => {
-    if (pending && (pending.tools.length > 0 || pending.firstText)) {
-      const { text, verb } = summarizeTurn(pending.tools, pending.firstText);
-      turns.push({ role: "assistant", text, verb, ts: pending.ts });
-    }
-    pending = null;
-  };
-
+// The parse half of readTurns, resumed from readAllTurns' checkpoint.
+function parseCodexTurns(lines: Iterable<string>, state: ParseState): void {
   for (const line of lines) {
     if (!line.trim()) continue;
     let rec: CodexLine;
@@ -451,29 +439,24 @@ function parseCodexTurns(lines: Iterable<string>): Turn[] {
     const userMessage = codexUserMessage(rec);
     if (userMessage) {
       const turn = promptTurn(userMessage.text, ts, userMessage.image);
-      if (!turn) continue;
-      flush();
-      turns.push(turn);
-      pending = { tools: [], firstText: "", ts };
-      seenUser = true;
+      if (turn) openExchange(state, turn, ts);
       continue;
     }
-    // Drop dangling activity from a head the byte cap clipped, matching
-    // readConversation: an assistant turn with no prompt above it is noise.
-    if (!seenUser) continue;
-    if (!pending) pending = { tools: [], firstText: "", ts };
+    // Matching readConversation: activity with no prompt above it is noise.
+    if (!state.seenUser) continue;
+    const pending = state.pending ??= { tools: [], firstText: "", ts };
 
     if (rec.type === "response_item" && (p.type === "function_call" || p.type === "custom_tool_call")) {
-      pending.tools.push(...codexToolUses(p));
+      addTools(pending, codexToolUses(p));
       continue;
     }
     if (rec.type === "event_msg" && p.type === "web_search_end") {
-      pending.tools.push({ name: "WebSearch", input: {} });
+      addTools(pending, [{ name: "WebSearch", input: {} }]);
       continue;
     }
     const changed = codexAppliedChanges(rec);
     if (changed) {
-      pending.tools.push(...editToolUses(changed));
+      addTools(pending, editToolUses(changed));
       continue;
     }
     const agentMessage = codexAgentMessage(rec);
@@ -482,13 +465,10 @@ function parseCodexTurns(lines: Iterable<string>): Turn[] {
       if (ts) pending.ts = ts;
     }
   }
-  flush();
-  return turns;
 }
 
 // --- transcript helpers (light; no heavy deps) ---
 
-const DEFAULT_MAX_TURNS = 12;
 
 interface CodexLine {
   type?: string;
@@ -861,8 +841,9 @@ export function initialCodexActivity(seed?: string): string {
 // (garden's rules ride the worktree AGENTS.md) up front, measured at 70-90KB
 // for real garden workers — so the head bound has a wide margin over that, and
 // the read stops once the opening prompt replaces the creation placeholder.
-// Both stay well under readTurns' escalating tail: readActivity runs on
-// the status render and hook paths, readTurns only when the history view is open.
+// Both are small fixed bounds, unlike readTurns' whole-file read: readActivity
+// runs on the status render and hook paths, readTurns only when the history
+// view is open (and resumes from a checkpoint there).
 const ACTIVITY_TAIL_BYTES = 256 * 1024;
 const ACTIVITY_HEAD_BYTES = 512 * 1024;
 const ACTIVITY_MAX_CHARS = 120;

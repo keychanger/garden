@@ -4,7 +4,6 @@ import path from "node:path";
 import os from "node:os";
 import {
   readConversation,
-  readTurnsFromTail,
   classifyVerb,
   summarizeTurn,
   resolveTranscriptPath,
@@ -428,80 +427,79 @@ describe("readConversation", () => {
     ]);
   });
 
-  it("keeps only the last maxTurns entries", () => {
+  it("reads every exchange back to the opening prompt", () => {
     const lines: Array<Record<string, unknown>> = [];
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 60; i++) {
       lines.push(user(`q${i}`));
       lines.push(assistant([{ type: "text", text: `a${i}` }]));
     }
-    const p = writeTranscript(lines);
-    const turns = readConversation(p, 4);
-    expect(turns.length).toBe(4);
+    const turns = readConversation(writeTranscript(lines));
+    expect(turns.length).toBe(120);
+    expect(turns[0]).toEqual({ role: "user", text: "q0", ts: "2026-05-30T17:00:00Z" });
     expect(turns[turns.length - 1]).toEqual({
-      role: "assistant", text: "a9", verb: "answered", ts: "2026-05-30T17:00:01Z",
+      role: "assistant", text: "a59", verb: "answered", ts: "2026-05-30T17:00:01Z",
     });
   });
 
-  it("widens the tail until enough exchanges are in view", () => {
-    // The first window recovers too few prompts; the rest are buried behind
-    // kilobytes of tool output, the shape a Codex rollout takes at scale.
-    const lines: Array<Record<string, unknown>> = [];
-    for (let i = 0; i < 6; i++) {
-      lines.push(user(`q${i}`));
-      lines.push(assistant([{ type: "tool_use", name: "Bash", input: { command: "x".repeat(2000) } }]));
-    }
-    const p = writeTranscript(lines);
+  it("resumes an exchange in flight from its checkpoint", () => {
+    const cacheDir = path.join(tmp.home, "history-cache");
+    const p = path.join(tmp.sessionsDir, "growing.jsonl");
+    fs.writeFileSync(p, jsonl([
+      user("opening ask", "2026-05-30T17:00:00Z"),
+      assistant([{ type: "text", text: "On it." }]),
+      user("second ask", "2026-05-30T17:01:00Z"),
+      assistant([{ type: "tool_use", name: "Edit", input: { file_path: "src/foo.ts", new_string: "x".repeat(500) } }]),
+    ]));
+    expect(readConversation(p, cacheDir).at(-1)?.text).toBe("edited foo.ts");
 
-    const narrow = readConversation(p, 40, { firstBytes: 400, maxBytes: 400, targetPrompts: 4 });
-    expect(narrow.filter(t => t.role !== "assistant").length).toBeLessThan(4);
+    // Rewrite the opening prompt in place (same length): a resumed read never
+    // re-parses bytes behind its checkpoint, so the original text survives.
+    const before = fs.readFileSync(p, "utf-8");
+    fs.writeFileSync(p, before.replace("opening ask", "OPENING ASK"));
+    fs.appendFileSync(p, jsonl([
+      assistant([{ type: "tool_use", name: "Bash", input: { command: "git commit -m done" } }]),
+      user("third ask", "2026-05-30T17:02:00Z"),
+    ]));
 
-    const widened = readConversation(p, 40, { firstBytes: 400, maxBytes: 1 << 20, targetPrompts: 4 });
-    const prompts = widened.filter(t => t.role !== "assistant");
-    expect(prompts.length).toBeGreaterThanOrEqual(4);
-    expect(prompts[prompts.length - 1].text).toBe("q5");
-  });
-
-  it("stops widening at the ceiling and returns the clipped view", () => {
-    const lines: Array<Record<string, unknown>> = [];
-    for (let i = 0; i < 6; i++) {
-      lines.push(user(`q${i}`));
-      lines.push(assistant([{ type: "tool_use", name: "Bash", input: { command: "x".repeat(2000) } }]));
-    }
-    const p = writeTranscript(lines);
-    // Target is unreachable within the ceiling: we take what fits rather than
-    // reading the whole file or failing.
-    const turns = readConversation(p, 40, { firstBytes: 500, maxBytes: 3000, targetPrompts: 99 });
-    const prompts = turns.filter(t => t.role !== "assistant");
-    expect(prompts.length).toBeGreaterThan(0);
-    expect(prompts[prompts.length - 1].text).toBe("q5");
-    expect(prompts.map(t => t.text)).not.toContain("q0");
-  });
-
-  it("drops the fragment line a clipped head leaves", () => {
-    const p = writeTranscript([
-      user("first", "2026-05-30T17:00:00Z"),
-      user("second", "2026-05-30T17:01:00Z"),
-    ]);
-    const size = fs.statSync(p).size;
-    // A window landing mid-first-record must not yield a half-parsed turn.
-    const turns = readConversation(p, 40, { firstBytes: size - 10, maxBytes: size - 10, targetPrompts: 99 });
-    expect(turns).toEqual([
-      { role: "user", text: "second", ts: "2026-05-30T17:01:00Z" },
+    expect(readConversation(p, cacheDir)).toEqual([
+      { role: "user", text: "opening ask", ts: "2026-05-30T17:00:00Z" },
+      { role: "assistant", text: "On it.", verb: "answered", ts: "2026-05-30T17:00:01Z" },
+      { role: "user", text: "second ask", ts: "2026-05-30T17:01:00Z" },
+      // Activity on both sides of the checkpoint folds into one summary.
+      { role: "assistant", text: "edited foo.ts · committed", verb: "worked", ts: "2026-05-30T17:01:00Z" },
+      { role: "user", text: "third ask", ts: "2026-05-30T17:02:00Z" },
     ]);
   });
 
-  it("decodes only bytes actually read when the transcript shrinks", () => {
-    const p = path.join(tmp.sessionsDir, "shrinking.jsonl");
-    const retained = `${JSON.stringify(user("still here"))}\n`;
-    fs.writeFileSync(p, retained + "x".repeat(1000));
-    const originalSize = fs.statSync(p).size;
+  it("leaves a half-written last line for the next read", () => {
+    const cacheDir = path.join(tmp.home, "history-cache");
+    const p = path.join(tmp.sessionsDir, "partial.jsonl");
+    const second = JSON.stringify(user("second", "2026-05-30T17:01:00Z"));
+    fs.writeFileSync(p, jsonl([user("first", "2026-05-30T17:00:00Z")]) + second.slice(0, 20));
+    expect(readConversation(p, cacheDir).map(t => t.text)).toEqual(["first"]);
 
-    const turns = readTurnsFromTail(p, lines => {
-      fs.truncateSync(p, Buffer.byteLength(retained));
-      return Array.from(lines, text => ({ role: "user" as const, text, ts: "" }));
-    }, { firstBytes: originalSize, maxBytes: originalSize });
+    fs.appendFileSync(p, second.slice(20) + "\n");
+    expect(readConversation(p, cacheDir).map(t => t.text)).toEqual(["first", "second"]);
+  });
 
-    expect(turns.map(t => t.text)).toEqual([JSON.stringify(user("still here"))]);
+  it("re-parses a transcript replaced behind its checkpoint", () => {
+    const cacheDir = path.join(tmp.home, "history-cache");
+    const p = path.join(tmp.sessionsDir, "replaced.jsonl");
+    fs.writeFileSync(p, jsonl([user("old one"), user("old two")]));
+    expect(readConversation(p, cacheDir).map(t => t.text)).toEqual(["old one", "old two"]);
+
+    fs.writeFileSync(p, jsonl([user("new one"), user("new two"), user("new three")]));
+    expect(readConversation(p, cacheDir).map(t => t.text)).toEqual(["new one", "new two", "new three"]);
+  });
+
+  it("keeps a bounded number of checkpoints", () => {
+    const cacheDir = path.join(tmp.home, "history-cache");
+    for (let i = 0; i < 20; i++) {
+      const p = path.join(tmp.sessionsDir, `t${i}.jsonl`);
+      fs.writeFileSync(p, jsonl([user(`q${i}`)]));
+      readConversation(p, cacheDir);
+    }
+    expect(fs.readdirSync(cacheDir).length).toBeLessThanOrEqual(16);
   });
 
   it("returns [] for a missing or null path", () => {

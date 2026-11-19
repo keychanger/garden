@@ -159,10 +159,8 @@ export const claudeCodeCore: HarnessCore = {
     return resolveTranscriptPath(entry);
   },
 
-  readTurns(transcriptPath: string | null, maxTurns?: number) {
-    return maxTurns === undefined
-      ? readConversation(transcriptPath)
-      : readConversation(transcriptPath, maxTurns);
+  readTurns(transcriptPath: string | null) {
+    return readConversation(transcriptPath);
   },
 
   // Claude Code can run a session on a model other than the one `--model`

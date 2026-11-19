@@ -1012,11 +1012,6 @@ export function writeAlertsRendered(opts?: RefreshOptions): void {
   } catch { /* best effort */ }
 }
 
-// Keep enough exchanges that the full conversation is in scrollback; the pane
-// renders all of them and lets tmux hold the overflow (the operator scrolls up
-// for older turns — the render does not truncate to the visible height).
-const HISTORY_MAX_TURNS = 40;
-
 function dimLine(msg: string): string {
   return ` \x1b[2m${msg}\x1b[0m`;
 }
@@ -1043,7 +1038,9 @@ function renderHistoryContent(
       // so the ⌥h view works for any harness (claude-code stays byte-identical
       // — its adapter methods wrap the same conversation.ts functions).
       const core = getHarnessCore(entry.harness);
-      const turns = core.readTurns(core.resolveTranscriptPath(entry), HISTORY_MAX_TURNS);
+      // Every turn, back to the opening prompt: the pane prints them all and
+      // tmux scrollback holds what overflows the visible height.
+      const turns = core.readTurns(core.resolveTranscriptPath(entry));
       if (turns.length === 0) {
         lines = [dimLine("no conversation yet")];
       } else {
