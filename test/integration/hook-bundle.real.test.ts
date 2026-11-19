@@ -30,8 +30,12 @@ import path from "node:path";
 // under the old ceiling, and the change adds ~130. Raised to 144KB when the
 // ⌥h history bake began skipping its transcript re-read while nothing it
 // depends on has changed (header.ts writeHistoryRendered, ~240 bytes): the
-// bundle stood at 139.9KB, about 110 bytes under the old ceiling.
-const HOOK_BUNDLE_CEILING_BYTES = 144 * 1024;
+// bundle stood at 139.9KB, about 110 bytes under the old ceiling. Raised to
+// 148KB when the history view began reading the whole transcript from a
+// checkpoint (conversation.ts's resumable ParseState parsers and cache,
+// reachable through the harness cores' readTurns, ~1.2KB): the bundle stood at
+// 144.2KB, about 150 bytes over the old ceiling.
+const HOOK_BUNDLE_CEILING_BYTES = 148 * 1024;
 // skills.ts contributes only a tree-shaken sliver today (<100 bytes); a
 // retained skills bundle is ~28kb. The threshold sits well between.
 const SKILLS_BYTES_CEILING = 2 * 1024;

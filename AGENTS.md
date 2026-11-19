@@ -31,7 +31,7 @@ garden checks          # the project's full checks command, under the machine-wi
 
 `npm link` makes `garden` global, pointing at `dist/cli.js`. After an edit, `npm run build` is all that's needed. Each poll execs the current bundle, so pollers pick up a rebuild without a restart.
 
-- **Two bundles.** `dist/hook.js` (from `src/hook-entry.ts`) serves the per-tool-call hook and must stay lean: `hook-bundle.real.test.ts` enforces a 144KB ceiling (raise it with a recorded reason rather than trim unrelated code) and forbids it from importing the workflow registry or poller handlers. Check whether new code is reachable from `hook-dispatcher.ts` / `hooks/default.ts` / `registry.ts` / `continue.ts` before adding imports there. Per-harness tables that must be tree-shakeable (`prompt-verify.ts` `READERS`, `task-title.ts` `OPENING_READERS`) are leaves for this reason, not `HarnessCore` methods.
+- **Two bundles.** `dist/hook.js` (from `src/hook-entry.ts`) serves the per-tool-call hook and must stay lean: `hook-bundle.real.test.ts` enforces a 148KB ceiling (raise it with a recorded reason rather than trim unrelated code) and forbids it from importing the workflow registry or poller handlers. Check whether new code is reachable from `hook-dispatcher.ts` / `hooks/default.ts` / `registry.ts` / `continue.ts` before adding imports there. Per-harness tables that must be tree-shakeable (`prompt-verify.ts` `READERS`, `task-title.ts` `OPENING_READERS`) are leaves for this reason, not `HarnessCore` methods.
 - **No import-time side effects.** `package.json` sets `"sideEffects": false`; only `cli.ts` and `hook-entry.ts` execute at top level.
 - Bundles are written to a temp file and renamed into place (`scripts/build.mjs`). The live fleet executes them continuously.
 
