@@ -892,11 +892,6 @@ export function writeAlertsRendered(opts?: RefreshOptions): void {
   } catch { /* best effort */ }
 }
 
-// Keep enough exchanges that the full conversation is in scrollback; the pane
-// renders all of them and lets tmux hold the overflow (the operator scrolls up
-// for older turns — the render does not truncate to the visible height).
-const HISTORY_MAX_TURNS = 40;
-
 function dimLine(msg: string): string {
   return ` \x1b[2m${msg}\x1b[0m`;
 }
@@ -942,7 +937,9 @@ function renderHistoryContent(
       key = JSON.stringify([GARDEN_VERSION, transcript, st?.size, st?.mtimeMs, width, status]);
       if (fs.existsSync(HISTORY_RENDERED_FILE)
           && renderedFileUnchanged(HISTORY_KEY_FILE, `${key}\n${fs.readFileSync(HISTORY_RENDERED_FILE, "utf-8")}`)) return null;
-      const turns = core.readTurns(transcript, HISTORY_MAX_TURNS);
+      // Every turn, back to the opening prompt: the pane prints them all and
+      // tmux scrollback holds what overflows the visible height.
+      const turns = core.readTurns(transcript);
       if (turns.length === 0) {
         lines = [dimLine("no conversation yet")];
       } else {

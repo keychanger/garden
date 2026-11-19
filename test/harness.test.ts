@@ -705,12 +705,12 @@ describe("codex adapter dialect", () => {
     expect(turns[3]).toMatchObject({ role: "assistant", text: "pushed", verb: "worked" });
   });
 
-  // The bound that actually broke a real worker: a four-day Codex rollout
-  // reached 178MB (78% of it inlined command stdout), so a fixed 16MB tail held
-  // 4 of its 32 prompts and the history view showed the last few hours of a
-  // four-day run. Exercised here at the REAL constants — the escalation is
-  // worthless if it only works at the sizes a unit test finds convenient.
-  it("readTurns widens past the first window on a rollout with huge records", async () => {
+  // The shape that broke a real worker: a four-day Codex rollout reached 178MB
+  // (78% of it inlined command stdout), and a byte-bounded tail showed only the
+  // last few hours of it. Exercised at the REAL read-chunk size, with one record
+  // larger than a chunk, so the chunked whole-file read is proven where it
+  // matters rather than at sizes a unit test finds convenient.
+  it("readTurns reaches the opening prompt of a rollout with huge records", async () => {
     const { getHarnessCore } = await importCore();
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "garden-rollout-"));
     const rollout = path.join(dir, "rollout-fat.jsonl");
@@ -720,8 +720,7 @@ describe("codex adapter dialect", () => {
         type: "event_msg",
         payload: { type: "item_completed", item: { type: "UserMessage", content: [{ type: "text", text }] } },
       });
-      // 2MB of command output per exchange: the first window holds a handful of
-      // prompts, the rest are only reachable by widening.
+      // 2MB of command output per exchange.
       const bulk = JSON.stringify({
         timestamp: "2026-08-30T00:00:01Z",
         type: "event_msg",
@@ -730,17 +729,17 @@ describe("codex adapter dialect", () => {
       const fh = fs.openSync(rollout, "w");
       try {
         for (let i = 0; i < 12; i++) fs.writeSync(fh, `${prompt(`q${i}`)}\n${bulk}\n`);
+        // One record longer than a whole 16MB read chunk.
+        fs.writeSync(fh, `${bulk.replace("x".repeat(1024), "x".repeat(17 * 1024 * 1024))}\n${prompt("q12")}\n`);
       } finally {
         fs.closeSync(fh);
       }
       expect(fs.statSync(rollout).size).toBeGreaterThan(16 * 1024 * 1024);
 
-      const prompts = getHarnessCore("codex").readTurns(rollout, 40)
+      const prompts = getHarnessCore("codex").readTurns(rollout)
         .filter(t => t.role !== "assistant")
         .map(t => t.text);
-      // Without escalation only the last ~8 fit in 16MB; q0 proves it widened.
-      expect(prompts).toContain("q0");
-      expect(prompts).toContain("q11");
+      expect(prompts).toEqual(Array.from({ length: 13 }, (_, i) => `q${i}`));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

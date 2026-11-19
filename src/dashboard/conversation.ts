@@ -9,11 +9,15 @@
 // session id, mirroring Claude Code's on-disk layout
 // (~/.claude/projects/<cwd-with-/-and-.-as-dashes>/<sessionId>.jsonl).
 //
-// This module is pure: it turns a transcript file into an ordered list of
-// turns. Live status overlays (working…/asking…) are the renderer's job.
+// This module turns a transcript file into an ordered list of turns; its only
+// side effect is the parse checkpoint readAllTurns keeps under the control dir.
+// Live status overlays (working…/asking…) are the renderer's job.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { CONTROL_DIR } from "../paths.js";
+import { atomicWriteFile } from "./atomic-write.js";
 import type { WorkerEntry } from "./registry.js";
 import { stripControlSequences } from "./tmux.js";
 
@@ -34,18 +38,6 @@ export interface Turn {
 // ExitPlanMode, Task) with no edit → "planned". No tools at all → "answered".
 const EDIT_TOOLS = new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
 
-// Read an escalating transcript tail so prompt-heavy histories reach back
-// beyond a fixed byte window without making a pathological transcript
-// unbounded. The mode-gate in writeHistoryRendered keeps this parse off the
-// hook firehose — it runs only while the operator is looking at history.
-const TAIL_FIRST_BYTES = 16 * 1024 * 1024;
-const TAIL_MAX_BYTES = 128 * 1024 * 1024;
-const TAIL_GROWTH = 4;
-// Exchanges we try to have in view before accepting a clipped head. Well under
-// the 40 the history pane renders: the point is that the view spans days of a
-// long-lived worker, not that every window recovers a full pane.
-const TAIL_TARGET_PROMPTS = 8;
-const DEFAULT_MAX_TURNS = 12;
 
 // Resolve the transcript file for a worker: prefer the hook-captured path, fall
 // back to deriving it from the worktree cwd + session id. Returns null when no
@@ -359,58 +351,180 @@ function userText(obj: Record<string, unknown>): string | null {
   return parts.length > 0 ? parts.join("") : null;
 }
 
-// Read the tail of a transcript as lines, dropping the leading fragment when
-// the window clipped the head (it may also start mid-UTF-8 sequence). Decodes
-// per line rather than materializing the whole window as one string, so a
-// hundred-megabyte window costs the buffer and nothing more.
-function* tailLines(fd: number, size: number, window: number): Generator<string> {
-  const buf = Buffer.allocUnsafe(window);
-  const bytesRead = fs.readSync(fd, buf, 0, window, size - window);
-  const data = buf.subarray(0, bytesRead);
-  let start = 0;
-  if (window < size) {
-    const nl = data.indexOf(0x0a);
-    if (nl < 0) return;
-    start = nl + 1;
-  }
-  for (;;) {
-    const nl = data.indexOf(0x0a, start);
-    if (nl < 0) {
-      if (start < bytesRead) yield data.toString("utf-8", start);
-      return;
-    }
-    yield data.toString("utf-8", start, nl);
-    start = nl + 1;
-  }
-}
-
-// Parse a transcript's tail, widening the window until enough exchanges are in
-// view or the whole file has been read. Shared by every harness reader.
+// The history view reads the WHOLE transcript: the operator must always be able
+// to scroll back to the prompt that started a conversation. It used to read an
+// escalating tail and keep the last 40 entries, so a long-lived worker's view
+// began mid-run (one 485MB worker showed 12 of its 55 prompts, starting three
+// weeks after its first).
 //
-// A fixed tail is the wrong bound because a transcript's bytes-per-exchange
-// varies by orders of magnitude: a Codex rollout inlines every command's stdout
-// (a four-day worker measured 178MB, 78% of it shell output), so a flat 16MB
-// held only 4 of its 32 prompts and the history view silently showed the last
-// few hours of a four-day run. Escalation is driven by what the parse actually
-// recovered, so a normal transcript still costs exactly one 16MB read and a
-// fat one pays only for the width it needs. The ceiling is the backstop.
-// Injectable so the escalation is testable at kilobyte scale — the real
-// bounds would need hundred-megabyte fixtures to exercise.
-export interface TailBounds {
-  firstBytes?: number;   // first window read
-  maxBytes?: number;     // ceiling; past it we accept a clipped head
-  targetPrompts?: number; // exchanges that end the widening
+// Whole-file reads are only affordable incrementally. writeHistoryRendered runs
+// on every dashboard refresh while ⌥h is open — every hook fire across the
+// fleet — and a full parse of that 485MB transcript costs ~1.4s. So the parse
+// is a resumable state machine (ParseState) and its state is checkpointed to
+// disk after each read, keyed by transcript path, holding the byte offset it
+// has consumed through. A refresh parses only what was appended since; only the
+// first view of a transcript pays for the whole file, read in bounded chunks.
+//
+// The checkpoint lives under the control dir, not ~/.garden/sessions: cached
+// turn text is painted into the operator's pane without re-sanitizing, so it
+// must not be worker-writable.
+const HISTORY_CACHE_DIR = path.join(CONTROL_DIR, "history-cache");
+// Bump when the parsers or summarizeTurn change what they produce, so cached
+// turns written by an older build are re-derived rather than shown forever.
+const HISTORY_CACHE_VERSION = 1;
+const HISTORY_CACHE_KEEP = 16;
+const READ_CHUNK_BYTES = 16 * 1024 * 1024;
+// Bytes before the checkpoint offset that must still match for the checkpoint
+// to apply. Transcripts are append-only; this catches one that was replaced.
+const CHECKPOINT_PROBE_BYTES = 256;
+
+// An exchange still being accumulated: the activity since the last prompt.
+export interface PendingTurn {
+  tools: ToolUse[];
+  firstText: string;
+  ts: string;
+  compacted?: boolean;
 }
 
-export function readTurnsFromTail(
+export interface ParseState {
+  turns: Turn[];
+  pending: PendingTurn | null;
+  seenUser: boolean;
+}
+
+// A harness transcript parser: consumes lines, advancing `state` in place.
+export type TurnParser = (lines: Iterable<string>, state: ParseState) => void;
+
+export function newParseState(): ParseState {
+  return { turns: [], pending: null, seenUser: false };
+}
+
+function pendingSummary(pending: PendingTurn | null): Turn | null {
+  if (!pending || (pending.tools.length === 0 && !pending.firstText)) return null;
+  const { text, verb } = summarizeTurn(pending.tools, pending.firstText);
+  return { role: "assistant", text: pending.compacted ? `${text} · compacted` : text, verb, ts: pending.ts };
+}
+
+// Close the exchange in flight and open a new one at a prompt turn.
+export function openExchange(state: ParseState, turn: Turn, ts: string): void {
+  const done = pendingSummary(state.pending);
+  if (done) state.turns.push(done);
+  state.turns.push(turn);
+  state.pending = { tools: [], firstText: "", ts };
+  state.seenUser = true;
+}
+
+// Record tool calls on the exchange in flight. Only the input fields
+// summarizeTurn reads are kept: the pending exchange is checkpointed to disk,
+// and a Write's full file content has no business there.
+export function addTools(pending: PendingTurn, tools: ToolUse[]): void {
+  for (const t of tools) {
+    const input: Record<string, unknown> = {};
+    for (const k of ["file_path", "notebook_path", "command"]) {
+      if (typeof t.input[k] === "string") input[k] = t.input[k];
+    }
+    pending.tools.push({ name: t.name, input });
+  }
+}
+
+// Settled turns plus a summary of the exchange in flight, without closing it.
+export function finishTurns(state: ParseState): Turn[] {
+  const open = pendingSummary(state.pending);
+  return open ? [...state.turns, open] : state.turns.slice();
+}
+
+interface HistoryCheckpoint {
+  version: number;
+  path: string;
+  ino: number;
+  offset: number;
+  probe: string;
+  state: ParseState;
+}
+
+// Shallow: the file is garden-written under the control dir, so the guard
+// rejects an older build's shape or a torn read, not a forgery.
+function isHistoryCheckpoint(v: unknown): v is HistoryCheckpoint {
+  const c = v as HistoryCheckpoint | null;
+  return c?.version === HISTORY_CACHE_VERSION && typeof c.offset === "number" && Array.isArray(c.state?.turns);
+}
+
+function checkpointFile(cacheDir: string, transcriptPath: string): string {
+  return path.join(cacheDir, crypto.createHash("sha1").update(transcriptPath).digest("hex") + ".json");
+}
+
+function probeAt(fd: number, offset: number): string {
+  const len = Math.min(offset, CHECKPOINT_PROBE_BYTES);
+  const buf = Buffer.alloc(len);
+  fs.readSync(fd, buf, 0, len, offset - len);
+  return buf.toString("base64");
+}
+
+function loadCheckpoint(file: string, transcriptPath: string, fd: number, st: fs.Stats): HistoryCheckpoint | null {
+  try {
+    const c: unknown = JSON.parse(fs.readFileSync(file, "utf-8"));
+    if (!isHistoryCheckpoint(c) || c.path !== transcriptPath || c.ino !== st.ino || c.offset > st.size) return null;
+    return probeAt(fd, c.offset) === c.probe ? c : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveCheckpoint(cacheDir: string, file: string, c: HistoryCheckpoint): void {
+  try {
+    const isNew = !fs.existsSync(file);
+    atomicWriteFile(file, JSON.stringify(c), { durable: false });
+    if (isNew) pruneCheckpoints(cacheDir);
+  } catch { /* a missed checkpoint only costs the next read a re-parse */ }
+}
+
+// One checkpoint per transcript ever viewed; keep the most recently written.
+function pruneCheckpoints(cacheDir: string): void {
+  const files = fs.readdirSync(cacheDir)
+    .filter(f => f.endsWith(".json"))
+    .map(f => ({ f, t: fs.statSync(path.join(cacheDir, f)).mtimeMs }))
+    .sort((a, b) => b.t - a.t);
+  for (const { f } of files.slice(HISTORY_CACHE_KEEP)) fs.rmSync(path.join(cacheDir, f), { force: true });
+}
+
+function* splitLines(data: Buffer, end: number): Generator<string> {
+  for (let start = 0, nl; start < end; start = nl + 1) {
+    nl = data.indexOf(0x0a, start);
+    yield data.toString("utf-8", start, nl);
+  }
+}
+
+// Parse complete lines from `offset` to EOF into `state`, in bounded chunks;
+// returns the offset consumed through. An unterminated last line is still being
+// written and is left for the next read. A chunk holding no newline grows until
+// it holds one, so a single line longer than the chunk still parses.
+function consumeLines(fd: number, size: number, offset: number, state: ParseState, parse: TurnParser): number {
+  let chunk = READ_CHUNK_BYTES;
+  while (offset < size) {
+    const len = Math.min(chunk, size - offset);
+    const buf = Buffer.allocUnsafe(len);
+    const n = fs.readSync(fd, buf, 0, len, offset);
+    const end = buf.subarray(0, n).lastIndexOf(0x0a);
+    if (end < 0) {
+      if (offset + n >= size) break;
+      chunk *= 2;
+      continue;
+    }
+    parse(splitLines(buf, end), state);
+    offset += end + 1;
+    chunk = READ_CHUNK_BYTES;
+  }
+  return offset;
+}
+
+// Every turn of a transcript, oldest first. Shared by every harness reader.
+// Fails soft: an I/O or parse error yields [] rather than throwing.
+export function readAllTurns(
   transcriptPath: string | null,
-  parse: (lines: Iterable<string>) => Turn[],
-  bounds: TailBounds = {},
+  parse: TurnParser,
+  cacheDir: string = HISTORY_CACHE_DIR,
 ): Turn[] {
   if (!transcriptPath) return [];
-  const firstBytes = bounds.firstBytes ?? TAIL_FIRST_BYTES;
-  const maxBytes = Math.max(bounds.maxBytes ?? TAIL_MAX_BYTES, firstBytes);
-  const targetPrompts = bounds.targetPrompts ?? TAIL_TARGET_PROMPTS;
   let fd: number;
   try {
     fd = fs.openSync(transcriptPath, "r");
@@ -418,14 +532,18 @@ export function readTurnsFromTail(
     return [];
   }
   try {
-    const size = fs.fstatSync(fd).size;
-    let window = Math.min(firstBytes, size);
-    for (;;) {
-      const turns = parse(tailLines(fd, size, window));
-      if (window >= size || window >= maxBytes) return turns;
-      if (turns.filter(t => t.role !== "assistant").length >= targetPrompts) return turns;
-      window = Math.min(window * TAIL_GROWTH, size, maxBytes);
+    const st = fs.fstatSync(fd);
+    const file = checkpointFile(cacheDir, transcriptPath);
+    const cached = loadCheckpoint(file, transcriptPath, fd, st);
+    const state = cached?.state ?? newParseState();
+    const from = cached?.offset ?? 0;
+    const offset = consumeLines(fd, st.size, from, state, parse);
+    if (!cached || offset !== from) {
+      saveCheckpoint(cacheDir, file, {
+        version: HISTORY_CACHE_VERSION, path: transcriptPath, ino: st.ino, offset, probe: probeAt(fd, offset), state,
+      });
     }
+    return finishTurns(state);
   } catch {
     return [];
   } finally {
@@ -433,30 +551,12 @@ export function readTurnsFromTail(
   }
 }
 
-// Read the tail of the transcript and return the last `maxTurns` turns in
-// chronological order (oldest first). Fails soft: any I/O or parse error, or a
-// schema we don't recognize, yields an empty array rather than throwing.
-export function readConversation(
-  transcriptPath: string | null,
-  maxTurns = DEFAULT_MAX_TURNS,
-  bounds?: TailBounds,
-): Turn[] {
-  return readTurnsFromTail(transcriptPath, parseClaudeTurns, bounds).slice(-maxTurns);
+// Every turn of a Claude Code transcript, oldest first.
+export function readConversation(transcriptPath: string | null, cacheDir?: string): Turn[] {
+  return readAllTurns(transcriptPath, parseClaudeTurns, cacheDir);
 }
 
-function parseClaudeTurns(lines: Iterable<string>): Turn[] {
-  const turns: Turn[] = [];
-  let pending: { tools: ToolUse[]; firstText: string; ts: string; compacted?: boolean } | null = null;
-  let seenUser = false;
-
-  const flush = (): void => {
-    if (pending && (pending.tools.length > 0 || pending.firstText)) {
-      const { text, verb } = summarizeTurn(pending.tools, pending.firstText);
-      turns.push({ role: "assistant", text: pending.compacted ? `${text} · compacted` : text, verb, ts: pending.ts });
-    }
-    pending = null;
-  };
-
+function parseClaudeTurns(lines: Iterable<string>, state: ParseState): void {
   for (const line of lines) {
     if (!line) continue;
     let obj: Record<string, unknown>;
@@ -472,7 +572,7 @@ function parseClaudeTurns(lines: Iterable<string>): Turn[] {
     // Fold it into that turn as a tag instead of painting a multi-KB summary
     // as an operator prompt.
     if (obj.isCompactSummary === true) {
-      if (pending) pending.compacted = true;
+      if (state.pending) state.pending.compacted = true;
       continue;
     }
 
@@ -484,32 +584,26 @@ function parseClaudeTurns(lines: Iterable<string>): Turn[] {
       // Genuine operator prompts are string content, or a text+attachment array
       // (a prompt with an image). Tool results are `type:"user"` too but carry a
       // tool_result[] array — userPromptText returns "" for those.
-      {
-        const raw = userPromptText(message.content);
-        if (!raw) continue;
-        // System-injected user-role messages — background-task completions
-        // (`<task-notification>`), slash-command echoes — are not operator
-        // prompts and not turn boundaries. Skip them so the surrounding
-        // assistant activity folds into one turn (a Workflow launch and the
-        // edits it drove read as a single summary rather than being split by a
-        // multi-KB notification blob painted as a fake prompt).
-        const promptSource = typeof obj.promptSource === "string" ? obj.promptSource : undefined;
-        if (isInjectedSystemMessage(raw, promptSource)) continue;
-        // The typed prompt carries an inline "[Image #N]" reference when a
-        // screenshot is attached; promptTurn strips it and flags the turn.
-        const turn = promptTurn(raw, ts, /\[Image #\d+\]/.test(raw));
-        if (!turn) continue;
-        flush();
-        turns.push(turn);
-        pending = { tools: [], firstText: "", ts };
-        seenUser = true;
-      }
+      const raw = userPromptText(message.content);
+      if (!raw) continue;
+      // System-injected user-role messages — background-task completions
+      // (`<task-notification>`), slash-command echoes — are not operator
+      // prompts and not turn boundaries. Skip them so the surrounding
+      // assistant activity folds into one turn (a Workflow launch and the
+      // edits it drove read as a single summary rather than being split by a
+      // multi-KB notification blob painted as a fake prompt).
+      const promptSource = typeof obj.promptSource === "string" ? obj.promptSource : undefined;
+      if (isInjectedSystemMessage(raw, promptSource)) continue;
+      // The typed prompt carries an inline "[Image #N]" reference when a
+      // screenshot is attached; promptTurn strips it and flags the turn.
+      const turn = promptTurn(raw, ts, /\[Image #\d+\]/.test(raw));
+      if (turn) openExchange(state, turn, ts);
       continue;
     }
 
     if (type === "assistant" && message?.role === "assistant" && Array.isArray(message.content)) {
-      if (!seenUser) continue; // drop a dangling assistant turn from a truncated head
-      if (!pending) pending = { tools: [], firstText: "", ts };
+      if (!state.seenUser) continue; // activity before any prompt (e.g. a resumed session's preamble)
+      const pending = state.pending ??= { tools: [], firstText: "", ts };
       for (const block of message.content as Array<Record<string, unknown>>) {
         if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
           if (!pending.firstText) pending.firstText = block.text; // opening line, for the no-action fallback
@@ -517,15 +611,12 @@ function parseClaudeTurns(lines: Iterable<string>): Turn[] {
         } else if (block.type === "tool_use" && typeof block.name === "string") {
           const input = (block.input && typeof block.input === "object")
             ? block.input as Record<string, unknown> : {};
-          pending.tools.push({ name: block.name, input });
+          addTools(pending, [{ name: block.name, input }]);
           if (ts && !pending.ts) pending.ts = ts;
         }
       }
     }
   }
-  flush();
-
-  return turns;
 }
 
 export interface ToolUse {
