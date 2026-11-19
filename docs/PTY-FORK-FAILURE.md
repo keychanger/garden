@@ -119,9 +119,15 @@ The `tmux pane creation failed; rolled back registry entry` entry carries:
 | `cttyWithoutNode`, `ttysWithTwoSessions` | controlling ttys with no `/dev` node; ttys with more than one session leader |
 
 There is no re-attempt against the failed pane: that crashes the tmux server
-(see "What is known"). A sibling entry, `kernel log
-around pane fork failure`, follows about 6s later with the kernel lines from
-30s before to 5s after the failure.
+(see "What is known"). A new-worker spawn instead launches its bootstrap once
+directly with `new-window`, which needs no existing pane. When that works, the
+same fields appear on `respawn failed to fork; launched worker in a new window`
+and there is no rollback entry. When it also fails, `fallback new-window launch
+also failed` precedes the rollback entry. A direct launch that fails as often as
+the respawn would show that the respawn path is not what trips.
+
+A sibling entry, `kernel log around pane fork failure`, follows about 6s later
+with the kernel lines from 30s before to 5s after the failure.
 
 | `freshOpenpty` | `throwawayTmux` | Reading |
 |---|---|---|

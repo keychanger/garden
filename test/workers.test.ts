@@ -106,6 +106,8 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   resizeWindow: vi.fn(),
   // initialCodexActivity passes a codex seed's first line through it.
   stripControlSequences: vi.fn((s: string) => s),
+  isTmuxForkFailure: vi.fn((err: unknown) => String(err).includes("fork failed")),
+  windowNameSuppressionArgs: vi.fn((name: string) => [";", "set-option", "-t", name]),
 }));
 
 vi.mock("../src/dashboard/names.js", () => ({
@@ -986,6 +988,83 @@ describe("newWorker", () => {
         cause: "out of pseudo-terminals (511/511 in use; top holders: x)",
         freshOpenpty: "ok",
       }),
+    });
+  });
+
+  describe("when the bootstrap respawn fails to fork", () => {
+    const forkFailure = "tmux respawn-pane failed: respawn pane failed: fork failed: Device not configured";
+    beforeEach(() => {
+      vi.mocked(tmux).mockImplementation((...args: string[]) => {
+        if (args[0] === "respawn-pane") throw new Error(forkFailure);
+      });
+      vi.mocked(restoreFromHidden).mockImplementation((_name, state) => {
+        state.activePaneId = "%20";
+      });
+    });
+    afterEach(() => {
+      vi.mocked(tmux).mockReset();
+    });
+
+    it("launches the bootstrap straight into a fresh window and keeps the worker", () => {
+      vi.mocked(readDashState).mockReturnValue(makeState());
+      vi.mocked(capturePtyFailure).mockReturnValueOnce({
+        cause: "tmux could not open a pseudo-terminal for the pane, below the machine limit (46/511 in use)",
+        data: { throwawayTmux: "new-session ok; respawn-pane failed" },
+      });
+
+      expect(newWorker()).toBe("bold-ash");
+
+      const calls = vi.mocked(tmux).mock.calls;
+      const respawnAt = calls.findIndex(c => c[0] === "respawn-pane");
+      const directAt = calls.findIndex(c => c[0] === "new-window");
+      expect(directAt).toBeGreaterThan(respawnAt);
+      expect(calls[directAt]).toEqual([
+        "new-window", "-d", "-t", "garden-dashboard", "-n", "_myproject-worker-bold-ash", "-c", "/repo/myproject",
+        "sh", "-c", expect.stringContaining("/tmp/fake-bootstrap.sh"),
+        ";", "set-option", "-t", "_myproject-worker-bold-ash",
+      ]);
+      expect(killWindowSafe).toHaveBeenCalledWith("_myproject-worker-bold-ash");
+      expect(resizeWindow).toHaveBeenLastCalledWith("_myproject-worker-bold-ash", 120, 50);
+      expect(setPaneLabel).toHaveBeenCalledWith("%20", "bold-ash");
+      expect(removeWorker).not.toHaveBeenCalled();
+      expect(log.warn).toHaveBeenCalledWith(
+        "workers",
+        "respawn failed to fork; launched worker in a new window",
+        {
+          worker: "bold-ash",
+          data: expect.objectContaining({
+            respawnError: expect.stringContaining("fork failed"),
+            throwawayTmux: "new-session ok; respawn-pane failed",
+          }),
+        },
+      );
+    });
+
+    it("rolls back with the respawn's error when the direct launch fails too", () => {
+      vi.mocked(readDashState).mockReturnValue(makeState());
+      vi.mocked(tmux).mockImplementation((...args: string[]) => {
+        if (args[0] === "respawn-pane") throw new Error(forkFailure);
+        if (args[0] === "new-window") throw new Error("tmux new-window failed: fork failed: Device not configured");
+      });
+
+      expect(() => newWorker()).toThrow(forkFailure);
+      expect(removeWorker).toHaveBeenCalledWith("myproject", "bold-ash");
+      expect(log.warn).toHaveBeenCalledWith(
+        "workers",
+        "fallback new-window launch also failed",
+        expect.objectContaining({ worker: "bold-ash" }),
+      );
+    });
+
+    it("does not relaunch a respawn that failed for another reason", () => {
+      vi.mocked(readDashState).mockReturnValue(makeState());
+      vi.mocked(tmux).mockImplementation((...args: string[]) => {
+        if (args[0] === "respawn-pane") throw new Error("tmux respawn-pane failed: can't find pane: %10");
+      });
+
+      expect(() => newWorker()).toThrow("can't find pane");
+      expect(vi.mocked(tmux).mock.calls.some(c => c[0] === "new-window")).toBe(false);
+      expect(removeWorker).toHaveBeenCalledWith("myproject", "bold-ash");
     });
   });
 
