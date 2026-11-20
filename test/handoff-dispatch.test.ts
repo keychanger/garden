@@ -548,8 +548,9 @@ describe("processPendingHandoffs", () => {
     const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, base: "feature/staging" });
     processPendingHandoffs();
     expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(branchExistsOnOrigin)).not.toHaveBeenCalled();
     expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
-      .toMatch(/not on origin for wolf/);
+      .toMatch(/unknown project 'wolf'/);
   });
 
   it.each(["--upload-pack=evil", "a..b", "", "has space", ["main"]])(

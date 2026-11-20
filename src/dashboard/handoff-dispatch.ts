@@ -506,7 +506,11 @@ function processClaim(claimFile: string, filenameId: string): void {
       rejectClaim(claimFile, filenameId, `could not resolve project '${request.targetProject}': ${String(err)}`);
       return;
     }
-    if (!projectPath || !branchExistsOnOrigin(projectPath, request.base)) {
+    if (!projectPath) {
+      rejectClaim(claimFile, filenameId, `unknown project '${request.targetProject}'`);
+      return;
+    }
+    if (!branchExistsOnOrigin(projectPath, request.base)) {
       rejectClaim(
         claimFile,
         filenameId,

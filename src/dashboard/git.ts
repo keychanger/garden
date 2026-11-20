@@ -108,7 +108,7 @@ export function isPlausibleBranchName(name: string): boolean {
     && !/[\s\x00-\x1f\x7f~^:?*[\\]/.test(name);
 }
 
-export type PublishResult ={ ok: true } | { ok: false; error: string };
+export type PublishResult = { ok: true } | { ok: false; error: string };
 
 // Push <branchName> from the main checkout to origin so it gains an
 // origin/<branchName> ref. Called when the operator triggers ⌥n while the
