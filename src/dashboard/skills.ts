@@ -393,6 +393,16 @@ EOF
 
 \`--effort ultra\` IS the ultracode preset, so it cannot be combined with \`--ultracode\`. An unknown rung, an empty value, or any flag this command does not have is an error — nothing is spawned — so a mistyped option can never quietly produce a worker on the wrong configuration.
 
+### Base branch (\`--base\`)
+
+Pass \`--base <branch>\` when the new worker should build on a branch other than the target project's base — for example, a feature branch the operator is staging work on. The child is cut from \`origin/<branch>\`, and its work is reviewed against and merged into that branch. The branch must already be on origin: push it first if needed, because the handoff refuses a local-only branch rather than publishing it for you.
+
+\`\`\`bash
+garden handoff <target-project> --base feature/staging <<'EOF'
+<briefing>
+EOF
+\`\`\`
+
 ### Callback mode (\`--expect-callback\`)
 
 Pass \`--expect-callback\` when you want to know how the handoff turned out — typically a pass-the-baton handoff where the operator asked you to wait for the result before proceeding, or a debugging request where the child's findings unblock your own next step.

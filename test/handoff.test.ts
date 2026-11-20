@@ -454,6 +454,37 @@ describe("garden handoff command", () => {
     expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
   });
 
+  // ===== Base branch override =====
+
+  it("threads --base into the dispatch request and names it in the confirmation", async () => {
+    const lines = await captureConsoleLog(
+      () => handoff(["other", "--base", "feature/staging", "-m", "build it"]),
+    );
+    const call = vi.mocked(submitHandoffRequest).mock.calls[0][0];
+    expect(call.base).toBe("feature/staging");
+    expect(lines.join("\n")).toMatch(/base feature\/staging/);
+  });
+
+  it("leaves base undefined on the dispatch when --base is not passed", async () => {
+    await captureConsoleLog(() => handoff(["other", "-m", "msg"]));
+    expect(vi.mocked(submitHandoffRequest).mock.calls[0][0].base).toBeUndefined();
+  });
+
+  it("rejects --base without a value instead of swallowing the next flag", async () => {
+    await expect(handoff(["other", "--base"])).rejects.toThrow(/--base requires a branch name/);
+    await expect(handoff(["other", "--base", "-m", "msg"])).rejects.toThrow(/--base requires a branch name/);
+    expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+  });
+
+  it.each(["a..b", "feature/", "x.lock", "has space", "a:b"])(
+    "rejects --base %j as an invalid branch name before dispatch",
+    async (base) => {
+      await expect(handoff(["other", "--base", base, "-m", "msg"]))
+        .rejects.toThrow(/--base .* is not a valid branch name/);
+      expect(vi.mocked(submitHandoffRequest)).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["--expect-callback", "--ultracode", "-m"])("rejects repeated %s", async (flag) => {
     const args = flag === "-m" ? ["-m", "first", "-m", "second"] : [flag, flag, "-m", "msg"];
     await expect(handoff(["other", ...args])).rejects.toThrow(/Unknown or repeated handoff option/);

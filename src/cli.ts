@@ -201,6 +201,8 @@ Dashboard:
                                  Add --model <alias-or-id> and/or --effort low|medium|high|xhigh|ultra to pin the new
                                    worker's model and reasoning rung (they outrank the crew's builder seat; 'ultra' is the
                                    ultracode preset, so it cannot be combined with --ultracode)
+                                 Add --base <branch> to cut the new worker from origin/<branch> instead of the target
+                                   project's base (the branch must already be on origin; it is not published for you)
                                  Add --bead <id> to stamp the bead↔worker join on the new worker's registry entry (no bd claim is made)
   reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate
