@@ -1780,8 +1780,14 @@ describe("history pane opening ask", () => {
       activePaneType: "worker", activeWindowName: "_garden-worker-bold-ash", activeProject: "garden",
     }));
 
+    vi.mocked(getPanePid).mockReturnValue("4242");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
     writeHistoryRendered();
 
+    // SIGWINCH, not SIGUSR1: a SIGUSR1 that lands while the viewer's node is
+    // still starting opens Node's inspector instead of reloading.
+    expect(killSpy).toHaveBeenCalledWith(4242, "SIGWINCH");
     const written = vi.mocked(fs.writeFileSync).mock.calls
       .map(c => String(c[1])).find(c => c.includes(HISTORY_PIN_SEPARATOR))!;
     const [pinned, conversation] = written.replace(/\x1b\[[0-9;]*m/g, "").split(`\n${HISTORY_PIN_SEPARATOR}\n`);

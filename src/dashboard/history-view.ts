@@ -13,7 +13,12 @@
 // with alternate_on and mouse_any_flag).
 //
 // garden bakes history.rendered (writeHistoryRendered, header.ts) and signals
-// the pane with SIGUSR1; the viewer reloads it in place. A reload keeps the
+// the pane with SIGWINCH; the viewer reloads it in place. Not SIGUSR1 like the
+// other repaint panes: until a JS listener is installed, Node answers SIGUSR1
+// by opening its inspector on 127.0.0.1:9229, and the first bake after the
+// pane is created routinely lands while the viewer is still starting. SIGWINCH
+// is ignored by default, so an early one is simply dropped (the viewer reads
+// the file when it starts anyway). A reload keeps the
 // operator's scroll position unless they were at the bottom, in which case it
 // follows the newest lines — a refresh fires on most of the focused worker's
 // tool calls, so restarting a pager per refresh would yank them back down
@@ -57,7 +62,7 @@ export function parseHistoryDoc(text: string): HistoryDoc {
 export function headerLines(pin: string[], rows: number): string[] {
   const cap = Math.max(4, Math.floor(rows * 0.6));
   if (pin.length <= cap) return pin;
-  const more = pin.length - cap + 2;
+  const more = pin.length - cap + 1;
   return [
     ...pin.slice(0, cap - 2),
     `\x1b[2m … ${more} more lines · ⌥i h for the full prompt\x1b[0m`,
@@ -205,7 +210,8 @@ export function runHistoryView(): void {
   };
 
   out.write(ENTER);
-  process.on("SIGUSR1", reload);
+  // A real resize also arrives as SIGWINCH; reloading then is harmless.
+  process.on("SIGWINCH", reload);
   process.on("SIGTERM", leave);
   process.on("SIGHUP", leave);
   out.on("resize", paint);

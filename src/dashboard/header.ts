@@ -666,7 +666,7 @@ export function buildUsageCommand(_gardenRunner: string): string {
 }
 
 // History pane: a long-running viewer (history-view.ts) that pins the opening
-// ask above the scrolling conversation. It reloads history.rendered on SIGUSR1,
+// ask above the scrolling conversation. It reloads history.rendered on SIGWINCH,
 // so it is exec'd to be the pane's own process — signalPane signals the pane pid.
 export function buildHistoryCommand(gardenRunner: string): string {
   return `exec ${gardenRunner} dashboard _history-view`;
@@ -692,10 +692,11 @@ export function buildAlertsCommand(_gardenRunner: string): string {
 // ---------------------------------------------------------------------------
 
 // Shared SIGUSR1 helper — refreshStatusPane and refreshUsagePane delegate here.
-function signalPane(paneId: string): void {
+// The history viewer takes SIGWINCH instead (see history-view.ts).
+function signalPane(paneId: string, signal: NodeJS.Signals = "SIGUSR1"): void {
   try {
     const pid = getPanePid(paneId);
-    if (pid) process.kill(parseInt(pid, 10), "SIGUSR1");
+    if (pid) process.kill(parseInt(pid, 10), signal);
   } catch { /* pane gone or process exited */ }
 }
 
@@ -963,7 +964,7 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     }
     atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
     lastWrittenHistory = rendered;
-    signalPane(state.gardenShellPaneId);
+    signalPane(state.gardenShellPaneId, "SIGWINCH");
   } catch { /* best effort */ }
 }
 

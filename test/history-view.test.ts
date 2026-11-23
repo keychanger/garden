@@ -35,9 +35,9 @@ describe("headerLines", () => {
     expect(headerLines(doc(6, 0).pin, 10)).toEqual(doc(6, 0).pin);
   });
 
-  it("cuts a longer ask to its head, a pointer, and its closing rule", () => {
+  it("cuts a longer ask to its head, a pointer counting the hidden lines, and its closing rule", () => {
     const lines = plain(headerLines(doc(9, 0).pin, 10));
-    expect(lines).toEqual(["pin1", "pin2", "pin3", "pin4", " … 5 more lines · ⌥i h for the full prompt", "pin9"]);
+    expect(lines).toEqual(["pin1", "pin2", "pin3", "pin4", " … 4 more lines · ⌥i h for the full prompt", "pin9"]);
   });
 });
 

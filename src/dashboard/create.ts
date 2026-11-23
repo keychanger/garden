@@ -492,7 +492,7 @@ export function createGardenRootWindow(): void {
 }
 
 // History view (⌥h): the history viewer (history-view.ts), which reloads
-// history.rendered on SIGUSR1. writeHistoryRendered fills that file with the
+// history.rendered on SIGWINCH. writeHistoryRendered fills that file with the
 // focused worker's prompt history (parsed from its conversation transcript).
 // Unlike the other passive panes it keeps its input: the viewer scrolls on keys
 // and on the wheel tmux forwards to it.
@@ -1629,7 +1629,7 @@ export function respawnUsagePane(state: DashboardState): void {
   lockPaneMouse(state.usagePaneId);
 }
 
-// The history/alerts views repaint on SIGUSR1 like the usage pane, but they
+// The history/alerts views repaint on a signal like the usage pane, but they
 // live in hidden _garden-* windows and swap into the garden
 // slot when active — so a respawn has to find the loop wherever it currently
 // lives. respawn-pane -k kills the pane's whole process group, which is what
