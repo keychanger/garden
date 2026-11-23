@@ -20,7 +20,7 @@ import { unreadAlertCount, formatRightBar, statusBarStyle } from "./alerts.js";
 import { renderAlertsPane } from "../commands/alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
-import { formatConversationPane } from "./conversation.js";
+import { formatConversationPane, openingAsk } from "./conversation.js";
 import { getHarnessCore, resolveWorkerActivity } from "./harness/core.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
@@ -967,7 +967,7 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     if (state.gardenPaneType !== "history" || !state.gardenShellPaneId) return;
     const size = getPaneSize(state.gardenShellPaneId);
     const width = size?.width ?? 60;
-    const rendered = renderHistoryContent(state, width, opts?.registry);
+    const { rendered, pin } = renderHistoryContent(state, width, opts?.registry);
     if (rendered === lastWrittenHistory) return;
     if (renderedFileUnchanged(HISTORY_RENDERED_FILE, rendered)) {
       lastWrittenHistory = rendered;
@@ -975,6 +975,10 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     }
     atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
     lastWrittenHistory = rendered;
+    // The border pin follows the content. Entering the view re-applies it too
+    // (switchGardenTo → historyPin): swap-pane has been seen to drop pane
+    // options, and an unchanged view is never rewritten here.
+    setPaneVar(state.gardenShellPaneId, "garden_task", pin);
     signalPane(state.gardenShellPaneId);
   } catch { /* best effort */ }
 }
@@ -1016,12 +1020,18 @@ function dimLine(msg: string): string {
   return ` \x1b[2m${msg}\x1b[0m`;
 }
 
+// The history pane's border pin (openingAsk) for the focused worker.
+export function historyPin(state: DashboardState): string {
+  return renderHistoryContent(state, 60).pin;
+}
+
 function renderHistoryContent(
   state: DashboardState,
   width: number,
   cachedRegistry?: WorkerRegistry,
-): string {
+): { rendered: string; pin: string } {
   let lines: string[];
+  let pin = "";
   if (state.activePaneType !== "worker" || !state.activeWindowName || !state.activeProject) {
     lines = [dimLine("no active worker — focus one with ⌥w")];
   } else {
@@ -1047,10 +1057,11 @@ function renderHistoryContent(
         const status = entry.agentStatus === "working" ? "working"
           : entry.agentStatus === "asking" ? "asking" : undefined;
         lines = formatConversationPane(turns, { width, status });
+        pin = openingAsk(turns);
       }
     }
   }
-  return lines.join("\n");
+  return { rendered: lines.join("\n"), pin };
 }
 
 function writeUsageRendered(opts?: RefreshOptions): void {

@@ -49,6 +49,7 @@ vi.mock("../src/dashboard/header.js", () => ({
   refreshStatusElapsed: vi.fn(),
   writeAlertsRendered: vi.fn(),
   setPaneProjectColor: vi.fn(),
+  historyPin: vi.fn(() => "Thu 11-19 · the opening ask"),
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({
@@ -719,6 +720,18 @@ describe("focusGrowhouse / focusRoot / focusLogs (switchGardenTo)", () => {
     expect(createGardenHistoryWindow).toHaveBeenCalled();
     expect(state.gardenPaneType).toBe("history");
     expect(state.gardenWindowName).toBe("_garden-history");
+  });
+
+  it("pins the opening ask in the border on entering history, and clears it on leaving", () => {
+    const state = makeState({ gardenPaneType: "growhouse", gardenWindowName: "_garden-growhouse", gardenShellPaneId: "%1" });
+    vi.mocked(readDashState).mockReturnValue(state);
+    vi.mocked(windowExists).mockReturnValue(true);
+    focusHistory();
+    expect(setPaneVar).toHaveBeenCalledWith(state.gardenShellPaneId, "garden_task", "Thu 11-19 · the opening ask");
+
+    vi.mocked(setPaneVar).mockClear();
+    focusGrowhouse();
+    expect(setPaneVar).toHaveBeenCalledWith(state.gardenShellPaneId, "garden_task", "");
   });
 
   it("swaps growhouse pane and sets label", () => {

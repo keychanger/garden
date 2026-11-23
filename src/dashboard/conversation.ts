@@ -32,6 +32,12 @@ export interface Turn {
   verb?: Verb; // assistant turns only
   ts: string; // ISO timestamp from the transcript, "" if absent
   image?: boolean; // user turns only — prompt carried a screenshot
+  // A handoff seed's briefing (everything under its identity line), newlines
+  // kept. The pane shows only the marker; `garden history` prints this.
+  body?: string;
+  // The exchange's last assistant prose, newlines kept: what the agent finally
+  // said. The pane shows only the action summary; `garden history` prints this.
+  reply?: string;
 }
 
 // Tools that mutate the worktree → "worked". Anything else (reads, Bash,
@@ -369,7 +375,7 @@ function userText(obj: Record<string, unknown>): string | null {
 const HISTORY_CACHE_DIR = path.join(CONTROL_DIR, "history-cache");
 // Bump when the parsers or summarizeTurn change what they produce, so cached
 // turns written by an older build are re-derived rather than shown forever.
-const HISTORY_CACHE_VERSION = 1;
+const HISTORY_CACHE_VERSION = 2;
 const HISTORY_CACHE_KEEP = 16;
 const READ_CHUNK_BYTES = 16 * 1024 * 1024;
 // Bytes before the checkpoint offset that must still match for the checkpoint
@@ -380,6 +386,7 @@ const CHECKPOINT_PROBE_BYTES = 256;
 export interface PendingTurn {
   tools: ToolUse[];
   firstText: string;
+  lastText?: string;
   ts: string;
   compacted?: boolean;
 }
@@ -400,7 +407,11 @@ export function newParseState(): ParseState {
 function pendingSummary(pending: PendingTurn | null): Turn | null {
   if (!pending || (pending.tools.length === 0 && !pending.firstText)) return null;
   const { text, verb } = summarizeTurn(pending.tools, pending.firstText);
-  return { role: "assistant", text: pending.compacted ? `${text} · compacted` : text, verb, ts: pending.ts };
+  const reply = stripControlSequences(pending.lastText ?? "").trim();
+  return {
+    role: "assistant", text: pending.compacted ? `${text} · compacted` : text, verb, ts: pending.ts,
+    ...(reply ? { reply } : {}),
+  };
 }
 
 // Close the exchange in flight and open a new one at a prompt turn.
@@ -605,6 +616,7 @@ function parseClaudeTurns(lines: Iterable<string>, state: ParseState): void {
       for (const block of message.content as Array<Record<string, unknown>>) {
         if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
           if (!pending.firstText) pending.firstText = block.text; // opening line, for the no-action fallback
+          pending.lastText = block.text;
           if (ts) pending.ts = ts;
         } else if (block.type === "tool_use" && typeof block.name === "string") {
           const input = (block.input && typeof block.input === "object")
@@ -639,11 +651,15 @@ export interface ToolUse {
 //     garden delivers every prompt as a bracketed paste, so the tags are
 //     stripped before the [garden]/handoff prefixes are matched.
 export function promptTurn(raw: string, ts: string, image = false): Turn | null {
-  const text = collapse(raw.replace(/\[Image #\d+\]|<\/?pasted_content\b[^>]*>/g, " "));
+  const unwrapped = raw.replace(/\[Image #\d+\]|<\/?pasted_content\b[^>]*>/g, " ");
+  const text = collapse(unwrapped);
   if (!text) return null;
   if (text.startsWith("[garden]")) return { role: "garden", text: gardenLabel(text), ts };
   const handoff = handoffSeedLabel(text);
-  if (handoff) return { role: "garden", text: handoff, ts };
+  if (handoff) {
+    const body = stripControlSequences(unwrapped).trim().replace(/^[^\n]*\n?/, "").trim();
+    return { role: "garden", text: handoff, ts, ...(body ? { body } : {}) };
+  }
   return { role: "user", text, ts, ...(image ? { image: true } : {}) };
 }
 
@@ -776,16 +792,17 @@ export function summarizeTurn(tools: ToolUse[], firstText: string): { text: stri
 
 // Extract operator prompt text from a user message's content. Returns "" for a
 // non-prompt (a tool_result array). Handles a plain string, or a content array
-// carrying text blocks alongside attachments (an image-bearing prompt).
+// carrying text blocks alongside attachments (an image-bearing prompt). Line
+// breaks are kept for a handoff briefing's body; promptTurn collapses the rest.
 function userPromptText(content: unknown): string {
-  if (typeof content === "string") return collapse(content);
+  if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     const blocks = content as Array<Record<string, unknown>>;
     if (blocks.some(b => b?.type === "tool_result")) return "";
     const texts = blocks
       .filter(b => b?.type === "text" && typeof b.text === "string")
       .map(b => b.text as string);
-    return collapse(texts.join(" "));
+    return texts.join("\n");
   }
   return "";
 }
@@ -829,10 +846,25 @@ function paint(code: string, s: string): string {
   return `\x1b[${code}m${s}${RESET}`;
 }
 
+// One line naming what the conversation was started to do — the opening
+// prompt, or a handoff's briefing rather than its marker — with the day it was
+// asked. The history pane pins it in its border, which tmux keeps in view at
+// any scroll position. The value is drawn by tmux's format renderer, so a
+// literal "#[" would be read as a style directive.
+export function openingAsk(turns: Turn[]): string {
+  const first = turns.find(t => t.role !== "assistant");
+  if (!first) return "";
+  const ask = collapse(first.body ?? first.text).slice(0, 200).replace(/#\[/g, "# [");
+  return first.ts ? `${formatDay(first.ts)} · ${ask}` : ask;
+}
+
 export interface FormatOpts {
   width: number;
   // Live worker status overlay for the in-progress turn, if any.
   status?: "working" | "asking";
+  // Also print each handoff briefing and each exchange's closing reply under
+  // its summary line (the `garden history` reading view).
+  full?: boolean;
 }
 
 export function formatConversationPane(turns: Turn[], opts: FormatOpts): string[] {
@@ -871,6 +903,15 @@ export function formatConversationPane(turns: Turn[], opts: FormatOpts): string[
       }
       lines.push(` ${gutter} ${styled}`);
     });
+    const extra = opts.full ? turn.body ?? turn.reply : undefined;
+    if (extra) {
+      lines.push("");
+      for (const para of extra.split("\n")) {
+        for (const w of wrapText(para, textWidth)) {
+          lines.push(!w ? "" : ` ${" ".repeat(LABEL_W)} ${turn.body ? paint("2", w) : w}`);
+        }
+      }
+    }
   });
 
   if (opts.status === "working") lines.push(` ${paint("33", "working…".padEnd(LABEL_W))}`);

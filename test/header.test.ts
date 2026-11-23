@@ -47,6 +47,7 @@ vi.mock("../src/session.js", () => ({
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({
+  stripControlSequences: (s: string) => s,
   tmux: vi.fn(),
   tmuxBatch: vi.fn(),
   tmuxOutput: vi.fn(() => ""),
@@ -134,6 +135,7 @@ vi.mock("../src/dashboard/window-names.js", () => ({
     const m = name.match(/^_(.+)-worker-(.+)$/);
     return m ? { project: m[1], worker: m[2] } : null;
   },
+  parseWorkerSuffix: (name: string) => name.match(/^_.+-worker-(.+)$/)?.[1] ?? null,
 }));
 
 // ---------------------------------------------------------------------------
@@ -157,8 +159,10 @@ import {
   repinStatusPaneHeight,
   repinUsagePaneHeight,
   rebakePanesOnResize,
+  writeHistoryRendered,
   _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
+import { getHarnessCore } from "../src/dashboard/harness/core.js";
 
 import { tmux, tmuxBatch, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles } from "../src/dashboard/tmux.js";
 import { readDashState, type DashboardState } from "../src/dashboard/state.js";
@@ -1780,5 +1784,28 @@ describe("refreshDashboard", () => {
       c => c[0] === "set-option" && c[3] === "window-status-format",
     ).length;
     expect(sweepCalls).toBe(0);
+  });
+});
+
+describe("history pane border pin", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("pins the focused worker's opening ask when the history content changes", () => {
+    const core = getHarnessCore("claude-code");
+    vi.spyOn(core, "resolveTranscriptPath").mockReturnValue("/t.jsonl");
+    vi.spyOn(core, "readTurns").mockReturnValue([
+      { role: "user", text: "the opening ask", ts: "" },
+      { role: "assistant", text: "explored 2 files", verb: "planned", ts: "" },
+      { role: "user", text: "a later ask", ts: "" },
+    ]);
+    vi.mocked(readRegistry).mockReturnValue({ workers: { garden: [{ name: "bold-ash", sessionId: "s1", task: "" }] } });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      gardenPaneType: "history", gardenShellPaneId: "%5",
+      activePaneType: "worker", activeWindowName: "_garden-worker-bold-ash", activeProject: "garden",
+    }));
+
+    writeHistoryRendered();
+
+    expect(setPaneVar).toHaveBeenCalledWith("%5", "garden_task", "the opening ask");
   });
 });

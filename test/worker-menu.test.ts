@@ -54,6 +54,13 @@ describe("buildWorkerMenuPlan", () => {
     expect(row.tmux).toContain("garden review bold-ash");
   });
 
+  it("reads the full history in a display-popup", () => {
+    const row = buildWorkerMenuPlan(view).rows.find(r => r.key === "h")!;
+    expect(row.label).toContain("full history");
+    expect(row.tmux).toContain("display-popup -E");
+    expect(row.tmux).toContain("garden history bold-ash");
+  });
+
   it("has two separators (verbs | config | kill)", () => {
     expect(buildWorkerMenuPlan(view).rows.filter(r => r.sep)).toHaveLength(2);
   });
