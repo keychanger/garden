@@ -1549,7 +1549,7 @@ describe("buildUsageCommand", () => {
 });
 
 describe("buildHistoryCommand", () => {
-  it("execs the history viewer so the pane pid is the process SIGUSR1 reaches", () => {
+  it("execs the history viewer so the pane pid is the process signalPane reaches", () => {
     expect(buildHistoryCommand("'/bin/node' '/g/cli.js'")).toBe("exec '/bin/node' '/g/cli.js' dashboard _history-view");
   });
 });

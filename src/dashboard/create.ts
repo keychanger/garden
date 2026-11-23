@@ -507,7 +507,7 @@ export function createGardenHistoryWindow(gardenRunner: string): void {
   }
 }
 
-// Alerts view (⌥a): a passive SIGUSR1 repaint pane, same shape as the history
+// Alerts view (⌥a): a passive SIGUSR1 repaint pane, same shape as the usage
 // pane. writeAlertsRendered fills alerts.rendered with the unread/read alert
 // list. Focusing this view is also what marks alerts read (see focusAlerts).
 export function createGardenAlertsWindow(gardenRunner: string): void {

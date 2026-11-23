@@ -672,7 +672,7 @@ export function buildHistoryCommand(gardenRunner: string): string {
   return `exec ${gardenRunner} dashboard _history-view`;
 }
 
-// Alerts pane (⌥a): same passive SIGUSR1 repaint shape as the history pane —
+// Alerts pane (⌥a): a passive SIGUSR1 repaint loop over alerts.rendered —
 // full clear + full print, so a shorter list can't leave a longer one's tail on
 // screen and an overflowing list scrolls into tmux scrollback.
 export function buildAlertsCommand(_gardenRunner: string): string {
