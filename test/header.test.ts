@@ -1794,4 +1794,25 @@ describe("history pane opening ask", () => {
     expect(pinned).toMatch(/^─ opening ask ─+\n the opening ask\n─+$/);
     expect(conversation).toContain("a later ask");
   });
+
+  it("drops a bake whose worker lost focus while it rendered", () => {
+    // Two quick worker switches start two refreshes; the one that finishes
+    // last must not paint the worker the operator already left.
+    const core = getHarnessCore("claude-code");
+    vi.spyOn(core, "resolveTranscriptPath").mockReturnValue("/t.jsonl");
+    vi.spyOn(core, "readTurns").mockReturnValue([{ role: "user", text: "the left worker's ask", ts: "" }]);
+    vi.mocked(readRegistry).mockReturnValue({ workers: { garden: [{ name: "bold-ash", sessionId: "s1", task: "" }] } });
+    const focused = (worker: string) => makeState({
+      gardenPaneType: "history", gardenShellPaneId: "%5",
+      activePaneType: "worker", activeWindowName: `_garden-worker-${worker}`, activeProject: "garden",
+    });
+    vi.mocked(readDashState).mockReturnValueOnce(focused("bold-ash")).mockReturnValue(focused("calm-elm"));
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    writeHistoryRendered();
+
+    const written = vi.mocked(fs.writeFileSync).mock.calls.map(c => String(c[1]));
+    expect(written.some(c => c.includes("the left worker's ask"))).toBe(false);
+    expect(killSpy).not.toHaveBeenCalled();
+  });
 });

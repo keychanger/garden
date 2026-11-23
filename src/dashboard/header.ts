@@ -962,6 +962,13 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
       lastWrittenHistory = rendered;
       return;
     }
+    // Every refresh process renders from the state it read when it started,
+    // so two quick worker switches race, and the one that finishes last would
+    // otherwise paint the worker the operator already left — left on screen
+    // until something refreshes again, which an idle worker never does.
+    const now = readDashState();
+    if (now.gardenPaneType !== "history" || now.activeProject !== state.activeProject
+      || now.activeWindowName !== state.activeWindowName) return;
     atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
     lastWrittenHistory = rendered;
     signalPane(state.gardenShellPaneId, "SIGWINCH");
