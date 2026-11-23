@@ -779,6 +779,12 @@ export function disablePaneInput(paneId: string): void {
   } catch { log.debug("tmux", "disablePaneInput failed", { data: { paneId } }); }
 }
 
+export function enablePaneInput(paneId: string): void {
+  try {
+    tmux("select-pane", "-e", "-t", paneId);
+  } catch { log.debug("tmux", "enablePaneInput failed", { data: { paneId } }); }
+}
+
 // Marks a pane as mouse-locked: the root-table mouse bindings installed by
 // setupKeybindings() check this pane option on whatever pane the mouse event
 // targets and no-op (beyond switching focus there) instead of scrolling into

@@ -18,7 +18,7 @@ import { formatLogsPaneLabel } from "../commands/logs.js";
 import {
   tmux, tmuxOutput, tmuxSplit, setPaneTitle, setPaneLabel, setPaneVar,
   getFirstPaneId, shellEscape, tmuxDoubleQuote, newDashboardWindow,
-  getPaneSize, resizeWindow, listSessionPanes, disablePaneInput, lockPaneMouse,
+  getPaneSize, resizeWindow, listSessionPanes, disablePaneInput, enablePaneInput, lockPaneMouse,
   killWindowSafe, isTmuxForkFailure,
 } from "./tmux.js";
 import {
@@ -491,9 +491,11 @@ export function createGardenRootWindow(): void {
   }
 }
 
-// History view (⌥h): a passive SIGUSR1 repaint pane, same shape as the usage
-// pane. writeHistoryRendered fills history.rendered with the focused worker's
-// prompt history (parsed from its conversation transcript).
+// History view (⌥h): the history viewer (history-view.ts), which reloads
+// history.rendered on SIGUSR1. writeHistoryRendered fills that file with the
+// focused worker's prompt history (parsed from its conversation transcript).
+// Unlike the other passive panes it keeps its input: the viewer scrolls on keys
+// and on the wheel tmux forwards to it.
 export function createGardenHistoryWindow(gardenRunner: string): void {
   const windowName = gardenWindowName("history");
   const cmd = buildHistoryCommand(gardenRunner);
@@ -502,7 +504,6 @@ export function createGardenHistoryWindow(gardenRunner: string): void {
   if (paneId) {
     setPaneLabel(paneId, "history");
     setPaneTitle(paneId, "history");
-    disablePaneInput(paneId);
   }
 }
 
@@ -1628,8 +1629,8 @@ export function respawnUsagePane(state: DashboardState): void {
   lockPaneMouse(state.usagePaneId);
 }
 
-// The history/alerts views are passive SIGUSR1 repaint loops like the usage
-// pane, but they live in hidden _garden-* windows and swap into the garden
+// The history/alerts views repaint on SIGUSR1 like the usage pane, but they
+// live in hidden _garden-* windows and swap into the garden
 // slot when active — so a respawn has to find the loop wherever it currently
 // lives. respawn-pane -k kills the pane's whole process group, which is what
 // makes these the recovery path for a wedged or duplicated loop.
@@ -1643,19 +1644,23 @@ function respawnGardenViewLoop(state: DashboardState, view: "history" | "alerts"
   if (!target) return null;
   try { tmux("respawn-pane", "-k", "-t", target, "sh", "-c", cmd); } catch { /* pane gone */ }
   try { tmux("clear-history", "-t", target); } catch { /* pane gone */ }
-  disablePaneInput(target);
   return target;
 }
 
 export function respawnHistoryPane(state: DashboardState): void {
   const target = respawnGardenViewLoop(state, "history", buildHistoryCommand(resolveGardenRunner()));
+  if (!target) return;
+  // An earlier build ran this pane as a passive loop with its input disabled;
+  // the viewer needs keys and the wheel.
+  enablePaneInput(target);
   // The opening ask now sits inside the pane; drop the one-line border copy a
   // previous build pinned as @garden_task.
-  if (target) setPaneVar(target, "garden_task", "");
+  setPaneVar(target, "garden_task", "");
 }
 
 export function respawnAlertsPane(state: DashboardState): void {
-  respawnGardenViewLoop(state, "alerts", buildAlertsCommand(resolveGardenRunner()));
+  const target = respawnGardenViewLoop(state, "alerts", buildAlertsCommand(resolveGardenRunner()));
+  if (target) disablePaneInput(target);
 }
 
 // `garden logs --follow` caches the pre-rebuild bundle in memory; respawn so it picks up new code.

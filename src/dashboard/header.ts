@@ -21,6 +21,7 @@ import { renderAlertsPane } from "../commands/alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
 import { formatConversationPane, formatOpeningAsk } from "./conversation.js";
+import { HISTORY_RENDERED_FILE, HISTORY_PIN_SEPARATOR } from "./history-view.js";
 import { getHarnessCore, resolveWorkerActivity } from "./harness/core.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
@@ -28,7 +29,6 @@ export const STATUS_RENDERED_FILE = path.join(SESSIONS_DIR, "status.rendered");
 // Diagnostic dump path for the status pane's live $cur (see _diag-status).
 export const STATUS_CUR_DUMP_FILE = path.join(SESSIONS_DIR, "status.cur.dump");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
-const HISTORY_RENDERED_FILE = path.join(SESSIONS_DIR, "history.rendered");
 const ALERTS_RENDERED_FILE = path.join(SESSIONS_DIR, "alerts.rendered");
 const PLOT_STRIP_TEMPLATE_FILE = path.join(SESSIONS_DIR, "plot-strip.template");
 // Sentinel in the plot-strip template file; the status pane's animation loop
@@ -665,60 +665,11 @@ export function buildUsageCommand(_gardenRunner: string): string {
   ].join("\n");
 }
 
-// History pane: SIGUSR1 repaint loop reading the pre-baked history.rendered.
-// Each repaint fully clears the screen AND scrollback (\033[2J\033[3J) before
-// printing the whole conversation: the full clear keeps a shorter line from
-// leaving a longer one's tail on screen, and printing every line lets what
-// overflows the pane scroll into tmux scrollback, so the operator can scroll up
-// to the start of the conversation.
-//
-// The file is the opening-ask block, a separator line, then the conversation.
-// The block is pinned: HISTORY_LAYOUT_AWK prints the conversation lines that
-// will scroll off, then the block, then exactly as many newest lines as fill
-// the rest of the screen, so the visible pane is always the block over the
-// latest exchanges while scrollback still holds everything above. Only the
-// pane knows its height at paint time — the status pane above it resizes on
-// its own — so the layout runs here, on every repaint and on SIGWINCH, rather
-// than being baked by garden against a height that may already be stale. A
-// terminal scroll region would pin the block without the arithmetic, but tmux
-// discards lines scrolled out of a partial region instead of saving them.
-// The block is capped at 60% of the pane; a longer opening prompt shows its
-// head and a pointer to the full text.
-export const HISTORY_PIN_SEPARATOR = "\x1e";
-export const HISTORY_LAYOUT_AWK = [
-  String.raw`BEGIN { pinning = 1 }`,
-  String.raw`pinning && $0 == "\036" { pinning = 0; next }`,
-  String.raw`pinning { pin[++p] = $0; next }`,
-  String.raw`{ body[++b] = $0 }`,
-  String.raw`END {`,
-  String.raw`  if (rows <= 0) rows = 1000000`,
-  String.raw`  k = p; more = 0`,
-  String.raw`  if (p > 0) { cap = int(rows * 0.6); if (cap < 4) cap = 4; if (p > cap) { k = cap; more = p - cap + 1 } }`,
-  String.raw`  tail = rows - k; if (tail < 1) tail = 1`,
-  String.raw`  cut = b - tail; if (cut < 0) cut = 0`,
-  String.raw`  n = 0`,
-  String.raw`  for (i = 1; i <= cut; i++) out[++n] = body[i]`,
-  String.raw`  if (more) {`,
-  String.raw`    for (i = 1; i <= cap - 2; i++) out[++n] = pin[i]`,
-  String.raw`    out[++n] = "\033[2m … " more " more lines · scroll to the top, or ⌥i h\033[0m"`,
-  String.raw`    out[++n] = pin[p]`,
-  String.raw`  } else for (i = 1; i <= p; i++) out[++n] = pin[i]`,
-  String.raw`  for (i = cut + 1; i <= b; i++) out[++n] = body[i]`,
-  String.raw`  for (i = 1; i <= n; i++) printf "%s%s", out[i], (i < n ? "\n" : "")`,
-  String.raw`}`,
-].join("\n");
-
-export function buildHistoryCommand(_gardenRunner: string): string {
-  const cf = HISTORY_RENDERED_FILE;
-  return [
-    String.raw`printf '\033[H\033[2J\033[3J'`,
-    `cf='${cf}'`,
-    "render() { r=$(stty size 2>/dev/null </dev/tty); r=${r%% *}; _t=$(awk -v rows=\"${r:-0}\" '" + HISTORY_LAYOUT_AWK
-      + "' \"$cf\" 2>/dev/null); printf '\\033[H\\033[2J\\033[3J%s' \"$_t\"; }",
-    `trap 'render' USR1 WINCH`,
-    `render`,
-    `while true; do sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null; done`,
-  ].join("\n");
+// History pane: a long-running viewer (history-view.ts) that pins the opening
+// ask above the scrolling conversation. It reloads history.rendered on SIGUSR1,
+// so it is exec'd to be the pane's own process — signalPane signals the pane pid.
+export function buildHistoryCommand(gardenRunner: string): string {
+  return `exec ${gardenRunner} dashboard _history-view`;
 }
 
 // Alerts pane (⌥a): same passive SIGUSR1 repaint shape as the history pane —
@@ -1076,8 +1027,8 @@ function renderHistoryContent(
       // so the ⌥h view works for any harness (claude-code stays byte-identical
       // — its adapter methods wrap the same conversation.ts functions).
       const core = getHarnessCore(entry.harness);
-      // Every turn, back to the opening prompt: the pane prints them all and
-      // tmux scrollback holds what overflows the visible height.
+      // Every turn, back to the opening prompt: the pane's viewer scrolls
+      // through all of them.
       const turns = core.readTurns(core.resolveTranscriptPath(entry));
       if (turns.length === 0) {
         lines = [dimLine("no conversation yet")];
@@ -1090,7 +1041,7 @@ function renderHistoryContent(
     }
   }
   // The pinned block, a record separator, then the conversation: the pane's
-  // layout script splits on the separator (HISTORY_LAYOUT_AWK).
+  // viewer splits on the separator (parseHistoryDoc, history-view.ts).
   return [...pinned, HISTORY_PIN_SEPARATOR, ...lines].join("\n");
 }
 

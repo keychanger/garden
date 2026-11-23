@@ -160,9 +160,9 @@ import {
   repinUsagePaneHeight,
   rebakePanesOnResize,
   writeHistoryRendered,
-  HISTORY_PIN_SEPARATOR,
   _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
+import { HISTORY_PIN_SEPARATOR } from "../src/dashboard/history-view.js";
 import { getHarnessCore } from "../src/dashboard/harness/core.js";
 
 import { tmux, tmuxBatch, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles } from "../src/dashboard/tmux.js";
@@ -1549,39 +1549,8 @@ describe("buildUsageCommand", () => {
 });
 
 describe("buildHistoryCommand", () => {
-  it("returns a shell script string", () => {
-    const cmd = buildHistoryCommand("garden");
-    expect(typeof cmd).toBe("string");
-    expect(cmd.length).toBeGreaterThan(0);
-  });
-
-  it("sets up a SIGUSR1 trap for event-driven refresh", () => {
-    const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain("trap");
-    expect(cmd).toContain("USR1");
-  });
-
-  it("references the pre-baked history file path", () => {
-    const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain("history.rendered");
-  });
-
-  it("fully clears screen and scrollback on every repaint", () => {
-    // Unlike the usage pane, each render clears scrollback (\\033[2J\\033[3J)
-    // so a shorter new line never leaves a longer prior line's tail on screen.
-    const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain(String.raw`printf '\033[H\033[2J\033[3J%s' "$_t"; }`);
-  });
-
-  it("re-lays out the pinned block whenever the pane resizes", () => {
-    const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain("trap 'render' USR1 WINCH");
-    expect(cmd).toContain("stty size");
-  });
-
-  it("sleeps long on idle (pure event-driven wake)", () => {
-    const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain("sleep 86400");
+  it("execs the history viewer so the pane pid is the process SIGUSR1 reaches", () => {
+    expect(buildHistoryCommand("'/bin/node' '/g/cli.js'")).toBe("exec '/bin/node' '/g/cli.js' dashboard _history-view");
   });
 });
 

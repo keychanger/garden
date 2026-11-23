@@ -847,8 +847,8 @@ function paint(code: string, s: string): string {
 }
 
 // The prompt that started the conversation, in full, between dim rules — a
-// handoff's briefing rather than its marker. The history pane keeps this block
-// on screen above the conversation's newest lines (buildHistoryCommand).
+// handoff's briefing rather than its marker. The history pane holds this block
+// fixed above the scrolling conversation (history-view.ts).
 export function formatOpeningAsk(turns: Turn[], width: number): string[] {
   const first = turns.find(t => t.role !== "assistant");
   if (!first) return [];
