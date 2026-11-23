@@ -912,6 +912,17 @@ describe("formatOpeningAsk", () => {
     ]);
   });
 
+  it("never prints a line wider than the pane, even with a long handoff source", () => {
+    // The pane's layout counts lines, so a line the terminal wraps pushes the
+    // pinned block's top row off screen.
+    const ts = new Date(2026, 10, 19, 12, 0).toISOString();
+    const out = plain(formatOpeningAsk([
+      { role: "garden", text: "handoff from garden/plush-faint-dusk — callback requested", body: "Fix it.", ts },
+    ], 40));
+    for (const line of out) expect(line.length).toBeLessThanOrEqual(40);
+    expect(out[0].startsWith("─ opening ask (handoff from")).toBe(true);
+  });
+
   it("is empty before the first prompt", () => {
     expect(formatOpeningAsk([], 40)).toEqual([]);
   });

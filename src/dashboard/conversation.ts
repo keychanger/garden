@@ -855,7 +855,9 @@ export function formatOpeningAsk(turns: Turn[], width: number): string[] {
   const source = first.body ? ` (${first.text})` : "";
   const t = formatClockTime(first.ts);
   const label = `─ opening ask${source}${t ? ` · ${formatDay(first.ts)} · ${t}` : ""} `;
-  const lines = [paint("2", label + "─".repeat(Math.max(0, width - label.length)))];
+  // Clipped to the pane: the pane's layout counts lines, so one the terminal
+  // wraps would push the block's top row off screen.
+  const lines = [paint("2", (label + "─".repeat(Math.max(0, width - label.length))).slice(0, width))];
   for (const para of (first.body ?? first.text).split("\n")) {
     for (const w of wrapText(para, Math.max(10, width - 2))) lines.push(w ? ` ${paint("1", w)}` : "");
   }
