@@ -846,16 +846,21 @@ function paint(code: string, s: string): string {
   return `\x1b[${code}m${s}${RESET}`;
 }
 
-// One line naming what the conversation was started to do — the opening
-// prompt, or a handoff's briefing rather than its marker — with the day it was
-// asked. The history pane pins it in its border, which tmux keeps in view at
-// any scroll position. The value is drawn by tmux's format renderer, so a
-// literal "#[" would be read as a style directive.
-export function openingAsk(turns: Turn[]): string {
+// The prompt that started the conversation, in full, between dim rules — a
+// handoff's briefing rather than its marker. The history pane keeps this block
+// on screen above the conversation's newest lines (buildHistoryCommand).
+export function formatOpeningAsk(turns: Turn[], width: number): string[] {
   const first = turns.find(t => t.role !== "assistant");
-  if (!first) return "";
-  const ask = collapse(first.body ?? first.text).slice(0, 200).replace(/#\[/g, "# [");
-  return first.ts ? `${formatDay(first.ts)} · ${ask}` : ask;
+  if (!first) return [];
+  const source = first.body ? ` (${first.text})` : "";
+  const t = formatClockTime(first.ts);
+  const label = `─ opening ask${source}${t ? ` · ${formatDay(first.ts)} · ${t}` : ""} `;
+  const lines = [paint("2", label + "─".repeat(Math.max(0, width - label.length)))];
+  for (const para of (first.body ?? first.text).split("\n")) {
+    for (const w of wrapText(para, Math.max(10, width - 2))) lines.push(w ? ` ${paint("1", w)}` : "");
+  }
+  lines.push(paint("2", "─".repeat(width)));
+  return lines;
 }
 
 export interface FormatOpts {

@@ -160,6 +160,7 @@ import {
   repinUsagePaneHeight,
   rebakePanesOnResize,
   writeHistoryRendered,
+  HISTORY_PIN_SEPARATOR,
   _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
 import { getHarnessCore } from "../src/dashboard/harness/core.js";
@@ -1569,7 +1570,13 @@ describe("buildHistoryCommand", () => {
     // Unlike the usage pane, each render clears scrollback (\\033[2J\\033[3J)
     // so a shorter new line never leaves a longer prior line's tail on screen.
     const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain(String.raw`render() { _t=$(cat "$cf" 2>/dev/null); printf '\033[H\033[2J\033[3J%s' "$_t"; }`);
+    expect(cmd).toContain(String.raw`printf '\033[H\033[2J\033[3J%s' "$_t"; }`);
+  });
+
+  it("re-lays out the pinned block whenever the pane resizes", () => {
+    const cmd = buildHistoryCommand("garden");
+    expect(cmd).toContain("trap 'render' USR1 WINCH");
+    expect(cmd).toContain("stty size");
   });
 
   it("sleeps long on idle (pure event-driven wake)", () => {
@@ -1787,10 +1794,10 @@ describe("refreshDashboard", () => {
   });
 });
 
-describe("history pane border pin", () => {
+describe("history pane opening ask", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("pins the focused worker's opening ask when the history content changes", () => {
+  it("bakes the opening ask ahead of the conversation, split by the layout separator", () => {
     const core = getHarnessCore("claude-code");
     vi.spyOn(core, "resolveTranscriptPath").mockReturnValue("/t.jsonl");
     vi.spyOn(core, "readTurns").mockReturnValue([
@@ -1806,6 +1813,10 @@ describe("history pane border pin", () => {
 
     writeHistoryRendered();
 
-    expect(setPaneVar).toHaveBeenCalledWith("%5", "garden_task", "the opening ask");
+    const written = vi.mocked(fs.writeFileSync).mock.calls
+      .map(c => String(c[1])).find(c => c.includes(HISTORY_PIN_SEPARATOR))!;
+    const [pinned, conversation] = written.replace(/\x1b\[[0-9;]*m/g, "").split(`\n${HISTORY_PIN_SEPARATOR}\n`);
+    expect(pinned).toMatch(/^─ opening ask ─+\n the opening ask\n─+$/);
+    expect(conversation).toContain("a later ask");
   });
 });

@@ -3,7 +3,7 @@ import { loadConfig, getProject, getFocusedProjectNames, plotsMap, isPlotFocused
 import { readDashState, writeDashState, withStateLock, type DashboardState } from "./state.js";
 import { swapToHidden, swapDirect } from "./layout.js";
 import { gardenSwapToHidden } from "./layout.js";
-import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, refreshStatusElapsed, writeAlertsRendered, setPaneProjectColor, historyPin } from "./header.js";
+import { refreshDashboard, refreshDashboardCycle, refreshDashboardPlotCycle, refreshStatusElapsed, writeAlertsRendered, setPaneProjectColor } from "./header.js";
 import {
   tmux, tmuxDisplay,
   paneExists, windowExists,
@@ -350,11 +350,6 @@ function switchGardenTo(view: GardenView): void {
 
   if (snapshot) {
     refreshDashboard({ state: snapshot });
-    // The history view pins its conversation's opening ask in the border; every
-    // other view's border carries only its label.
-    if (snapshot.gardenShellPaneId) {
-      setPaneVar(snapshot.gardenShellPaneId, "garden_task", view === "history" ? historyPin(snapshot) : "");
-    }
     if (snapshot.gardenShellPaneId && paneExists(snapshot.gardenShellPaneId)) {
       tmux("select-pane", "-t", snapshot.gardenShellPaneId);
     }

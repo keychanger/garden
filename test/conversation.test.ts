@@ -11,7 +11,7 @@ import {
   readLatestTranscriptModel,
   readOpeningPrompt,
   formatConversationPane,
-  openingAsk,
+  formatOpeningAsk,
   gardenLabel,
   handoffSeedLabel,
   isInjectedSystemMessage,
@@ -881,29 +881,38 @@ describe("readOpeningPrompt — what a worker was first asked to do", () => {
   });
 });
 
-describe("openingAsk", () => {
-  it("names the opening prompt with the day it was asked", () => {
+describe("formatOpeningAsk", () => {
+  const plain = (lines: string[]) => lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, ""));
+
+  it("prints the opening prompt in full between rules, stamped with when it was asked", () => {
     const ts = new Date(2026, 10, 19, 12, 0).toISOString();
-    expect(openingAsk([
-      { role: "user", text: "look at the history pane", ts },
+    const out = plain(formatOpeningAsk([
+      { role: "user", text: "look at the history pane and make sure it reaches all the way back", ts },
       { role: "assistant", text: "explored 2 files", verb: "planned", ts },
       { role: "user", text: "now fix it", ts },
-    ])).toBe("Thu 11-19 · look at the history pane");
+    ], 40));
+    expect(out[0]).toMatch(/^─ opening ask · Thu 11-19 · 12:00pm ─+$/);
+    expect(out.slice(1, -1)).toEqual([
+      " look at the history pane and make sure",
+      " it reaches all the way back",
+    ]);
+    expect(out.at(-1)).toBe("─".repeat(40));
   });
 
-  it("uses a handoff's briefing rather than its marker, on one line", () => {
-    expect(openingAsk([
-      { role: "garden", text: "handoff from garden/w", body: "## Task\nFix   the pager.", ts: "" },
-    ])).toBe("## Task Fix the pager.");
-  });
-
-  it("caps the length and defuses tmux style directives", () => {
-    const ask = openingAsk([{ role: "user", text: "#[fg=red]" + "x".repeat(300), ts: "" }]);
-    expect(ask.startsWith("# [fg=red]")).toBe(true);
-    expect(ask.length).toBeLessThanOrEqual(201);
+  it("shows a handoff's briefing with its line breaks, naming the source", () => {
+    const out = plain(formatOpeningAsk([
+      { role: "garden", text: "handoff from garden/w", body: "## Task\n\nFix the pager.", ts: "" },
+    ], 40));
+    expect(out).toEqual([
+      expect.stringMatching(/^─ opening ask \(handoff from garden\/w\) ─+$/),
+      " ## Task",
+      "",
+      " Fix the pager.",
+      "─".repeat(40),
+    ]);
   });
 
   it("is empty before the first prompt", () => {
-    expect(openingAsk([])).toBe("");
+    expect(formatOpeningAsk([], 40)).toEqual([]);
   });
 });

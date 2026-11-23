@@ -848,6 +848,8 @@ describe("passive pane respawn helpers (garden redraw)", () => {
     respawnHistoryPane(baseState);
     expect(getFirstPaneId).toHaveBeenCalledWith("garden-dashboard:_garden-history");
     expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%5", "sh", "-c", "history-command");
+    // The opening ask moved into the pane; the border copy an older build set is dropped.
+    expect(setPaneVar).toHaveBeenCalledWith("%5", "garden_task", "");
   });
 
   it("respawnAlertsPane targets the hidden _garden-alerts window when not active", () => {

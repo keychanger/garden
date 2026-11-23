@@ -20,7 +20,7 @@ import { unreadAlertCount, formatRightBar, statusBarStyle } from "./alerts.js";
 import { renderAlertsPane } from "../commands/alerts.js";
 import { workerWindowName as workerWin, parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
-import { formatConversationPane, openingAsk } from "./conversation.js";
+import { formatConversationPane, formatOpeningAsk } from "./conversation.js";
 import { getHarnessCore, resolveWorkerActivity } from "./harness/core.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 
@@ -666,19 +666,56 @@ export function buildUsageCommand(_gardenRunner: string): string {
 }
 
 // History pane: SIGUSR1 repaint loop reading the pre-baked history.rendered.
-// Unlike the usage pane, each repaint fully clears the screen AND scrollback
-// (\033[2J\033[3J) before printing the whole conversation: the full clear
-// prevents a shorter new line from leaving a longer previous line's tail on
-// screen (the bleed-through other panes would otherwise show), and printing the
-// whole conversation lets content taller than the pane scroll into tmux
-// scrollback so the operator can scroll up through the full history.
+// Each repaint fully clears the screen AND scrollback (\033[2J\033[3J) before
+// printing the whole conversation: the full clear keeps a shorter line from
+// leaving a longer one's tail on screen, and printing every line lets what
+// overflows the pane scroll into tmux scrollback, so the operator can scroll up
+// to the start of the conversation.
+//
+// The file is the opening-ask block, a separator line, then the conversation.
+// The block is pinned: HISTORY_LAYOUT_AWK prints the conversation lines that
+// will scroll off, then the block, then exactly as many newest lines as fill
+// the rest of the screen, so the visible pane is always the block over the
+// latest exchanges while scrollback still holds everything above. Only the
+// pane knows its height at paint time — the status pane above it resizes on
+// its own — so the layout runs here, on every repaint and on SIGWINCH, rather
+// than being baked by garden against a height that may already be stale. A
+// terminal scroll region would pin the block without the arithmetic, but tmux
+// discards lines scrolled out of a partial region instead of saving them.
+// The block is capped at 60% of the pane; a longer opening prompt shows its
+// head and a pointer to the full text.
+export const HISTORY_PIN_SEPARATOR = "\x1e";
+export const HISTORY_LAYOUT_AWK = [
+  String.raw`BEGIN { pinning = 1 }`,
+  String.raw`pinning && $0 == "\036" { pinning = 0; next }`,
+  String.raw`pinning { pin[++p] = $0; next }`,
+  String.raw`{ body[++b] = $0 }`,
+  String.raw`END {`,
+  String.raw`  if (rows <= 0) rows = 1000000`,
+  String.raw`  k = p; more = 0`,
+  String.raw`  if (p > 0) { cap = int(rows * 0.6); if (cap < 4) cap = 4; if (p > cap) { k = cap; more = p - cap + 1 } }`,
+  String.raw`  tail = rows - k; if (tail < 1) tail = 1`,
+  String.raw`  cut = b - tail; if (cut < 0) cut = 0`,
+  String.raw`  n = 0`,
+  String.raw`  for (i = 1; i <= cut; i++) out[++n] = body[i]`,
+  String.raw`  if (more) {`,
+  String.raw`    for (i = 1; i <= cap - 2; i++) out[++n] = pin[i]`,
+  String.raw`    out[++n] = "\033[2m … " more " more lines · scroll to the top, or ⌥i h\033[0m"`,
+  String.raw`    out[++n] = pin[p]`,
+  String.raw`  } else for (i = 1; i <= p; i++) out[++n] = pin[i]`,
+  String.raw`  for (i = cut + 1; i <= b; i++) out[++n] = body[i]`,
+  String.raw`  for (i = 1; i <= n; i++) printf "%s%s", out[i], (i < n ? "\n" : "")`,
+  String.raw`}`,
+].join("\n");
+
 export function buildHistoryCommand(_gardenRunner: string): string {
   const cf = HISTORY_RENDERED_FILE;
   return [
-    `printf '\\033[H\\033[2J\\033[3J'`,
+    String.raw`printf '\033[H\033[2J\033[3J'`,
     `cf='${cf}'`,
-    `render() { _t=$(cat "$cf" 2>/dev/null); printf '\\033[H\\033[2J\\033[3J%s' "$_t"; }`,
-    `trap 'render' USR1`,
+    "render() { r=$(stty size 2>/dev/null </dev/tty); r=${r%% *}; _t=$(awk -v rows=\"${r:-0}\" '" + HISTORY_LAYOUT_AWK
+      + "' \"$cf\" 2>/dev/null); printf '\\033[H\\033[2J\\033[3J%s' \"$_t\"; }",
+    `trap 'render' USR1 WINCH`,
     `render`,
     `while true; do sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null; done`,
   ].join("\n");
@@ -967,7 +1004,7 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     if (state.gardenPaneType !== "history" || !state.gardenShellPaneId) return;
     const size = getPaneSize(state.gardenShellPaneId);
     const width = size?.width ?? 60;
-    const { rendered, pin } = renderHistoryContent(state, width, opts?.registry);
+    const rendered = renderHistoryContent(state, width, opts?.registry);
     if (rendered === lastWrittenHistory) return;
     if (renderedFileUnchanged(HISTORY_RENDERED_FILE, rendered)) {
       lastWrittenHistory = rendered;
@@ -975,10 +1012,6 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     }
     atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
     lastWrittenHistory = rendered;
-    // The border pin follows the content. Entering the view re-applies it too
-    // (switchGardenTo → historyPin): swap-pane has been seen to drop pane
-    // options, and an unchanged view is never rewritten here.
-    setPaneVar(state.gardenShellPaneId, "garden_task", pin);
     signalPane(state.gardenShellPaneId);
   } catch { /* best effort */ }
 }
@@ -1020,18 +1053,13 @@ function dimLine(msg: string): string {
   return ` \x1b[2m${msg}\x1b[0m`;
 }
 
-// The history pane's border pin (openingAsk) for the focused worker.
-export function historyPin(state: DashboardState): string {
-  return renderHistoryContent(state, 60).pin;
-}
-
 function renderHistoryContent(
   state: DashboardState,
   width: number,
   cachedRegistry?: WorkerRegistry,
-): { rendered: string; pin: string } {
+): string {
   let lines: string[];
-  let pin = "";
+  let pinned: string[] = [];
   if (state.activePaneType !== "worker" || !state.activeWindowName || !state.activeProject) {
     lines = [dimLine("no active worker — focus one with ⌥w")];
   } else {
@@ -1057,11 +1085,13 @@ function renderHistoryContent(
         const status = entry.agentStatus === "working" ? "working"
           : entry.agentStatus === "asking" ? "asking" : undefined;
         lines = formatConversationPane(turns, { width, status });
-        pin = openingAsk(turns);
+        pinned = formatOpeningAsk(turns, width);
       }
     }
   }
-  return { rendered: lines.join("\n"), pin };
+  // The pinned block, a record separator, then the conversation: the pane's
+  // layout script splits on the separator (HISTORY_LAYOUT_AWK).
+  return [...pinned, HISTORY_PIN_SEPARATOR, ...lines].join("\n");
 }
 
 function writeUsageRendered(opts?: RefreshOptions): void {

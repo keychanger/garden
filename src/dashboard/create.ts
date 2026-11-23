@@ -1633,21 +1633,25 @@ export function respawnUsagePane(state: DashboardState): void {
 // slot when active — so a respawn has to find the loop wherever it currently
 // lives. respawn-pane -k kills the pane's whole process group, which is what
 // makes these the recovery path for a wedged or duplicated loop.
-function respawnGardenViewLoop(state: DashboardState, view: "history" | "alerts", cmd: string): void {
+function respawnGardenViewLoop(state: DashboardState, view: "history" | "alerts", cmd: string): string | null {
   let target: string | null = null;
   if (state.gardenPaneType === view && state.gardenShellPaneId) {
     target = state.gardenShellPaneId;
   } else {
     try { target = getFirstPaneId(`${DASHBOARD_SESSION}:${gardenWindowName(view)}`); } catch { /* window doesn't exist */ }
   }
-  if (!target) return;
+  if (!target) return null;
   try { tmux("respawn-pane", "-k", "-t", target, "sh", "-c", cmd); } catch { /* pane gone */ }
   try { tmux("clear-history", "-t", target); } catch { /* pane gone */ }
   disablePaneInput(target);
+  return target;
 }
 
 export function respawnHistoryPane(state: DashboardState): void {
-  respawnGardenViewLoop(state, "history", buildHistoryCommand(resolveGardenRunner()));
+  const target = respawnGardenViewLoop(state, "history", buildHistoryCommand(resolveGardenRunner()));
+  // The opening ask now sits inside the pane; drop the one-line border copy a
+  // previous build pinned as @garden_task.
+  if (target) setPaneVar(target, "garden_task", "");
 }
 
 export function respawnAlertsPane(state: DashboardState): void {
