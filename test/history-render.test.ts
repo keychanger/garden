@@ -33,13 +33,16 @@ async function historyView() {
     line("user", "fix the auth bug", "2026-10-23T10:00:00Z")
     + line("assistant", [{ type: "text", text: "Fixed it." }], "2026-10-23T10:00:05Z"));
   const entry = { name: "bold-ash", sessionId: "s1", agentStatus: "idle" as string, transcriptPath: transcript };
-  const opts = {
-    state: {
-      activeProject: "garden", activePaneType: "worker", activeWindowName: "_garden-worker-bold-ash",
-      gardenPaneType: "history", gardenShellPaneId: "%3",
-    } as never,
-    registry: { workers: { garden: [entry] } } as never,
-  };
+  // The bake re-reads state from disk before it paints, dropping a render whose
+  // worker lost focus meanwhile, so the focus it renders for must be on disk too.
+  const { readDashState, writeDashState } = await import("../src/dashboard/state.js");
+  const state = {
+    ...readDashState(),
+    activeProject: "garden", activePaneType: "worker", activeWindowName: "_garden-worker-bold-ash",
+    gardenPaneType: "history", gardenShellPaneId: "%3",
+  } as never;
+  writeDashState(state);
+  const opts = { state, registry: { workers: { garden: [entry] } } as never };
   const opened = vi.spyOn(fs, "openSync");
   // One bake in a fresh process; returns how many times it opened the transcript.
   const bake = (): number => {
