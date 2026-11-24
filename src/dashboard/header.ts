@@ -21,7 +21,8 @@ import { unreadAlertCount, formatRightBar, statusBarStyle } from "./alerts.js";
 import { renderAlertsPane } from "../commands/alerts.js";
 import { parseWorkerWindow, parseWorkerSuffix } from "./window-names.js";
 import { renderUsagePane } from "./usage.js";
-import { formatConversationPane } from "./conversation.js";
+import { formatConversationPane, formatOpeningAsk } from "./conversation.js";
+import { HISTORY_RENDERED_FILE, HISTORY_PIN_SEPARATOR } from "./history-view.js";
 import { getHarnessCore } from "./harness/core.js";
 import { resolvePlotStatus, type PlotState } from "./plot-status.js";
 import { GARDEN_VERSION } from "../version.js";
@@ -34,7 +35,6 @@ export const STATUS_DIAG_DIR = path.join(CONTROL_DIR, "diag");
 // The status pane's live $cur, dumped on demand (see _diag-status).
 export const STATUS_CUR_DUMP_FILE = path.join(STATUS_DIAG_DIR, "status.cur.dump");
 const USAGE_RENDERED_FILE = path.join(SESSIONS_DIR, "usage.rendered");
-const HISTORY_RENDERED_FILE = path.join(SESSIONS_DIR, "history.rendered");
 const ALERTS_RENDERED_FILE = path.join(SESSIONS_DIR, "alerts.rendered");
 const PLOT_STRIP_TEMPLATE_FILE = path.join(SESSIONS_DIR, "plot-strip.template");
 // Sentinel in the plot-strip template file; the status pane's animation loop
@@ -633,26 +633,14 @@ export function buildUsageCommand(_gardenRunner: string): string {
   ].join("\n");
 }
 
-// History pane: SIGUSR1 repaint loop reading the pre-baked history.rendered.
-// Unlike the usage pane, each repaint fully clears the screen AND scrollback
-// (\033[2J\033[3J) before printing the whole conversation: the full clear
-// prevents a shorter new line from leaving a longer previous line's tail on
-// screen (the bleed-through other panes would otherwise show), and printing the
-// whole conversation lets content taller than the pane scroll into tmux
-// scrollback so the operator can scroll up through the full history.
-export function buildHistoryCommand(_gardenRunner: string): string {
-  const cf = HISTORY_RENDERED_FILE;
-  return [
-    `printf '\\033[H\\033[2J\\033[3J'`,
-    `cf='${cf}'`,
-    `render() { _t=$(cat "$cf" 2>/dev/null); printf '\\033[H\\033[2J\\033[3J%s' "$_t"; }`,
-    `trap 'render' USR1`,
-    `render`,
-    `while true; do sleep 86400 & _sp=$!; wait $_sp 2>/dev/null; kill $_sp 2>/dev/null; wait $_sp 2>/dev/null; done`,
-  ].join("\n");
+// History pane: a long-running viewer (history-view.ts) that pins the opening
+// ask above the scrolling conversation. It reloads history.rendered on SIGWINCH,
+// so it is exec'd to be the pane's own process — signalPane signals the pane pid.
+export function buildHistoryCommand(gardenRunner: string): string {
+  return `exec ${gardenRunner} dashboard _history-view`;
 }
 
-// Alerts pane (⌥a): same passive SIGUSR1 repaint shape as the history pane —
+// Alerts pane (⌥a): a passive SIGUSR1 repaint loop over alerts.rendered —
 // full clear + full print, so a shorter list can't leave a longer one's tail on
 // screen and an overflowing list scrolls into tmux scrollback.
 export function buildAlertsCommand(_gardenRunner: string): string {
@@ -672,10 +660,11 @@ export function buildAlertsCommand(_gardenRunner: string): string {
 // ---------------------------------------------------------------------------
 
 // Shared SIGUSR1 helper — refreshStatusPane and refreshUsagePane delegate here.
-function signalPane(paneId: string): void {
+// The history viewer takes SIGWINCH instead (see history-view.ts).
+function signalPane(paneId: string, signal: NodeJS.Signals = "SIGUSR1"): void {
   try {
     const pid = getPanePid(paneId);
-    if (pid) process.kill(parseInt(pid, 10), "SIGUSR1");
+    if (pid) process.kill(parseInt(pid, 10), signal);
   } catch { /* pane gone or process exited */ }
 }
 
@@ -857,8 +846,15 @@ export function writeHistoryRendered(opts?: RefreshOptions): void {
     if (!bake) return;
     const [rendered, key] = bake;
     if (!renderedFileUnchanged(HISTORY_RENDERED_FILE, rendered)) {
+      // Every refresh process renders from the state it read when it started,
+      // so two quick worker switches race, and the one that finishes last would
+      // otherwise paint the worker the operator already left — left on screen
+      // until something refreshes again, which an idle worker never does.
+      const now = readDashState();
+      if (now.gardenPaneType !== "history" || now.activeProject !== state.activeProject
+        || now.activeWindowName !== state.activeWindowName) return;
       atomicWriteFile(HISTORY_RENDERED_FILE, rendered, { durable: false });
-      signalPane(state.gardenShellPaneId);
+      signalPane(state.gardenShellPaneId, "SIGWINCH");
     }
     if (key) atomicWriteFile(HISTORY_KEY_FILE, `${key}\n${rendered}`, { durable: false });
   } catch { /* best effort */ }
@@ -914,6 +910,7 @@ function renderHistoryContent(
 ): [string, string] | null {
   let lines: string[];
   let key = "";
+  let pinned: string[] = [];
   if (state.activePaneType !== "worker" || !state.activeWindowName || !state.activeProject) {
     lines = [dimLine("no active worker — focus one with ⌥w")];
   } else {
@@ -937,17 +934,20 @@ function renderHistoryContent(
       key = JSON.stringify([GARDEN_VERSION, transcript, st?.size, st?.mtimeMs, width, status]);
       if (fs.existsSync(HISTORY_RENDERED_FILE)
           && renderedFileUnchanged(HISTORY_KEY_FILE, `${key}\n${fs.readFileSync(HISTORY_RENDERED_FILE, "utf-8")}`)) return null;
-      // Every turn, back to the opening prompt: the pane prints them all and
-      // tmux scrollback holds what overflows the visible height.
+      // Every turn, back to the opening prompt: the pane's viewer scrolls
+      // through all of them.
       const turns = core.readTurns(transcript);
       if (turns.length === 0) {
         lines = [dimLine("no conversation yet")];
       } else {
         lines = formatConversationPane(turns, { width, status });
+        pinned = formatOpeningAsk(turns, width);
       }
     }
   }
-  return [lines.join("\n"), key];
+  // The pinned block, a record separator, then the conversation: the pane's
+  // viewer splits on the separator (parseHistoryDoc, history-view.ts).
+  return [[...pinned, HISTORY_PIN_SEPARATOR, ...lines].join("\n"), key];
 }
 
 function writeUsageRendered(opts?: RefreshOptions): void {

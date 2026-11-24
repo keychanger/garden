@@ -11,6 +11,7 @@ import {
   readLatestTranscriptModel,
   readOpeningPrompt,
   formatConversationPane,
+  formatOpeningAsk,
   gardenLabel,
   handoffSeedLabel,
   isInjectedSystemMessage,
@@ -213,6 +214,12 @@ describe("summarizeTurn", () => {
 describe("readConversation", () => {
   const tmp = useTmpHome();
 
+  // The summary shape the pane renders; the prose the reading view adds (reply,
+  // body) is asserted by its own tests below.
+  function summaries(p: string | null, cacheDir?: string): Turn[] {
+    return readConversation(p, cacheDir).map(({ reply: _r, body: _b, ...t }) => t);
+  }
+
   function writeTranscript(lines: Array<Record<string, unknown>>): string {
     const p = path.join(tmp.sessionsDir, "transcript.jsonl");
     fs.writeFileSync(p, jsonl(lines));
@@ -240,7 +247,7 @@ describe("readConversation", () => {
       assistant([{ type: "text", text: "Just a reply." }]),
     ]);
 
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "user", text: "first question", ts: "2026-05-30T17:00:00Z" },
       { role: "assistant", text: "edited foo.ts · committed", verb: "worked", ts: "2026-05-30T17:00:01Z" },
       { role: "user", text: "second question", ts: "2026-05-30T17:01:00Z" },
@@ -256,7 +263,7 @@ describe("readConversation", () => {
         "2026-05-30T17:00:00Z", { promptSource: "typed" }),
       assistant([{ type: "text", text: "Continuing." }]),
     ]);
-    expect(readConversation(p)[0]).toEqual(
+    expect(summaries(p)[0]).toEqual(
       { role: "garden", text: "continue after merge", ts: "2026-05-30T17:00:00Z" });
   });
 
@@ -266,7 +273,7 @@ describe("readConversation", () => {
         "2026-05-30T17:00:00Z", { promptSource: "typed" }),
       assistant([{ type: "text", text: "Looking." }]),
     ]);
-    expect(readConversation(p)[0].text).toBe("I got this error: boom");
+    expect(summaries(p)[0].text).toBe("I got this error: boom");
   });
 
   it("folds a compaction summary into the turn it interrupted", () => {
@@ -277,7 +284,7 @@ describe("readConversation", () => {
         "2026-05-30T17:30:00Z", { isCompactSummary: true, isVisibleInTranscriptOnly: true }),
       assistant([{ type: "tool_use", name: "Edit", input: { file_path: "src/b.ts" } }], "2026-05-30T17:31:00Z"),
     ]);
-    const turns = readConversation(p);
+    const turns = summaries(p);
     expect(turns.map(t => t.role)).toEqual(["user", "assistant"]);
     expect(turns[1].text).toBe("edited a.ts, b.ts · compacted");
   });
@@ -287,7 +294,7 @@ describe("readConversation", () => {
       user([{ type: "text", text: "look at this screenshot" }, { type: "image", source: {} }]),
       assistant([{ type: "text", text: "I see it." }]),
     ]);
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "user", text: "look at this screenshot", ts: "2026-05-30T17:00:00Z" },
       { role: "assistant", text: "I see it.", verb: "answered", ts: "2026-05-30T17:00:01Z" },
     ]);
@@ -300,7 +307,7 @@ describe("readConversation", () => {
       user("[Image: source: /tmp/NSIRD/Screenshot.png]", "2026-05-30T17:00:30Z", { isMeta: true }),
       assistant([{ type: "text", text: "Got it." }]),
     ]);
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "user", text: "Better, see this", ts: "2026-05-30T17:00:00Z", image: true },
       { role: "assistant", text: "Got it.", verb: "answered", ts: "2026-05-30T17:00:01Z" },
     ]);
@@ -313,7 +320,7 @@ describe("readConversation", () => {
       user("sub task", "2026-05-30T17:00:00Z", { isSidechain: true }),
       assistant([{ type: "text", text: "sub answer" }], "2026-05-30T17:00:01Z", { isSidechain: true }),
     ]);
-    const turns = readConversation(p);
+    const turns = summaries(p);
     expect(turns).toEqual([
       { role: "user", text: "real prompt", ts: "2026-05-30T17:00:00Z" },
       { role: "assistant", text: "real answer", verb: "answered", ts: "2026-05-30T17:00:01Z" },
@@ -333,7 +340,7 @@ describe("readConversation", () => {
       user("real prompt two", "2026-05-30T17:06:00Z"),
       assistant([{ type: "text", text: "real answer two" }], "2026-05-30T17:06:01Z"),
     ]);
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "user", text: "real prompt one", ts: "2026-05-30T17:00:00Z" },
       { role: "assistant", text: "real answer one", verb: "answered", ts: "2026-05-30T17:00:01Z" },
       { role: "garden", text: "continue after merge", ts: "2026-05-30T17:05:00Z" },
@@ -354,7 +361,7 @@ describe("readConversation", () => {
       user("now double-check the reset extraction", "2026-05-30T17:06:00Z"),
       assistant([{ type: "text", text: "Looks right." }], "2026-05-30T17:06:01Z"),
     ]);
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "garden", text: "handoff from garden/plush-faint-dusk", ts: "2026-05-30T17:00:00Z" },
       // tool-only turn: ts inherited from the seed marker that seeded it (no text block to restamp).
       { role: "assistant", text: "edited codex-core.ts · pushed", verb: "worked", ts: "2026-05-30T17:00:00Z" },
@@ -375,7 +382,7 @@ describe("readConversation", () => {
       assistant([{ type: "tool_use", name: "Edit", input: { file_path: "out.md" } }], "2026-05-30T17:20:01Z"),
       assistant([{ type: "tool_use", name: "Bash", input: { command: "git commit -m x" } }], "2026-05-30T17:20:02Z"),
     ]);
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "user", text: "kick off the research", ts: "2026-05-30T17:00:00Z" },
       // tool-only turn: ts inherited from the prompt that seeded it (no text block to restamp).
       { role: "assistant", text: "ran a workflow · edited out.md · committed", verb: "worked", ts: "2026-05-30T17:00:00Z" },
@@ -391,7 +398,7 @@ describe("readConversation", () => {
       user("real prompt two", "2026-05-30T17:06:00Z"),
       assistant([{ type: "text", text: "second answer" }], "2026-05-30T17:06:01Z"),
     ]);
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "user", text: "real prompt", ts: "2026-05-30T17:00:00Z" },
       { role: "assistant", text: "real answer", verb: "answered", ts: "2026-05-30T17:00:01Z" },
       { role: "user", text: "real prompt two", ts: "2026-05-30T17:06:00Z" },
@@ -404,7 +411,7 @@ describe("readConversation", () => {
       user("multi\n  line\nprompt"),
       assistant([{ type: "text", text: "Intro line.\n\nmore   detail here" }]),
     ]);
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "user", text: "multi line prompt", ts: "2026-05-30T17:00:00Z" },
       // no tools → first sentence of the response
       { role: "assistant", text: "Intro line.", verb: "answered", ts: "2026-05-30T17:00:01Z" },
@@ -420,7 +427,7 @@ describe("readConversation", () => {
       user("say \x1b[31mred\x1b[0m now"),
       assistant([{ type: "tool_use", name: "Edit", input: { file_path: "src/a\x1b[2Jfoo\rbar.ts" } }]),
     ]);
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "user", text: "say red now", ts: "2026-05-30T17:00:00Z" },
       // tool-only turn: ts is inherited from the preceding prompt (no text block to restamp it).
       { role: "assistant", text: "edited afoobar.ts", verb: "worked", ts: "2026-05-30T17:00:00Z" },
@@ -433,7 +440,7 @@ describe("readConversation", () => {
       lines.push(user(`q${i}`));
       lines.push(assistant([{ type: "text", text: `a${i}` }]));
     }
-    const turns = readConversation(writeTranscript(lines));
+    const turns = summaries(writeTranscript(lines));
     expect(turns.length).toBe(120);
     expect(turns[0]).toEqual({ role: "user", text: "q0", ts: "2026-05-30T17:00:00Z" });
     expect(turns[turns.length - 1]).toEqual({
@@ -450,7 +457,7 @@ describe("readConversation", () => {
       user("second ask", "2026-05-30T17:01:00Z"),
       assistant([{ type: "tool_use", name: "Edit", input: { file_path: "src/foo.ts", new_string: "x".repeat(500) } }]),
     ]));
-    expect(readConversation(p, cacheDir).at(-1)?.text).toBe("edited foo.ts");
+    expect(summaries(p, cacheDir).at(-1)?.text).toBe("edited foo.ts");
 
     // Rewrite the opening prompt in place (same length): a resumed read never
     // re-parses bytes behind its checkpoint, so the original text survives.
@@ -461,7 +468,7 @@ describe("readConversation", () => {
       user("third ask", "2026-05-30T17:02:00Z"),
     ]));
 
-    expect(readConversation(p, cacheDir)).toEqual([
+    expect(summaries(p, cacheDir)).toEqual([
       { role: "user", text: "opening ask", ts: "2026-05-30T17:00:00Z" },
       { role: "assistant", text: "On it.", verb: "answered", ts: "2026-05-30T17:00:01Z" },
       { role: "user", text: "second ask", ts: "2026-05-30T17:01:00Z" },
@@ -471,25 +478,40 @@ describe("readConversation", () => {
     ]);
   });
 
+  it("keeps each exchange's closing reply and a handoff's briefing for the reading view", () => {
+    const p = writeTranscript([
+      user("[handoff from garden/old-worker]\n\n## Task\nFix the pager.\nKeep it small.", "2026-05-30T17:00:00Z"),
+      assistant([{ type: "text", text: "Looking." }]),
+      assistant([{ type: "tool_use", name: "Edit", input: { file_path: "src/a.ts" } }]),
+      user([{ type: "tool_result", content: "ok" }]),
+      assistant([{ type: "text", text: "Done.\n\nThe pager \x1b[31mopens\x1b[0m at the top." }]),
+    ]);
+    const [seed, reply] = readConversation(p);
+    expect(seed).toMatchObject({
+      role: "garden", text: "handoff from garden/old-worker", body: "## Task\nFix the pager.\nKeep it small.",
+    });
+    expect(reply).toMatchObject({ text: "edited a.ts", reply: "Done.\n\nThe pager opens at the top." });
+  });
+
   it("leaves a half-written last line for the next read", () => {
     const cacheDir = path.join(tmp.home, "history-cache");
     const p = path.join(tmp.sessionsDir, "partial.jsonl");
     const second = JSON.stringify(user("second", "2026-05-30T17:01:00Z"));
     fs.writeFileSync(p, jsonl([user("first", "2026-05-30T17:00:00Z")]) + second.slice(0, 20));
-    expect(readConversation(p, cacheDir).map(t => t.text)).toEqual(["first"]);
+    expect(summaries(p, cacheDir).map(t => t.text)).toEqual(["first"]);
 
     fs.appendFileSync(p, second.slice(20) + "\n");
-    expect(readConversation(p, cacheDir).map(t => t.text)).toEqual(["first", "second"]);
+    expect(summaries(p, cacheDir).map(t => t.text)).toEqual(["first", "second"]);
   });
 
   it("re-parses a transcript replaced behind its checkpoint", () => {
     const cacheDir = path.join(tmp.home, "history-cache");
     const p = path.join(tmp.sessionsDir, "replaced.jsonl");
     fs.writeFileSync(p, jsonl([user("old one"), user("old two")]));
-    expect(readConversation(p, cacheDir).map(t => t.text)).toEqual(["old one", "old two"]);
+    expect(summaries(p, cacheDir).map(t => t.text)).toEqual(["old one", "old two"]);
 
     fs.writeFileSync(p, jsonl([user("new one"), user("new two"), user("new three")]));
-    expect(readConversation(p, cacheDir).map(t => t.text)).toEqual(["new one", "new two", "new three"]);
+    expect(summaries(p, cacheDir).map(t => t.text)).toEqual(["new one", "new two", "new three"]);
   });
 
   it("keeps a bounded number of checkpoints", () => {
@@ -497,20 +519,20 @@ describe("readConversation", () => {
     for (let i = 0; i < 20; i++) {
       const p = path.join(tmp.sessionsDir, `t${i}.jsonl`);
       fs.writeFileSync(p, jsonl([user(`q${i}`)]));
-      readConversation(p, cacheDir);
+      summaries(p, cacheDir);
     }
     expect(fs.readdirSync(cacheDir).length).toBeLessThanOrEqual(16);
   });
 
   it("returns [] for a missing or null path", () => {
     expect(readConversation(null)).toEqual([]);
-    expect(readConversation(path.join(tmp.sessionsDir, "nope.jsonl"))).toEqual([]);
+    expect(summaries(path.join(tmp.sessionsDir, "nope.jsonl"))).toEqual([]);
   });
 
   it("skips unparseable lines without throwing", () => {
     const p = path.join(tmp.sessionsDir, "broken.jsonl");
     fs.writeFileSync(p, `not json\n${JSON.stringify(user("hi"))}\n{bad\n`);
-    expect(readConversation(p)).toEqual([
+    expect(summaries(p)).toEqual([
       { role: "user", text: "hi", ts: "2026-05-30T17:00:00Z" },
     ]);
   });
@@ -530,6 +552,30 @@ describe("formatConversationPane", () => {
     expect(out[0]).toMatch(/^─ ─+$/); // divider (no timestamp for ts:"")
     expect(out[1]).toMatch(/^ you\s+fix the login bug$/);
     expect(out[2]).toMatch(/^ worked\s+Patched the token check\.$/);
+  });
+
+  it("prints briefings and closing replies only in the full reading view", () => {
+    const withProse: Turn[] = [
+      { role: "garden", text: "handoff from garden/w", body: "## Task\nFix it.", ts: "" },
+      { role: "assistant", text: "edited a.ts", verb: "worked", reply: "Fixed.\n\nAll green.", ts: "" },
+    ];
+    const pane = formatConversationPane(withProse, { width: 60 }).map(plain);
+    expect(pane.join("\n")).not.toContain("Fix it.");
+    expect(pane.join("\n")).not.toContain("All green.");
+
+    const full = formatConversationPane(withProse, { width: 60, full: true }).map(plain);
+    expect(full).toEqual([
+      expect.stringMatching(/^─ ─+$/),
+      expect.stringMatching(/^ garden\s+handoff from garden\/w$/),
+      "",
+      "          ## Task",
+      "          Fix it.",
+      expect.stringMatching(/^ worked\s+edited a\.ts$/),
+      "",
+      "          Fixed.",
+      "",
+      "          All green.",
+    ]);
   });
 
   it("labels the divider with the local time, and the date on the first exchange of each day", () => {
@@ -835,5 +881,52 @@ describe("readOpeningPrompt — what a worker was first asked to do", () => {
     const p = write("f.jsonl", `{"type": "user" broken\n`
       + jsonl([user("Fix the dinner scene", "2026-09-18T16:00:00Z", { promptSource: "typed" })]));
     expect(readOpeningPrompt(p)).toBe("Fix the dinner scene");
+  });
+});
+
+describe("formatOpeningAsk", () => {
+  const plain = (lines: string[]) => lines.map(l => l.replace(/\x1b\[[0-9;]*m/g, ""));
+
+  it("prints the opening prompt in full between rules, stamped with when it was asked", () => {
+    const ts = new Date(2026, 10, 19, 12, 0).toISOString();
+    const out = plain(formatOpeningAsk([
+      { role: "user", text: "look at the history pane and make sure it reaches all the way back", ts },
+      { role: "assistant", text: "explored 2 files", verb: "planned", ts },
+      { role: "user", text: "now fix it", ts },
+    ], 40));
+    expect(out[0]).toMatch(/^─ opening ask · Thu 11-19 · 12:00pm ─+$/);
+    expect(out.slice(1, -1)).toEqual([
+      " look at the history pane and make sure",
+      " it reaches all the way back",
+    ]);
+    expect(out.at(-1)).toBe("─".repeat(40));
+  });
+
+  it("shows a handoff's briefing with its line breaks, naming the source", () => {
+    const out = plain(formatOpeningAsk([
+      { role: "garden", text: "handoff from garden/w", body: "## Task\n\nFix the pager.", ts: "" },
+    ], 40));
+    expect(out).toEqual([
+      expect.stringMatching(/^─ opening ask \(handoff from garden\/w\) ─+$/),
+      " ## Task",
+      "",
+      " Fix the pager.",
+      "─".repeat(40),
+    ]);
+  });
+
+  it("never prints a line wider than the pane, even with a long handoff source", () => {
+    // The pane's layout counts lines, so a line the terminal wraps pushes the
+    // pinned block's top row off screen.
+    const ts = new Date(2026, 10, 19, 12, 0).toISOString();
+    const out = plain(formatOpeningAsk([
+      { role: "garden", text: "handoff from garden/plush-faint-dusk — callback requested", body: "Fix it.", ts },
+    ], 40));
+    for (const line of out) expect(line.length).toBeLessThanOrEqual(40);
+    expect(out[0].startsWith("─ opening ask (handoff from")).toBe(true);
+  });
+
+  it("is empty before the first prompt", () => {
+    expect(formatOpeningAsk([], 40)).toEqual([]);
   });
 });

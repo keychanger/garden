@@ -102,6 +102,23 @@ export function branchExistsOnOrigin(repoPath: string, branchName: string): bool
   }
 }
 
+// A subset of `git check-ref-format --branch`, checked without a subprocess so
+// the handoff dispatcher can refuse a forged request's base in its shape guard.
+// A leading '-' is the case that matters: the name reaches git argv.
+export function isPlausibleBranchName(name: string): boolean {
+  return name.length > 0
+    && name.length <= 255
+    && !name.startsWith("-")
+    && !name.startsWith("/")
+    && !name.endsWith("/")
+    && !name.endsWith(".")
+    && !name.endsWith(".lock")
+    && !name.includes("..")
+    && !name.includes("//")
+    && !name.includes("@{")
+    && !/[\s\x00-\x1f\x7f~^:?*[\\]/.test(name);
+}
+
 export type PublishResult = { ok: true } | { ok: false; error: string };
 
 // Push <branchName> from the main checkout to origin so it gains an

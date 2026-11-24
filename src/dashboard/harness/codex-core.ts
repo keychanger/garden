@@ -484,6 +484,7 @@ function parseCodexTurns(lines: Iterable<string>, state: ParseState): void {
     const agentMessage = codexAgentMessage(rec);
     if (agentMessage) {
       if (!pending.firstText) pending.firstText = agentMessage;
+      pending.lastText = agentMessage;
       if (ts) pending.ts = ts;
     }
   }

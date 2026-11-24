@@ -124,6 +124,11 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
   if (sub === "_focus-history") return focusHistory();
   if (sub === "_focus-diary") return focusDiary();
   if (sub === "_focus-alerts") return focusAlerts();
+  if (sub === "_history-view") {
+    // The ⌥h pane's long-running process (buildHistoryCommand, header.ts).
+    const { runHistoryView } = await import("./history-view.js");
+    return runHistoryView();
+  }
   if (sub === "_diary-path") {
     // Consumed by the diary view's editor loop (diary-view.sh): prints the
     // focused project's diary file path, or nothing when no project is focused.
@@ -505,7 +510,7 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
     // Project pollers are left running unless their loop command drifted (see
     // restartLongLivedPollers): the merge that triggered this rebuild is still
     // finishing in one of them.
-    const { respawnStatusPane, respawnLogsPane, installTitleChangedHook } = await import("./create.js");
+    const { respawnStatusPane, respawnLogsPane, installTitleChangedHook, respawnHistoryPane } = await import("./create.js");
     const { resolveGardenRunner } = await import("./runner.js");
     const { readDashState } = await import("./state.js");
     const { refreshDashboard, setupStatusBar } = await import("./header.js");
@@ -520,6 +525,8 @@ export async function dashboard(rawArgs: string[]): Promise<void> {
       try { respawnStatusPane(state); } catch { /* pane gone */ }
       try { restartLongLivedPollers(runner); } catch { /* best effort */ }
       try { respawnLogsPane(state); } catch { /* pane gone */ }
+      // The history viewer runs the bundle it started with, like logs --follow.
+      try { respawnHistoryPane(state); } catch { /* pane gone */ }
       try { refreshDashboard(); } catch { /* no attached client */ }
     }
     return;

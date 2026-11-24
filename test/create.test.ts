@@ -145,6 +145,7 @@ vi.mock("../src/dashboard/tmux.js", () => ({
   resizeWindow: vi.fn(),
   listAllWindowNames: vi.fn(() => []),
   disablePaneInput: vi.fn(),
+  enablePaneInput: vi.fn(),
   lockPaneMouse: vi.fn(),
   killWindowSafe: vi.fn(),
   isTmuxForkFailure: vi.fn((err: unknown) => String(err).includes("fork failed")),
@@ -259,7 +260,7 @@ import { addAlert } from "../src/dashboard/alerts.js";
 import { dispatchDelayedContinue } from "../src/dashboard/continue.js";
 import { refreshDashboard } from "../src/dashboard/header.js";
 import { dashboardExists } from "../src/session.js";
-import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput, killWindowSafe } from "../src/dashboard/tmux.js";
+import { tmux, newDashboardWindow, tmuxSplit, getFirstPaneId, setPaneLabel, setPaneTitle, setPaneVar, shellEscape, disablePaneInput, enablePaneInput, killWindowSafe } from "../src/dashboard/tmux.js";
 import { tryGetProject, tryResolveProvider } from "../src/config.js";
 
 const savedArgv1 = process.argv[1];
@@ -1041,19 +1042,24 @@ describe("passive pane respawn helpers (garden redraw)", () => {
   it("respawnHistoryPane targets the garden slot when history is the active view", () => {
     respawnHistoryPane({ ...(baseState as object), gardenPaneType: "history" } as never);
     expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%0", "sh", "-c", "history-command");
-    expect(disablePaneInput).toHaveBeenCalledWith("%0");
+    // The viewer scrolls on keys and the wheel, which a disabled pane drops.
+    expect(enablePaneInput).toHaveBeenCalledWith("%0");
+    expect(disablePaneInput).not.toHaveBeenCalled();
   });
 
   it("respawnHistoryPane targets the hidden _garden-history window otherwise", () => {
     respawnHistoryPane(baseState);
     expect(getFirstPaneId).toHaveBeenCalledWith("garden-dashboard:_garden-history");
     expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%5", "sh", "-c", "history-command");
+    // The opening ask moved into the pane; the border copy an older build set is dropped.
+    expect(setPaneVar).toHaveBeenCalledWith("%5", "garden_task", "");
   });
 
   it("respawnAlertsPane targets the hidden _garden-alerts window when not active", () => {
     respawnAlertsPane(baseState);
     expect(getFirstPaneId).toHaveBeenCalledWith("garden-dashboard:_garden-alerts");
     expect(tmux).toHaveBeenCalledWith("respawn-pane", "-k", "-t", "%5", "sh", "-c", "alerts-command");
+    expect(disablePaneInput).toHaveBeenCalledWith("%5");
   });
 
   it("respawn helpers no-op when the hidden window does not exist", () => {

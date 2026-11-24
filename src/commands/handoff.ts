@@ -17,6 +17,7 @@ import {
 import { triggerProjectPoll } from "../dashboard/poller-fifo.js";
 import { getCrew, listCrews, spawnBuildHarness } from "../dashboard/crew.js";
 import { findWorkerByName } from "../dashboard/registry.js";
+import { isPlausibleBranchName } from "../dashboard/git.js";
 import { composerEfforts } from "../dashboard/harness/vocabulary.js";
 import { requireModelValue, parseEffortFlag, parseFlags, type FlagTable } from "./launch-flags.js";
 
@@ -26,12 +27,13 @@ const HANDOFF_PROCESSING_TIMEOUT_MS = 75_000;
 // The briefing is prose, taken verbatim even when it equals an option, so `-m`
 // is the one option whose value is not held to the parser's value rules.
 const HANDOFF_FLAGS: FlagTable = {
-  values: ["--crew", "--model", "--effort", "--bead", "-m"],
+  values: ["--crew", "--model", "--effort", "--base", "--bead", "-m"],
   switches: ["--expect-callback", "--ultracode"],
   opaque: ["-m"],
   usage: "--expect-callback, --ultracode, --crew <name>, --model <alias-or-id>, "
-    + "--effort <rung>, --bead <id>, -m \"<message>\"",
+    + "--effort <rung>, --base <branch>, --bead <id>, -m \"<message>\"",
   missing: {
+    "--base": "--base requires a branch name argument.",
     "--bead": "--bead requires a bead id argument.",
     "--crew": "--crew requires a crew name argument.",
     "--model": "--model requires a value (an alias like 'opus', or a concrete model id).",
@@ -57,6 +59,8 @@ export async function handoff(args: string[]): Promise<void> {
       + "  --effort <rung>    pin the new worker's reasoning rung, in the ladder of the harness it builds with:\n"
       + `                     ${composerEfforts("claude-code").join(", ")} on Claude Code ('ultra' is the ultracode preset,\n`
       + `                     so it cannot be combined with --ultracode); ${composerEfforts("codex").join(", ")} on Codex\n`
+      + "  --base <branch>    cut the new worker from origin/<branch> instead of the target project's base;\n"
+      + "                     the branch must already be on origin\n"
       + "  --bead <id>        stamp the bead id on the new worker's registry entry (the bead↔worker join;\n"
       + "                     makes no bd claim — the worker's own briefed claim is the claim)\n"
       + "  --expect-callback  receive a one-shot prompt at this pane when the child reaches a terminal state",
@@ -74,6 +78,11 @@ export async function handoff(args: string[]): Promise<void> {
   const bead = flags.get("--bead");
   if (bead && bead.length > 128) {
     throw new Error("--bead id must be 128 characters or fewer.");
+  }
+
+  const base = flags.get("--base");
+  if (base !== undefined && !isPlausibleBranchName(base)) {
+    throw new Error(`--base '${base}' is not a valid branch name.`);
   }
 
   let crew = flags.get("--crew");
@@ -161,6 +170,7 @@ export async function handoff(args: string[]): Promise<void> {
     bead,
     model,
     effort,
+    base,
   });
 
   // Poke any poller that might be listening. The target's poller is the
@@ -214,6 +224,7 @@ export async function handoff(args: string[]): Promise<void> {
     crew ? `crew ${crew}${inheritedCrew ? " (inherited)" : ""}` : null,
     model ? `model ${model}` : null,
     effort ? `effort ${effort}` : null,
+    base ? `base ${base}` : null,
     expectCallback ? "callback requested on terminal state" : null,
     bead ? `bead ${bead}` : null,
   ].filter(Boolean);

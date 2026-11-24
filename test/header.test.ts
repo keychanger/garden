@@ -48,6 +48,7 @@ vi.mock("../src/session.js", () => ({
 }));
 
 vi.mock("../src/dashboard/tmux.js", () => ({
+  stripControlSequences: (s: string) => s,
   tmux: vi.fn(),
   tmuxBatch: vi.fn(),
   tmuxOutput: vi.fn(() => ""),
@@ -139,6 +140,7 @@ vi.mock("../src/dashboard/window-names.js", () => ({
     const m = name.match(/^_(.+)-worker-(.+)$/);
     return m ? { project: m[1], worker: m[2] } : null;
   },
+  parseWorkerSuffix: (name: string) => name.match(/^_.+-worker-(.+)$/)?.[1] ?? null,
 }));
 
 // ---------------------------------------------------------------------------
@@ -163,8 +165,11 @@ import {
   repinStatusPaneHeight,
   repinUsagePaneHeight,
   rebakePanesOnResize,
+  writeHistoryRendered,
   _resetHeaderCachesForTest,
 } from "../src/dashboard/header.js";
+import { HISTORY_PIN_SEPARATOR } from "../src/dashboard/history-view.js";
+import { getHarnessCore } from "../src/dashboard/harness/core.js";
 
 import { tmux, tmuxBatch, getPanePid, getPaneSize, getPaneTitle, setPaneVar, listSessionPaneTitles, listAllWindowNames } from "../src/dashboard/tmux.js";
 import { readDashState, type DashboardState } from "../src/dashboard/state.js";
@@ -1628,33 +1633,8 @@ describe("buildUsageCommand", () => {
 });
 
 describe("buildHistoryCommand", () => {
-  it("returns a shell script string", () => {
-    const cmd = buildHistoryCommand("garden");
-    expect(typeof cmd).toBe("string");
-    expect(cmd.length).toBeGreaterThan(0);
-  });
-
-  it("sets up a SIGUSR1 trap for event-driven refresh", () => {
-    const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain("trap");
-    expect(cmd).toContain("USR1");
-  });
-
-  it("references the pre-baked history file path", () => {
-    const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain("history.rendered");
-  });
-
-  it("fully clears screen and scrollback on every repaint", () => {
-    // Unlike the usage pane, each render clears scrollback (\\033[2J\\033[3J)
-    // so a shorter new line never leaves a longer prior line's tail on screen.
-    const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain(String.raw`render() { _t=$(cat "$cf" 2>/dev/null); printf '\033[H\033[2J\033[3J%s' "$_t"; }`);
-  });
-
-  it("sleeps long on idle (pure event-driven wake)", () => {
-    const cmd = buildHistoryCommand("garden");
-    expect(cmd).toContain("sleep 86400");
+  it("execs the history viewer so the pane pid is the process signalPane reaches", () => {
+    expect(buildHistoryCommand("'/bin/node' '/g/cli.js'")).toBe("exec '/bin/node' '/g/cli.js' dashboard _history-view");
   });
 });
 
@@ -1933,7 +1913,7 @@ describe("baked pane files after another process rewrote them", () => {
     bakeAfterForeignRewrite("history.rendered", () => refreshDashboard());
 
     expect(rewrites("history.rendered")).toBe(1);
-    expect(killSpy).toHaveBeenCalledWith(SIGNALED_PID, "SIGUSR1");
+    expect(killSpy).toHaveBeenCalledWith(SIGNALED_PID, "SIGWINCH");
   });
 
   it("re-bakes and signals the alerts view", () => {
@@ -1965,6 +1945,60 @@ describe("baked pane files after another process rewrote them", () => {
     refreshStatusElapsed();
 
     expect(rewrites("status.rendered")).toBe(0);
+    expect(killSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("history pane opening ask", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("bakes the opening ask ahead of the conversation, split by the layout separator", () => {
+    const core = getHarnessCore("claude-code");
+    vi.spyOn(core, "resolveTranscriptPath").mockReturnValue("/t.jsonl");
+    vi.spyOn(core, "readTurns").mockReturnValue([
+      { role: "user", text: "the opening ask", ts: "" },
+      { role: "assistant", text: "explored 2 files", verb: "planned", ts: "" },
+      { role: "user", text: "a later ask", ts: "" },
+    ]);
+    vi.mocked(readRegistry).mockReturnValue({ workers: { garden: [{ name: "bold-ash", sessionId: "s1", task: "" }] } });
+    vi.mocked(readDashState).mockReturnValue(makeState({
+      gardenPaneType: "history", gardenShellPaneId: "%5",
+      activePaneType: "worker", activeWindowName: "_garden-worker-bold-ash", activeProject: "garden",
+    }));
+
+    vi.mocked(getPanePid).mockReturnValue("4242");
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    writeHistoryRendered();
+
+    // SIGWINCH, not SIGUSR1: a SIGUSR1 that lands while the viewer's node is
+    // still starting opens Node's inspector instead of reloading.
+    expect(killSpy).toHaveBeenCalledWith(4242, "SIGWINCH");
+    const written = vi.mocked(fs.writeFileSync).mock.calls
+      .map(c => String(c[1])).find(c => c.includes(HISTORY_PIN_SEPARATOR))!;
+    const [pinned, conversation] = written.replace(/\x1b\[[0-9;]*m/g, "").split(`\n${HISTORY_PIN_SEPARATOR}\n`);
+    expect(pinned).toMatch(/^─ opening ask ─+\n the opening ask\n─+$/);
+    expect(conversation).toContain("a later ask");
+  });
+
+  it("drops a bake whose worker lost focus while it rendered", () => {
+    // Two quick worker switches start two refreshes; the one that finishes
+    // last must not paint the worker the operator already left.
+    const core = getHarnessCore("claude-code");
+    vi.spyOn(core, "resolveTranscriptPath").mockReturnValue("/t.jsonl");
+    vi.spyOn(core, "readTurns").mockReturnValue([{ role: "user", text: "the left worker's ask", ts: "" }]);
+    vi.mocked(readRegistry).mockReturnValue({ workers: { garden: [{ name: "bold-ash", sessionId: "s1", task: "" }] } });
+    const focused = (worker: string) => makeState({
+      gardenPaneType: "history", gardenShellPaneId: "%5",
+      activePaneType: "worker", activeWindowName: `_garden-worker-${worker}`, activeProject: "garden",
+    });
+    vi.mocked(readDashState).mockReturnValueOnce(focused("bold-ash")).mockReturnValue(focused("calm-elm"));
+    const killSpy = vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    writeHistoryRendered();
+
+    const written = vi.mocked(fs.writeFileSync).mock.calls.map(c => String(c[1]));
+    expect(written.some(c => c.includes("the left worker's ask"))).toBe(false);
     expect(killSpy).not.toHaveBeenCalled();
   });
 });

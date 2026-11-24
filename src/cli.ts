@@ -158,6 +158,7 @@ Dashboard:
   status [--all]                 Show project and worker status (--all: every plot, not just the active one)
   whoami [worker]                Show the current worker's registry entry (uses $GARDEN_WORKER)
   review [worker]                Show a worker's last review: verdict, review-window diff, notes (default: focused)
+  history [worker]               Read a worker's whole conversation in a pager, oldest first (default: focused)
   notes [project] [--clear]      Show the non-blocking notes reviewers left (--clear removes them)
   queue [project]                Show the merge pipeline: queue order, in-review, blocked, CI markers
   checks [project]               Run the project's checks command under the machine-wide concurrency gate
@@ -204,6 +205,8 @@ Dashboard:
                                    harness the worker builds with: low|medium|high|xhigh|ultra on Claude Code, where 'ultra'
                                    is the ultracode preset and so cannot be combined with --ultracode; Codex adds max, and its
                                    own ultra is a plain rung
+                                 Add --base <branch> to cut the new worker from origin/<branch> instead of the target
+                                   project's base (the branch must already be on origin; it is not published for you)
                                  Add --bead <id> to stamp the bead↔worker join on the new worker's registry entry (no bd claim is made)
   reply [-m "<msg>"]             Stage a freeform note for the parent that handed off to this worker (delivered with the callback)
   auto [on|off|status]           Toggle the global auto-continue gate

@@ -1,5 +1,5 @@
 // The ⌥i worker menu: inspect and act on the focused worker. One card that
-// surfaces the existing worker verbs (hold/bounce/kick/pause/kill/show-review)
+// surfaces the existing worker verbs (hold/bounce/kick/pause/kill/show-review/history)
 // AND the live-changeable settings the operator asked for:
 //   - base branch: live — the poller reads entry.baseBranch fresh each cycle,
 //     so a change re-targets the next review/merge (no respawn).
@@ -53,6 +53,7 @@ export function buildWorkerMenuPlan(v: WorkerMenuView): MenuSpec {
   const pw = `${shellEscape(v.project)} ${w}`;
   const g = v.runner;
   const reviewShell = `${g} review ${w} 2>&1; printf '\\n[Enter to close] '; read _`;
+  const historyShell = `${g} history ${w}`;
   return {
     title: `Worker ${v.worker} (${v.project}) · ${v.state} · base ${v.base} · model ${v.model} · reviewer ${v.reviewer}`,
     rows: [
@@ -62,6 +63,7 @@ export function buildWorkerMenuPlan(v: WorkerMenuView): MenuSpec {
       { label: "(u) pause auto-continue", key: "u", run: `${g} pause ${w}` },
       { label: "(U) resume auto-continue", run: `${g} resume ${w}` },
       { label: "(v) show last review", key: "v", tmux: `display-popup -E -w 90% -h 90% ${tmuxDoubleQuote(reviewShell)}` },
+      { label: "(h) read full history", key: "h", tmux: `display-popup -E -w 90% -h 90% ${tmuxDoubleQuote(historyShell)}` },
       { sep: true, label: "" },
       { label: `(1) base branch: ${v.base}`, key: "1", run: `${g} dashboard _worker-branch-submenu ${pw}` },
       { label: `(2) reviewer: ${v.reviewer}`, key: "2", run: `${g} dashboard _worker-crew-submenu ${pw}` },

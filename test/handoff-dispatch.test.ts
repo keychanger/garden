@@ -43,6 +43,10 @@ vi.mock("../src/dashboard/continue.js", () => ({
 vi.mock("../src/dashboard/runner.js", () => ({
   resolveGardenRunner: vi.fn(() => "garden"),
 }));
+vi.mock("../src/dashboard/git.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/dashboard/git.js")>(),
+  branchExistsOnOrigin: vi.fn(() => true),
+}));
 
 import {
   submitHandoffRequest, waitForHandoffResponse, withdrawPendingHandoffRequest,
@@ -53,6 +57,7 @@ import { dispatchDelayedSeed } from "../src/dashboard/continue.js";
 import { getWorkers } from "../src/dashboard/registry.js";
 import { log } from "../src/dashboard/log.js";
 import { loadConfig, tryGetProject } from "../src/config.js";
+import { branchExistsOnOrigin } from "../src/dashboard/git.js";
 
 const cfg = await import("../src/config.js") as unknown as { SESSIONS_DIR: string };
 const gardenPaths = await import("../src/paths.js") as unknown as { CONTROL_DIR: string };
@@ -696,6 +701,62 @@ describe("processPendingHandoffs", () => {
     expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
       .toMatch(new RegExp(`^effort '${effort}' is not a rung of claude-code`));
   });
+
+  it("passes the base branch to newWorker when it is on origin for the target project", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    vi.mocked(loadConfig).mockReturnValue({ projects: { wolf: { name: "wolf", path: "/repo/wolf" } } });
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, base: "feature/staging" });
+    processPendingHandoffs();
+    expect(vi.mocked(branchExistsOnOrigin)).toHaveBeenCalledWith("/repo/wolf", "feature/staging");
+    expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({
+      projectName: "wolf",
+      base: "feature/staging",
+    }));
+  });
+
+  it("omits base from the newWorker call when the request has none", () => {
+    vi.mocked(newWorker).mockReturnValue("bold-ash");
+    submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+    processPendingHandoffs();
+    const call = vi.mocked(newWorker).mock.calls[0][0];
+    expect(call && "base" in call).toBe(false);
+    expect(vi.mocked(branchExistsOnOrigin)).not.toHaveBeenCalled();
+  });
+
+  it("refuses a base branch that is not on origin rather than publishing it", () => {
+    vi.mocked(loadConfig).mockReturnValue({ projects: { wolf: { name: "wolf", path: "/repo/wolf" } } });
+    vi.mocked(branchExistsOnOrigin).mockReturnValueOnce(false);
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, base: "local-only" });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/base branch 'local-only' is not on origin for wolf/);
+  });
+
+  it("refuses a base branch when the target project is not in config", () => {
+    const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed, base: "feature/staging" });
+    processPendingHandoffs();
+    expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+    expect(vi.mocked(branchExistsOnOrigin)).not.toHaveBeenCalled();
+    expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error)
+      .toMatch(/unknown project 'wolf'/);
+  });
+
+  it.each(["--upload-pack=evil", "a..b", "", "has space", ["main"]])(
+    "rejects invalid base %j from the inbox in the shape guard",
+    (base) => {
+      const id = submitHandoffRequest({ targetProject: "wolf", seedFile: validSeed });
+      const reqFile = path.join(reqDir, `${id}.req.json`);
+      const request = JSON.parse(fs.readFileSync(reqFile, "utf8"));
+      request.base = base;
+      fs.writeFileSync(reqFile, JSON.stringify(request));
+
+      processPendingHandoffs();
+
+      expect(vi.mocked(newWorker)).not.toHaveBeenCalled();
+      expect(JSON.parse(fs.readFileSync(resultPath(id), "utf8")).error).toMatch(/shape guard/i);
+    },
+  );
 
   it("refuses a request that sets both effort and ultracode (the preset already fixes the rung)", () => {
     const id = submitHandoffRequest({

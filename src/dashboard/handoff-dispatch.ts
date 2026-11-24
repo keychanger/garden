@@ -24,6 +24,7 @@ import { resolveGardenRunner } from "./runner.js";
 import { getCrew, spawnBuildHarness } from "./crew.js";
 import { harnessNames } from "./harness/core.js";
 import { workerEffortRungs } from "./harness/vocabulary.js";
+import { branchExistsOnOrigin, isPlausibleBranchName } from "./git.js";
 import { loadConfig } from "../config.js";
 import { log } from "./log.js";
 import { MAX_SEED_BYTES } from "./seed-files.js";
@@ -137,6 +138,12 @@ export interface HandoffRequest {
   // claude-code `--effort ultra` arrives as `ultracode` instead, so the two
   // are never both set. See `NewWorkerOptions.effort`.
   effort?: string;
+  // Set when the source worker invoked `garden handoff --base <branch>`. The
+  // child is cut from origin/<branch> instead of the target project's base.
+  // Unlike `workers new --base`, the dispatcher refuses a branch that is not
+  // already on origin rather than publishing it: an untrusted request must
+  // not push the operator's local branches. See `NewWorkerOptions.base`.
+  base?: string;
 }
 
 export interface HandoffResponse {
@@ -156,6 +163,7 @@ export function submitHandoffRequest(opts: {
   bead?: string;
   model?: string;
   effort?: string;
+  base?: string;
 }): string {
   fs.mkdirSync(requestsDir(), { recursive: true });
   const id = crypto.randomUUID();
@@ -172,6 +180,7 @@ export function submitHandoffRequest(opts: {
     bead: opts.bead,
     model: opts.model,
     effort: opts.effort,
+    base: opts.base,
   };
   atomicWriteFile(requestPath(id), JSON.stringify(req), { mode: 0o600 });
   return id;
@@ -261,7 +270,9 @@ function isHandoffRequest(value: unknown): value is HandoffRequest {
     // An effort no harness launches with is malformed. Whether it is a rung of
     // the harness this child builds with is checked once its crew resolves.
     && (request.effort === undefined
-        || (typeof request.effort === "string" && isLaunchRung(request.effort)));
+        || (typeof request.effort === "string" && isLaunchRung(request.effort)))
+    && (request.base === undefined
+        || (typeof request.base === "string" && isPlausibleBranchName(request.base)));
 }
 
 function isLaunchRung(value: string): boolean {
@@ -498,6 +509,28 @@ function processClaim(claimFile: string, filenameId: string): void {
     }
   }
 
+  if (request.base) {
+    let projectPath: string | undefined;
+    try {
+      projectPath = loadConfig().projects[request.targetProject]?.path;
+    } catch (err) {
+      rejectClaim(claimFile, filenameId, `could not resolve project '${request.targetProject}': ${String(err)}`);
+      return;
+    }
+    if (!projectPath) {
+      rejectClaim(claimFile, filenameId, `unknown project '${request.targetProject}'`);
+      return;
+    }
+    if (!branchExistsOnOrigin(projectPath, request.base)) {
+      rejectClaim(
+        claimFile,
+        filenameId,
+        `base branch '${request.base}' is not on origin for ${request.targetProject}; push it first`,
+      );
+      return;
+    }
+  }
+
   let response: HandoffResponse;
   try {
     // Only propagate parent linkage when --expect-callback was set AND both
@@ -521,6 +554,7 @@ function processClaim(claimFile: string, filenameId: string): void {
       ...(request.bead ? { bead: request.bead } : {}),
       ...(request.model ? { model: request.model } : {}),
       ...(request.effort ? { effort: request.effort } : {}),
+      ...(request.base ? { base: request.base } : {}),
     });
     const reconciledWorker = workerName ?? findExistingWorker(request);
     response = reconciledWorker

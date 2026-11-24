@@ -22,6 +22,7 @@ vi.mock("../src/dashboard/create.js", async (orig) => ({
   ...(await orig<typeof import("../src/dashboard/create.js")>()),
   respawnStatusPane: vi.fn(),
   respawnLogsPane: vi.fn(),
+  respawnHistoryPane: vi.fn(),
 }));
 vi.mock("../src/dashboard/poller.js", async (orig) => ({
   ...(await orig<typeof import("../src/dashboard/poller.js")>()),
@@ -30,6 +31,7 @@ vi.mock("../src/dashboard/poller.js", async (orig) => ({
 
 import { dashboard } from "../src/dashboard/index.js";
 import { setupKeybindings } from "../src/dashboard/hotkeys.js";
+import { respawnHistoryPane } from "../src/dashboard/create.js";
 
 describe("dashboard _post-rebuild-refresh", () => {
   it("reinstalls key bindings from the rebuilt binary", async () => {
@@ -37,5 +39,10 @@ describe("dashboard _post-rebuild-refresh", () => {
     // binding change only reaches tmux when the rebuilt binary installs it.
     await dashboard(["_post-rebuild-refresh"]);
     expect(setupKeybindings).toHaveBeenCalledWith("/new/garden");
+  });
+
+  it("restarts the history viewer so it runs the rebuilt bundle", async () => {
+    await dashboard(["_post-rebuild-refresh"]);
+    expect(respawnHistoryPane).toHaveBeenCalled();
   });
 });

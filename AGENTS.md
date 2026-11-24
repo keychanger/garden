@@ -62,7 +62,7 @@ garden checks          # the project's full checks command, under the machine-wi
 
 ## CLI
 
-`garden help` lists every command. Groups: projects (`add`/`create`/`remove`/`config`), crews (`crew`), plots (`plot`/`focus`), workers (`workers new|stop|grow`, `whoami`, `review`, `kick`, `bounce`, `hold`, `pause`, `resume`, `blocked`, `logs`, `checks`, `health`), inspection (`queue`, `alerts`, `notes`, `stats`, `doctor`, `usage`), auth (`login`, `auth status`, `claude-profile`, `provider`), workflows (`designer publish`, `handoff`, `reply`), recovery (`resurrect`, `redraw`), and garden-wide settings (`auto`, `limits`, `awake`, `poke`, `diary`). DESIGN.md "Commands" has details.
+`garden help` lists every command. Groups: projects (`add`/`create`/`remove`/`config`), crews (`crew`), plots (`plot`/`focus`), workers (`workers new|stop|grow`, `whoami`, `review`, `history`, `kick`, `bounce`, `hold`, `pause`, `resume`, `blocked`, `logs`, `checks`, `health`), inspection (`queue`, `alerts`, `notes`, `stats`, `doctor`, `usage`), auth (`login`, `auth status`, `claude-profile`, `provider`), workflows (`designer publish`, `handoff`, `reply`), recovery (`resurrect`, `redraw`), and garden-wide settings (`auto`, `limits`, `awake`, `poke`, `diary`). DESIGN.md "Commands" has details.
 
 ## Conventions and invariants
 
