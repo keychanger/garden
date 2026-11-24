@@ -711,6 +711,9 @@ describe("processPendingHandoffs", () => {
     expect(vi.mocked(newWorker)).toHaveBeenCalledWith(expect.objectContaining({
       projectName: "wolf",
       base: "feature/staging",
+      // The ref checked above is worker-writable; newWorker must refuse rather
+      // than publish if it is gone by the time it looks.
+      publishMissingBase: false,
     }));
   });
 

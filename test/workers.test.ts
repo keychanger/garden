@@ -571,6 +571,16 @@ describe("newWorker", () => {
     expect(msgs.some((m) => m.includes("Published 'main' to origin"))).toBe(true);
   });
 
+  it("refuses a missing base instead of publishing it when publishing is off", () => {
+    vi.mocked(readDashState).mockReturnValue(makeState());
+    vi.mocked(branchExistsOnOrigin).mockReturnValueOnce(false);
+    expect(newWorker({ publishMissingBase: false })).toBeNull();
+    expect(vi.mocked(tryPublishBranch)).not.toHaveBeenCalled();
+    expect(vi.mocked(addWorker)).not.toHaveBeenCalled();
+    const msgs = vi.mocked(tmuxDisplay).mock.calls.map((c) => c[0] as string);
+    expect(msgs).toContain("Cannot create worker: base branch 'main' is not on origin.");
+  });
+
   it("publishes a missing base branch before entering the dashboard state lock", () => {
     vi.mocked(readDashState).mockReturnValue(makeState());
     vi.mocked(branchExistsOnOrigin).mockReturnValueOnce(false);

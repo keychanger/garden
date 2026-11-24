@@ -111,6 +111,12 @@ export interface NewWorkerOptions {
   // branchExistsOnOrigin / tryPublishBranch chain as any resolved base, then
   // pinned to entry.baseBranch.
   base?: string;
+  // false refuses a base that has no origin ref instead of publishing it. A
+  // handoff's --base comes from an untrusted request, and the publish pushes
+  // the operator's local branch of that name; the dispatcher's own check of
+  // the worker-writable remote-tracking ref cannot stand in for this one,
+  // since the ref can be deleted between the two reads.
+  publishMissingBase?: boolean;
   // Per-worker crew (`workers new --crew`). For a default worker it sets BOTH
   // halves at spawn: the build member — harness AND provider, mutually
   // exclusive with --harness — and the review family (stamped on entry.crew,
@@ -413,6 +419,13 @@ export function newWorker(opts: NewWorkerOptions = {}): string | null {
   // surface the real git error so the operator knows what to fix.
   // Check is local-refs only — see branchExistsOnOrigin doc.
   if (!branchExistsOnOrigin(project.path, baseBranch)) {
+    if (opts.publishMissingBase === false) {
+      tmuxDisplay(`Cannot create worker: base branch '${baseBranch}' is not on origin.`);
+      log.error("workers", "rejected newWorker: base not on origin", {
+        data: { project: targetProject, baseBranch },
+      });
+      return null;
+    }
     const result = tryPublishBranch(project.path, baseBranch);
     if (result.ok) {
       tmuxDisplay(`Published '${baseBranch}' to origin (worker base ref).`);

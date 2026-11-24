@@ -554,7 +554,7 @@ function processClaim(claimFile: string, filenameId: string): void {
       ...(request.bead ? { bead: request.bead } : {}),
       ...(request.model ? { model: request.model } : {}),
       ...(request.effort ? { effort: request.effort } : {}),
-      ...(request.base ? { base: request.base } : {}),
+      ...(request.base ? { base: request.base, publishMissingBase: false } : {}),
     });
     const reconciledWorker = workerName ?? findExistingWorker(request);
     response = reconciledWorker

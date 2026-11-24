@@ -659,7 +659,7 @@ export function promptTurn(raw: string, ts: string, image = false): Turn | null 
   if (text.startsWith("[garden]")) return { role: "garden", text: gardenLabel(text), ts };
   const handoff = handoffSeedLabel(text);
   if (handoff) {
-    const body = stripControlSequences(unwrapped).trim().replace(/^[^\n]*\n?/, "").trim();
+    const body = stripControlSequences(unwrapped).trim().replace(/^\[handoff\b[^\]]*\]/, "").trim();
     return { role: "garden", text: handoff, ts, ...(body ? { body } : {}) };
   }
   return { role: "user", text, ts, ...(image ? { image: true } : {}) };

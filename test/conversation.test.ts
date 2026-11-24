@@ -493,6 +493,13 @@ describe("readConversation", () => {
     expect(reply).toMatchObject({ text: "edited a.ts", reply: "Done.\n\nThe pager opens at the top." });
   });
 
+  it("keeps a briefing written on the same line as its handoff identity", () => {
+    const p = writeTranscript([user("[handoff from garden/old-worker] Fix the pager.", "2026-05-30T17:00:00Z")]);
+    expect(readConversation(p)[0]).toMatchObject({
+      role: "garden", text: "handoff from garden/old-worker", body: "Fix the pager.",
+    });
+  });
+
   it("leaves a half-written last line for the next read", () => {
     const cacheDir = path.join(tmp.home, "history-cache");
     const p = path.join(tmp.sessionsDir, "partial.jsonl");
